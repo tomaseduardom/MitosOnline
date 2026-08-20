@@ -1,0 +1,15 @@
+# Godot 4+ — caché local de importación (se regenera sola al abrir el proyecto)
+.godot/
+*.translation
+
+# Caché de imágenes de cartas descargadas de la API/CDN (se regenera sola —
+# CardDatabase.OFFLINE_MODE las vuelve a descargar y cachear en user://)
+cartas_descargadas/
+
+# Exportables
+export.cfg
+export_credentials.cfg
+
+# Sistema operativo / editor
+.DS_Store
+Thumbs.db

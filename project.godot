@@ -1,0 +1,79 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[animation]
+
+compatibility/default_parent_skeleton_in_mesh_instance_3d=true
+
+[application]
+
+config/name="Mitos y Leyendas"
+config/description="Juego de cartas coleccionables basado en el TCG chileno Mitos y Leyendas"
+config/version="0.1.0"
+run/main_scene="res://scenes/menu/MainMenu.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+config/icon="res://icon.svg"
+
+[autoload]
+
+GameSettings="*res://scripts/core/config/GameSettings.gd"
+Constants="*res://scripts/core/config/Constants.gd"
+GameState="*res://scripts/core/config/GameState.gd"
+CardDatabase="*res://scripts/core/cards/CardDatabase.gd"
+ExternalApiClient="*res://scripts/core/cards/ExternalApiClient.gd"
+VisualManager="*res://scripts/core/managers/VisualManager.gd"
+UIManager="*res://scripts/ui/UIManager.gd"
+GameManager="*res://scripts/core/managers/GameManager.gd"
+TurnManager="*res://scripts/core/managers/TurnManager.gd"
+PriorityManager="*res://scripts/core/managers/PriorityManager.gd"
+BattleManager="*res://scripts/core/managers/BattleManager.gd"
+EffectController="*res://scripts/core/effects/EffectController.gd"
+TriggerSystem="*res://scripts/core/effects/TriggerSystem.gd"
+CardEffectSystem="*res://scripts/core/effects/CardEffectSystem.gd"
+ActionModule="*res://scripts/core/effects/ActionModule.gd"
+AnimationQueue="*res://scripts/core/effects/AnimationQueue.gd"
+CardFactory="*res://scripts/core/cards/CardFactory.gd"
+ActionExecutor="*res://scripts/core/effects/ActionExecutor.gd"
+CombatLog="*res://scripts/core/managers/CombatLog.gd"
+UniversalCardParser="*res://scripts/core/cards/UniversalCardParser.gd"
+ContinuousEffectManager="*res://scripts/core/effects/ContinuousEffectManager.gd"
+KeywordManager="*res://scripts/core/effects/KeywordManager.gd"
+DeckLoader="*res://scripts/core/cards/DeckLoader.gd"
+CardManager="*res://scripts/core/managers/CardManager.gd"
+PaymentManager="*res://scripts/core/managers/PaymentManager.gd"
+ActionPipeline="*res://scripts/core/effects/ActionPipeline.gd"
+DamageManager="*res://scripts/core/managers/DamageManager.gd"
+SelectionManager="*res://scripts/core/effects/SelectionManager.gd"
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/size/mode=2
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[input]
+
+click={
+"deadzone": 0.5,
+"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":1,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":1,"canceled":false,"pressed":true,"double_click":false,"script":null)
+]
+}
+right_click={
+"deadzone": 0.5,
+"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":2,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":2,"canceled":false,"pressed":true,"double_click":false,"script":null)
+]
+}
+
+[rendering]
+
+textures/canvas_textures/default_texture_filter=2
+anti_aliasing/quality/msaa_2d=2

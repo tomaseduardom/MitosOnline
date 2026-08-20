@@ -1,0 +1,32 @@
+{
+    "id": "tk22-09",
+    "name": "Hacer el Bien",
+    "type": "Talisman",
+    "cost": 1,
+    "traits": {
+        "is_unique": true,
+        "has_exhumar": true
+    },
+    "hability_blocks": [
+        {
+            "trigger": "ON_PLAY",
+            "type": "RESPONSE",
+            "target_type": "CARD_IN_STACK",
+            "conditions": [
+                {
+                    "attribute": "cost",
+                    "operator": "<=",
+                    "value": 3
+                }
+            ],
+            "effect": {
+                "action": "ANNUL",
+                "destination": "CEMENTERIO"
+            }
+        }
+    ],
+    "resolution_rules": {
+        "on_resolve": "MOVE_TO_CEMENTERIO",
+        "on_exhumar_resolve": "MOVE_TO_DESTIERRO"
+    }
+}

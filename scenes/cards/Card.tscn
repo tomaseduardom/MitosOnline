@@ -1,0 +1,93 @@
+[gd_scene load_steps=2 format=3 uid="uid://card_scene"]
+
+[ext_resource type="Script" path="res://scripts/cards/Card.gd" id="1_card"]
+
+[node name="Card" type="Control"]
+custom_minimum_size = Vector2(150, 210)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 150.0
+offset_bottom = 210.0
+script = ExtResource("1_card")
+
+[node name="CardBase" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="CardArt" type="TextureRect" parent="CardBase"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Placeholder" type="VBoxContainer" parent="CardBase"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+alignment = 1
+
+[node name="TypeIcon" type="Label" parent="CardBase/Placeholder"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "⚔"
+horizontal_alignment = 1
+
+[node name="CardName" type="Label" parent="CardBase/Placeholder"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.8, 0.65, 1)
+theme_override_font_sizes/font_size = 12
+text = "Nombre"
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2
+
+[node name="CostLabel" type="Label" parent="CardBase/Placeholder"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 14
+text = "Coste: 0"
+horizontal_alignment = 1
+
+[node name="HoverEffect" type="Panel" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="SelectionEffect" type="Panel" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -4.0
+offset_top = -4.0
+offset_right = 4.0
+offset_bottom = 4.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="."]

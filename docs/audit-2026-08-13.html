@@ -1,0 +1,469 @@
+<title>Auditoría del Motor</title>
+<style>
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14121a; --surface: #1c1926; --surface-2: #242030; --surface-3: #2b2636;
+    --border: #35303f; --border-soft: #2a2632;
+    --text: #eae6f0; --text-dim: #a79fb3; --text-faint: #776e88;
+    --accent: #d3ac57; --accent-soft: #3a3120; --accent-2: #9384c9;
+    --ok: #6fca8a; --ok-soft: #1b2e22;
+    --warn: #e0ac4c; --warn-soft: #332a16;
+    --bad: #e8748a; --bad-soft: #341f26;
+    --stub: #7fa8dd; --stub-soft: #1c2736;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  }
+}
+:root {
+  --bg: #f4f2f7; --surface: #ffffff; --surface-2: #ece8f2; --surface-3: #e2ddec;
+  --border: #d9d3e3; --border-soft: #e6e1ee;
+  --text: #211d2b; --text-dim: #5c5468; --text-faint: #948c9f;
+  --accent: #a67c1f; --accent-soft: #f2e7cc; --accent-2: #5e4fa0;
+  --ok: #2f8a52; --ok-soft: #e2f3e7;
+  --warn: #a5711a; --warn-soft: #faedd6;
+  --bad: #b4405a; --bad-soft: #fbe6ea;
+  --stub: #3a63a8; --stub-soft: #e3ebf8;
+  --shadow: 0 1px 2px rgba(30,20,10,.06), 0 8px 24px rgba(30,20,10,.06);
+}
+:root[data-theme="dark"] {
+  --bg: #14121a; --surface: #1c1926; --surface-2: #242030; --surface-3: #2b2636;
+  --border: #35303f; --border-soft: #2a2632;
+  --text: #eae6f0; --text-dim: #a79fb3; --text-faint: #776e88;
+  --accent: #d3ac57; --accent-soft: #3a3120; --accent-2: #9384c9;
+  --ok: #6fca8a; --ok-soft: #1b2e22;
+  --warn: #e0ac4c; --warn-soft: #332a16;
+  --bad: #e8748a; --bad-soft: #341f26;
+  --stub: #7fa8dd; --stub-soft: #1c2736;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, "Segoe UI", "Inter", system-ui, sans-serif;
+  font-size: 16px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, .display {
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", ui-serif, serif;
+  font-weight: 400; text-wrap: balance; color: var(--text);
+}
+code, .mono, .fileref, td.num, .tag {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+.wrap { max-width: 900px; margin: 0 auto; padding: 0 24px 120px; }
+
+/* ---------- masthead ---------- */
+.masthead {
+  padding: 76px 0 40px; border-bottom: 1px solid var(--border);
+  margin-bottom: 48px;
+}
+.eyebrow {
+  font-family: ui-monospace, monospace; font-size: 12.5px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--accent); margin: 0 0 18px;
+  display: flex; align-items: center; gap: 10px;
+}
+.eyebrow::before { content: ""; width: 22px; height: 1px; background: var(--accent); display: inline-block; }
+h1 { font-size: 42px; line-height: 1.12; margin: 0 0 14px; letter-spacing: -.01em; }
+.subtitle { font-size: 17px; color: var(--text-dim); max-width: 60ch; margin: 0 0 28px; }
+.meta-row { display: flex; flex-wrap: wrap; gap: 10px 28px; font-size: 13.5px; color: var(--text-faint); }
+.meta-row b { color: var(--text-dim); font-weight: 600; }
+
+/* ---------- toc ---------- */
+.toc {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 22px 26px; margin-bottom: 56px; box-shadow: var(--shadow);
+}
+.toc-title { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); margin: 0 0 12px; }
+.toc ol { margin: 0; padding: 0 0 0 1.3em; columns: 2; column-gap: 32px; }
+.toc li { margin-bottom: 6px; break-inside: avoid; }
+.toc a { color: var(--text-dim); text-decoration: none; font-size: 14.5px; }
+.toc a:hover { color: var(--accent); }
+
+/* ---------- sections ---------- */
+section { margin-bottom: 64px; scroll-margin-top: 24px; }
+.section-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 22px; }
+.section-num { font-family: ui-monospace, monospace; color: var(--accent); font-size: 14px; }
+h2 { font-size: 27px; margin: 0; }
+h3 { font-size: 19px; margin: 30px 0 12px; color: var(--text); }
+p { color: var(--text-dim); margin: 0 0 14px; max-width: 72ch; }
+strong { color: var(--text); font-weight: 600; }
+a { color: var(--accent-2); }
+
+.callout {
+  border-left: 3px solid var(--accent); background: var(--accent-soft);
+  border-radius: 0 8px 8px 0; padding: 18px 22px; margin: 22px 0;
+}
+.callout p:last-child { margin-bottom: 0; }
+.callout .k { color: var(--text); font-weight: 600; }
+
+/* ---------- status chips ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  font-family: ui-monospace, monospace; letter-spacing: .02em; padding: 3px 9px;
+  border-radius: 999px; font-weight: 600; white-space: nowrap;
+}
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; }
+.chip-ok   { background: var(--ok-soft);   color: var(--ok); }
+.chip-ok::before   { background: var(--ok); }
+.chip-warn { background: var(--warn-soft); color: var(--warn); }
+.chip-warn::before { background: var(--warn); }
+.chip-bad  { background: var(--bad-soft);  color: var(--bad); }
+.chip-bad::before  { background: var(--bad); }
+.chip-stub { background: var(--stub-soft); color: var(--stub); }
+.chip-stub::before { background: var(--stub); }
+
+/* ---------- finding cards ---------- */
+.finding {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 26px 28px; margin: 20px 0; box-shadow: var(--shadow);
+}
+.finding-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 10px; }
+.finding-head h3 { margin: 0; font-size: 18px; }
+.finding p:last-child { margin-bottom: 0; }
+.finding .fileref { display: block; font-size: 12.5px; color: var(--text-faint); margin-top: 12px; }
+.finding .fileref b { color: var(--text-dim); font-weight: 500; }
+
+/* ---------- architecture ---------- */
+.arch-grid { display: grid; grid-template-columns: 1fr; gap: 10px; margin: 24px 0; }
+.arch-layer {
+  border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px;
+  background: var(--surface);
+}
+.arch-layer .layer-title { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 10px; }
+.pill-row { display: flex; flex-wrap: wrap; gap: 7px; }
+.pill {
+  font-family: ui-monospace, monospace; font-size: 12.5px; padding: 5px 10px;
+  border-radius: 6px; background: var(--surface-2); color: var(--text-dim);
+  border: 1px solid var(--border-soft);
+}
+.pill.hot { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.pill.warm { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.arch-arrow { text-align: center; color: var(--text-faint); font-size: 13px; margin: 2px 0; }
+
+/* ---------- tables ---------- */
+.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+table { width: 100%; border-collapse: collapse; background: var(--surface); font-size: 14px; min-width: 640px; }
+th {
+  text-align: left; font-size: 11.5px; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--text-faint); font-weight: 600; padding: 12px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface-2); white-space: nowrap;
+}
+td { padding: 12px 16px; border-bottom: 1px solid var(--border-soft); color: var(--text-dim); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td.strong { color: var(--text); font-weight: 500; }
+td.fileref { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--text-faint); white-space: nowrap; }
+
+/* ---------- roadmap ---------- */
+.phase {
+  display: grid; grid-template-columns: 44px 1fr; gap: 18px; margin-bottom: 22px;
+  padding-bottom: 22px; border-bottom: 1px solid var(--border-soft);
+}
+.phase:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.phase-num {
+  width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--accent);
+  color: var(--accent); display: flex; align-items: center; justify-content: center;
+  font-family: ui-monospace, monospace; font-size: 15px; flex-shrink: 0;
+}
+.phase h3 { margin: 2px 0 6px; font-size: 17px; }
+.phase .impact { font-size: 12.5px; color: var(--text-faint); margin-bottom: 8px; font-family: ui-monospace, monospace; }
+.phase ul { margin: 8px 0 0; padding-left: 1.2em; color: var(--text-dim); font-size: 14.5px; }
+.phase li { margin-bottom: 4px; }
+
+/* ---------- footer index ---------- */
+.filegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 20px 0; }
+.filegrid .cell { background: var(--surface); padding: 14px 18px; }
+.filegrid .cell .fn { font-family: ui-monospace, monospace; font-size: 13px; color: var(--text); display: block; margin-bottom: 3px; }
+.filegrid .cell .desc { font-size: 12.5px; color: var(--text-faint); }
+
+footer { margin-top: 90px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 13px; }
+
+@media (max-width: 640px) {
+  h1 { font-size: 32px; }
+  .toc ol { columns: 1; }
+  .masthead { padding-top: 48px; }
+}
+</style>
+
+<div class="wrap">
+
+  <div class="masthead">
+    <p class="eyebrow">Auditoría técnica &middot; Godot 4.6</p>
+    <h1>El motor sabe jugar solo.<br>El juego todavía no se lo pide.</h1>
+    <p class="subtitle">Revisión completa de <span class="mono">game/</span> — arquitectura, flujo de turnos, y cada punto donde la partida se detiene a esperar un clic. Objetivo: identificar qué falta para que las interacciones se resuelvan automáticamente.</p>
+    <div class="meta-row">
+      <span><b>Alcance</b> 60 scripts GDScript, ~30.000 líneas, 27 autoloads, 11 módulos de escena</span>
+      <span><b>Fecha</b> 2026-08-13</span>
+      <span><b>Motor</b> Mitos y Leyendas · Godot 4.6</span>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-bottom:40px">
+    <p><span class="k">Progreso (2026-08-15):</span> Los cinco hallazgos tienen fix <span class="chip chip-ok">resuelto</span> (2, 4 y 5 parciales — ver cada tarjeta para el detalle de lo que queda). Cadena completa: el hallazgo 2 encontró que <code>GameBoard.gd</code> es código huérfano; el 3 encontró que el combate calculaba <strong>0 atacantes siempre</strong>; investigar eso llevó al 5 (atacar sin Furia ya se aceptaba, solo faltaba validar enfermedad de invocación); y cerrar el 4 fue necesario para que el combate del hallazgo 3, ahora que sí calcula daño, también <strong>remueva</strong> las cartas de verdad (antes habría fallado en silencio al intentar destruir/botar). Con esto, atacar con un Aliado normal durante el paso de Ataque debería funcionar de punta a punta — el siguiente paso lógico es abrir el editor y comprobarlo.</p>
+  </div>
+
+  <div class="toc">
+    <p class="toc-title">Contenido</p>
+    <ol>
+      <li><a href="#resumen">Resumen ejecutivo</a></li>
+      <li><a href="#arquitectura">Mapa de arquitectura</a></li>
+      <li><a href="#hallazgos">Los hallazgos estructurales</a></li>
+      <li><a href="#interacciones">Inventario de interacciones manuales</a></li>
+      <li><a href="#oponente">Estado del Jugador 2 (IA)</a></li>
+      <li><a href="#stubs">TODOs y stubs pendientes</a></li>
+      <li><a href="#roadmap">Ruta para minimizar interacción</a></li>
+      <li><a href="#indice">Índice de archivos clave</a></li>
+    </ol>
+  </div>
+
+  <section id="resumen">
+    <div class="section-head"><span class="section-num">01</span><h2>Resumen ejecutivo</h2></div>
+    <p>El proyecto ya tiene, construido y funcional en aislamiento, casi todo lo necesario para que una partida se juegue sola: un motor de pila DAR-completo (<code>ActionPipeline</code>), un sistema de prioridad (<code>PriorityManager</code>), un motor de disparo de habilidades (<code>TriggerSystem</code> + <code>CardEffectSystem</code>) y un gestor de fases con automatización total del primer turno (<code>TurnManager</code>). El problema no es que falte lógica — es que <strong>el camino real que sigue una partida jugada desde la escena principal no pasa por esa maquinaria</strong> en varios puntos críticos.</p>
+    <div class="callout">
+      <p><span class="k">Diagnóstico central:</span> hay dos motores de turno paralelos (uno completo, uno simplificado) y el simplificado es el que conduce la partida a partir del turno 2. Y jugar una carta desde la mano nunca pasa por el sistema de habilidades — solo mueve el nodo visual. Arreglar estos dos puntos de conexión probablemente reduzca la interacción manual requerida más que cualquier otra cosa en este documento.</p>
+    </div>
+    <p>Además, el "oponente" (Jugador 2) es hoy un <em>stub</em> de una función: espera 1.2s y pasa el turno. Nunca juega oro, nunca despliega aliados, nunca bloquea. Si el objetivo es que las partidas se resuelvan solas, esta es la pieza que falta escribir desde cero — el resto del documento explica sobre qué base construirla.</p>
+  </section>
+
+  <section id="arquitectura">
+    <div class="section-head"><span class="section-num">02</span><h2>Mapa de arquitectura</h2></div>
+    <p>27 autoloads (singletons globales) más 11 módulos que <span class="mono">Main.gd</span> instancia como hijos en <span class="mono">_ready()</span>. La carga de autoloads en <span class="mono">project.godot</span> es el único orden garantizado entre ellos.</p>
+
+    <div class="arch-grid">
+      <div class="arch-layer">
+        <div class="layer-title">Estado &amp; datos base</div>
+        <div class="pill-row">
+          <span class="pill">GameSettings</span><span class="pill">Constants</span><span class="pill">GameState</span>
+          <span class="pill">CardDatabase</span><span class="pill">CardFactory</span><span class="pill">UniversalCardParser</span>
+          <span class="pill">DeckLoader</span>
+        </div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-layer">
+        <div class="layer-title">Flujo de turno / prioridad — <span style="color:var(--bad)">tres implementaciones paralelas</span></div>
+        <div class="pill-row">
+          <span class="pill hot">GameManager</span><span class="pill hot">TurnManager</span><span class="pill hot">PriorityManager</span>
+          <span class="pill hot">ActionPipeline</span><span class="pill">BattleManager</span>
+        </div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-layer">
+        <div class="layer-title">Efectos, cartas y zonas — <span style="color:var(--warn)">duplicación parcial</span></div>
+        <div class="pill-row">
+          <span class="pill warm">CardEffectSystem</span><span class="pill warm">EffectController</span><span class="pill warm">ActionModule</span>
+          <span class="pill warm">CardManager</span><span class="pill">TriggerSystem</span><span class="pill">ContinuousEffectManager</span>
+          <span class="pill">KeywordManager</span><span class="pill">DeckEffectHandler</span><span class="pill">DamageManager</span>
+          <span class="pill">PaymentManager</span><span class="pill">SelectionManager</span>
+        </div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-layer">
+        <div class="layer-title">Presentación</div>
+        <div class="pill-row">
+          <span class="pill">VisualManager</span><span class="pill">UIManager</span><span class="pill">AnimationQueue</span><span class="pill">CombatLog</span>
+        </div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-layer">
+        <div class="layer-title">Módulos de escena (hijos de Main.gd, no autoloads)</div>
+        <div class="pill-row">
+          <span class="pill">GameBootstrap</span><span class="pill">PhaseFlowController</span><span class="pill">ZoneManager</span>
+          <span class="pill">GoldManager</span><span class="pill">CardInteractionModule</span><span class="pill">MulliganController</span>
+          <span class="pill">SceneSetupModule</span><span class="pill">GameHUDModule</span><span class="pill">CardInspectionLayer</span>
+          <span class="pill">ZoneViewerModule</span><span class="pill">SelectionModule</span>
+        </div>
+      </div>
+    </div>
+    <p style="font-size:13.5px">Los <span class="pill hot" style="padding:2px 8px">rosados</span> marcan sistemas con solapamiento directo de responsabilidad; los <span class="pill warm" style="padding:2px 8px">ámbar</span> tienen duplicación parcial (mismas operaciones, dos o más implementaciones). Ver hallazgo 3 y 4 abajo.</p>
+  </section>
+
+  <section id="hallazgos">
+    <div class="section-head"><span class="section-num">03</span><h2>Los hallazgos estructurales</h2></div>
+    <p>Los primeros cuatro explican la mayoría de la fricción actual. El quinto se descubrió recién, investigando el tercero.</p>
+
+    <div class="finding">
+      <div class="finding-head"><h3>1 · El turno 1 se juega distinto al resto de la partida</h3><span class="chip chip-ok">resuelto</span></div>
+      <p style="font-size:13px"><b>Fix aplicado:</b> <code>PhaseFlowController._resolve_fase_final()</code> unifica robo de fin de turno + límite de mano (nuevo) para jugador humano y oponente. No se tocó el motor de <code>TurnManager</code> (ver nota abajo).</p>
+      <p><code>TurnManager.gd</code> implementa una máquina de fases completa y conforme al DAR: cierra la fase anterior, dispara habilidades automáticas de inicio de fase, abre la ventana de prioridad, roba la carta de fin de turno, verifica el límite de mano y fuerza el descarte. Pero <code>Main._init_turn_manager()</code> solo la invoca <strong>una vez</strong>, para el primer turno. A partir de ahí, <code>PhaseFlowController._do_fase_final()</code> llama <code>GameManager.end_turn()</code> directamente — y <code>GameManager._process_fase_final()</code> es un stub: robar carta y verificar límite de mano son comentarios <code>TODO</code> sin implementar.</p>
+      <p>Efecto práctico: desde el turno 2, nadie roba carta automáticamente al final del turno, nadie es forzado a descartar por exceso de mano, y las habilidades "al comienzo/fin de turno" nunca se buscan (<code>_trigger_abilities()</code> en <code>TurnManager</code> es también un no-op — solo imprime un log).</p>
+      <span class="fileref"><b>Ver:</b> game/scripts/core/game/PhaseFlowController.gd:216-232 &middot; game/scripts/core/managers/GameManager.gd:268-286 &middot; game/scripts/core/managers/TurnManager.gd:359-404</span>
+    </div>
+
+    <div class="finding">
+      <div class="finding-head"><h3>2 · Jugar una carta no pasa por el motor de habilidades</h3><span class="chip chip-ok">resuelto (parcial)</span></div>
+      <p style="font-size:13px"><b>Fix aplicado:</b> <code>GoldManager._trigger_enter_play()</code> emite <code>on_card_entered_play</code> a mano tras colocar la carta, sin pasar por <code>play_card_to_zone()</code> — su <code>game_board</code> resultó ser <code>GameBoard.gd</code>, código huérfano de un layout de tablero anterior (<code>$BattleField/PlayerLineaDefensa</code> etc., que ya no existe en <code>Main.tscn</code>), nunca adjunto a ningún nodo real. También se agregó <code>EffectController._draw_cards_fallback()</code> para que "Al entrar, roba una carta" funcione de verdad. <b>Sigue pendiente:</b> buscar/botar/descartar/destruir/desterrar/devolver en <code>EffectController</code> siguen gateados por ese mismo <code>game_board</code> roto.</p>
+      <p>Cuando el jugador hace doble clic (o arrastra) una carta a Vigilia, <code>GoldManager.play_card()</code> paga el coste y llama <code>_play_card_to_field()</code>, que mueve el nodo visual al campo, cambia su zona y dispara una animación. Eso es todo. Nunca llama <code>EffectController.play_card_to_zone()</code> (que emite <code>on_card_entered_play</code>, la señal de la que depende <code>CardEffectSystem</code> para procesar habilidades "Al entrar") ni pasa por <code>ActionPipeline.play_card()</code> (que implementa los cinco pasos A–E del DAR con ventana de prioridad y pila de respuesta).</p>
+      <p>Resultado: las habilidades de entrada al campo ("Al entrar, roba una carta", "Al entrar, haz 1 de daño"...) están completamente implementadas en <code>CardEffectSystem</code> pero <strong>nunca se disparan</strong> en una partida jugada normalmente, porque la señal que las activa nunca se emite desde el único camino que realmente usa el jugador.</p>
+      <span class="fileref"><b>Ver:</b> game/scripts/core/game/GoldManager.gd:53-121 (camino real) &middot; game/scripts/core/effects/EffectController.gd:396-423 (camino correcto, sin llamar) &middot; game/scripts/core/effects/CardEffectSystem.gd:97-192 (lógica ETB lista y huérfana)</span>
+    </div>
+
+    <div class="finding">
+      <div class="finding-head"><h3>3 · Tres sistemas de prioridad y pila compiten entre sí</h3><span class="chip chip-ok">resuelto (parcial)</span></div>
+      <p><code>TurnManager</code> mantiene su propio <code>priority_player_id</code>, <code>players_passed</code> y <code>effect_stack</code>. <code>PriorityManager</code> mantiene, por separado, <code>current_priority_player</code>, <code>player_passed</code> y su <strong>propio</strong> <code>effect_stack</code> tipado — con anulación, cancelación y redirección propias. <code>ActionPipeline</code> añade una tercera pila de "stack objects" con pasos A–E y su propia espera de prioridad (<code>_wait_for_priority_on_stack_object</code>).</p>
+      <p>En la práctica solo <code>PriorityManager</code> está conectado al flujo real, así que los métodos equivalentes de <code>TurnManager</code> quedan sin usarse. Pero investigando esto se encontró algo más grave que la simple duplicación: <code>BattleManager.calculate_combat_damage()</code> leía atacantes/bloqueadores de <code>TurnManager.declared_attackers/declared_blockers</code> — arrays que solo se llenan vía <code>TurnManager.declare_attacker()</code>, un método <strong>que nadie llama nunca</strong>. La UI real escribe en <code>GameManager.attackers/blockers</code> (otro array, otro dueño). Resultado: el combate calculaba <strong>0 atacantes siempre</strong>, sin importar qué jugara nadie — ningún ataque hacía daño al Castillo.</p>
+      <p style="font-size:13px"><b>Fix aplicado:</b> <code>BattleManager</code> ahora lee de <code>GameManager.attackers/blockers</code> (el array real). También se dejó un bloque de comentario al inicio de <code>TurnManager.gd</code> marcando qué partes del archivo son código muerto en la partida real, para que nadie las use como referencia por error.</p>
+      <span class="fileref"><b>Ver:</b> game/scripts/core/managers/BattleManager.gd:55-78 &middot; game/scripts/core/managers/TurnManager.gd:1-30 (banner nuevo) &middot; game/scripts/core/managers/PriorityManager.gd:27-70 &middot; game/scripts/core/effects/ActionPipeline.gd:1148-1228 (sin tocar)</span>
+    </div>
+
+    <div class="finding">
+      <div class="finding-head"><h3>4 · Robar / buscar / botar / descartar están implementados cuatro veces</h3><span class="chip chip-ok">resuelto (parcial)</span></div>
+      <p><code>ZoneManager</code> (módulo de Main, solo maneja 3 combinaciones de zona hardcodeadas), <code>CardManager</code> (autoload, con señales de cambio de zona <strong>y conectado de verdad a los contadores de UI</strong> vía <code>UIManager.gd:80-85</code>), <code>EffectController</code> (autoload, gateado por el <code>game_board</code> huérfano del hallazgo 2) y <code>CardEffectSystem</code>/<code>ActionModule</code> (autoload, con <code>execute_draw</code>, <code>execute_search</code>, <code>execute_mill</code>, <code>execute_discard</code> — nombres casi idénticos a los de <code>EffectController</code>, y que de hecho delegan en él) implementan, cada uno por su lado, mover cartas entre Castillo/Mano/Cementerio/Destierro.</p>
+      <p style="font-size:13px"><b>Fix aplicado:</b> en vez de fusionar los cuatro sistemas (riesgo alto sin poder ejecutar el editor), se identificó cuál es el único realmente vivo y sincronizado con la partida real — <code>CardManager</code> — y se usó como fallback de <code>EffectController</code> para las tres operaciones que sí tienen llamadores reales hoy: <code>draw_cards()</code>, <code>mill_cards()</code> (crítico: lo usa el daño de combate del hallazgo 3) y <code>destroy_card()</code>/<code>exile_card()</code> (crítico: destruye las cartas que mueren en combate). Sin este fix, el combate que arreglamos en el hallazgo 3 habría calculado daño real pero sin remover ninguna carta del Castillo ni del campo. Se dejó un banner al inicio de <code>EffectController.gd</code> marcando qué queda sin arreglar (<code>search_cards</code>, <code>discard_cards</code>, <code>return_to_deck</code>, <code>return_to_hand</code>, <code>convert_card_type</code>) para cuando algo los llame de verdad.</p>
+      <span class="fileref"><b>Ver:</b> game/scripts/core/effects/EffectController.gd:1-16 (banner), 262-370 (mill fallback), 476-560 (destroy/exile) &middot; game/scripts/core/managers/CardManager.gd:272-332</span>
+    </div>
+
+    <div class="finding">
+      <div class="finding-head"><h3>5 · Atacar normal (sin Furia) — corregido; bloquear sigue sin UI</h3><span class="chip chip-ok">resuelto (parcial)</span></div>
+      <p><b>Corrección a este mismo documento:</b> al investigar más a fondo, la afirmación original de que "solo existe UI para atacar con Furia" resultó incompleta. El <em>drop</em> en sí (<code>DropZone.on_card_dropped()</code> → <code>_can_accept_card()</code>) nunca verificó fase ni Furia — ya aceptaba soltar cualquier Aliado en la Línea de Ataque durante el paso de Ataque, y <code>GameManager.declare_attacker()</code> ya lo agregaba a <code>attackers</code> sin más preguntas. Lo único específico de Furia era el <em>brillo de legalidad</em> (<code>_check_card_legality()</code>), que marcaba en rojo un ataque normal aunque el drop fuera a funcionar igual — una desconexión entre lo que la UI decía y lo que realmente hacía.</p>
+      <p>Eso destapó un problema real distinto: <code>declare_attacker()</code> no verificaba enfermedad de invocación (DAR 3.1) para el caso normal — un Aliado recién jugado podía atacar el mismo turno sin tener Furia, con solo arrastrarlo.</p>
+      <p style="font-size:13px"><b>Fix aplicado:</b> <code>_check_card_legality()</code> ahora marca legal ambos casos (Furia en Vigilia, normal en Ataque) usando <code>TurnManager.can_attack()</code> — la misma función que ya existía pero nunca se llamaba (hallazgo 3). <code>GameManager.declare_attacker()</code> ahora valida con esa misma función y evita declarar la misma carta dos veces. Renombré <code>_declare_furia_attacker()</code> → <code>_declare_attacker()</code> en <code>CardInteractionModule</code>/<code>Main</code>/<code>DropZone</code> porque ya no es específica de Furia. <b>Sigue sin resolver:</b> declarar bloqueadores no tiene ningún llamador en ningún archivo — y hoy es de bajo valor arreglarlo, porque el oponente todavía no puede tener cartas en juego para bloquear ni atacar (esperando la IA del oponente, Roadmap Fase 3).</p>
+      <span class="fileref"><b>Ver:</b> game/scripts/ui/DropZone.gd:118-124,245-264 &middot; game/scripts/ui/CardInteractionModule.gd:118-140 &middot; game/scripts/core/managers/GameManager.gd:210-225</span>
+    </div>
+  </section>
+
+  <section id="interacciones">
+    <div class="section-head"><span class="section-num">04</span><h2>Inventario de interacciones manuales</h2></div>
+    <p>Cada punto donde la partida actual se detiene a esperar un clic, agrupado por si la pausa es una decisión legítima del jugador (DAR), o si es manual solo porque falta automatizarla.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Momento</th><th>Interacción actual</th><th>Naturaleza</th><th>Archivo</th></tr></thead>
+        <tbody>
+          <tr><td class="strong">Mulligan J1</td><td>Botones "Quedarse" / "Mulligan"</td><td><span class="chip chip-ok">decisión real</span></td><td class="fileref">MulliganController.gd</td></tr>
+          <tr><td class="strong">Mulligan J2</td><td>Ya automático — roba mano sin preguntar</td><td><span class="chip chip-ok">ya automático</span></td><td class="fileref">MulliganController.gd:92</td></tr>
+          <tr><td class="strong">Colocar Oro</td><td>Botón + clic en carta de mano</td><td><span class="chip chip-warn">automatizable</span></td><td class="fileref">CardInteractionModule.gd:102</td></tr>
+          <tr><td class="strong">Jugar carta</td><td>Doble clic / arrastrar</td><td><span class="chip chip-warn">automatizable</span></td><td class="fileref">CardInteractionModule.gd:48</td></tr>
+          <tr><td class="strong">Elegir objetivo</td><td>Clic en carta resaltada (TargetSelector)</td><td><span class="chip chip-ok">decisión real*</span></td><td class="fileref">TargetSelector.gd:479</td></tr>
+          <tr><td class="strong">Costes alternativos / X</td><td>Popup con botones y slider</td><td><span class="chip chip-ok">decisión real*</span></td><td class="fileref">PaymentManager.gd:961,1292</td></tr>
+          <tr><td class="strong">Declarar atacante</td><td>Clic en aliado en Línea de Ataque</td><td><span class="chip chip-ok">decisión real</span></td><td class="fileref">TurnManager.gd:1108</td></tr>
+          <tr><td class="strong">Declarar bloqueador</td><td>Clic en aliado propio → atacante</td><td><span class="chip chip-ok">decisión real</span></td><td class="fileref">TurnManager.gd:1220</td></tr>
+          <tr><td class="strong">Botón "¿Paso?"</td><td>Pasar prioridad o avanzar fase</td><td><span class="chip chip-warn">automatizable si no hay opciones</span></td><td class="fileref">PhaseFlowController.gd:186</td></tr>
+          <tr><td class="strong">Buscar / mirar mazo</td><td>SelectionCanvas — clic + confirmar</td><td><span class="chip chip-ok">decisión real*</span></td><td class="fileref">SelectionManager.gd:241</td></tr>
+          <tr><td class="strong">Exhumar</td><td>Popup con lista de botones</td><td><span class="chip chip-ok">decisión real*</span></td><td class="fileref">PaymentManager.gd:1570</td></tr>
+          <tr><td class="strong">Descarte por límite de mano</td><td>—</td><td><span class="chip chip-stub">no implementado (turno 2+)</span></td><td class="fileref">TurnManager.gd:652</td></tr>
+          <tr><td class="strong">Orden de daño</td><td>—</td><td><span class="chip chip-stub">sin UI dedicada</span></td><td class="fileref">Constants.Phase.ASIGNACION_DANIO</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:13.5px; margin-top:14px">* Estas siguen siendo decisiones del jugador humano, pero cuando <strong>solo hay una opción legal</strong> (un objetivo posible, un valor de X posible), hoy igual se detienen a esperar el clic — ver Fase 4 de la ruta propuesta.</p>
+  </section>
+
+  <section id="oponente">
+    <div class="section-head"><span class="section-num">05</span><h2>Estado del Jugador 2 (IA)</h2></div>
+    <p>No existe ninguna IA de oponente. La única lógica para el Jugador 2 es <code>PhaseFlowController._opponent_auto_pass()</code>: espera 1.2s, roba su carta si no es el primer turno, y fuerza la fase Final. Nunca coloca Oro, nunca juega cartas de su mano (aunque las tiene — se reparte mano normalmente), nunca declara atacantes ni bloqueadores, nunca usa talismanes.</p>
+    <div class="callout">
+      <p><span class="k">Esto es, en la práctica, el "producto mínimo" para lo que pides.</span> Una vez resueltos los hallazgos 1 y 2 (el motor de reglas conectado al flujo real), escribir un tomador de decisiones simple para el Jugador 2 — aunque sea heurístico y no una IA sofisticada — es lo que convierte "una partida" en "una partida que se juega sola".</p>
+    </div>
+  </section>
+
+  <section id="stubs">
+    <div class="section-head"><span class="section-num">06</span><h2>TODOs y stubs pendientes</h2></div>
+    <p>77 marcadores de trabajo pendiente encontrados. Los que afectan directamente a la automatización de interacciones:</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Pendiente</th><th>Impacto</th><th>Archivo</th></tr></thead>
+        <tbody>
+          <tr><td>Robo de carta en Fase Final (turno 2+)</td><td>Rompe el ciclo automático de turno</td><td class="fileref">GameManager.gd:279</td></tr>
+          <tr><td>Verificar límite de mano y forzar descarte (turno 2+)</td><td>Regla DAR no aplicada</td><td class="fileref">GameManager.gd:282</td></tr>
+          <tr><td><code>_trigger_abilities()</code> es un no-op (solo log)</td><td>Ninguna habilidad "al inicio/fin de fase" se dispara</td><td class="fileref">TurnManager.gd:610-618</td></tr>
+          <tr><td>Golpe Primero no calculado</td><td>Regla de combate incompleta</td><td class="fileref">BattleManager.gd:561</td></tr>
+          <tr><td>Selección de objetivo / descarte en <code>Card.gd</code></td><td>Fallback de carta sin UI conectada</td><td class="fileref">Card.gd:997-1008</td></tr>
+          <tr><td>Highlight de zonas legales al arrastrar</td><td>Feedback visual ausente</td><td class="fileref">GameBoard.gd:424-430</td></tr>
+          <tr><td>Espera a oponente en partidas PvP</td><td>Solo relevante si se apunta a multijugador real</td><td class="fileref">DeckManager.gd:414</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="roadmap">
+    <div class="section-head"><span class="section-num">07</span><h2>Ruta para minimizar interacción</h2></div>
+    <p>Seis fases ordenadas por el ratio entre esfuerzo y cuánta interacción manual eliminan. Cada una es utilizable de forma independiente — no hace falta completar todas para ver beneficio.</p>
+
+    <div class="phase">
+      <div class="phase-num">1</div>
+      <div>
+        <h3>Unificar el motor de turno</h3>
+        <div class="impact">Elimina la bifurcación turno-1 vs turno-2+</div>
+        <p>Hacer que <code>PhaseFlowController</code> conduzca <strong>todos</strong> los turnos a través de <code>TurnManager.change_phase()</code>/<code>advance_phase()</code>, en vez de reservarlo solo al turno 1 y delegar el resto en <code>GameManager</code>. O, si <code>GameManager</code> se mantiene como fuente de verdad de estado, portar a él el robo automático y el chequeo de límite de mano que ya existen (probados) en <code>TurnManager</code>.</p>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">2</div>
+      <div>
+        <h3>Conectar "jugar carta" al motor de habilidades</h3>
+        <div class="impact">Activa las habilidades "Al entrar" en partidas reales</div>
+        <ul>
+          <li>Hacer que <code>GoldManager._play_card_to_field()</code> llame a <code>EffectController.play_card_to_zone()</code> (o a <code>ActionPipeline.play_card()</code> si se quiere pila completa con ventana de prioridad) en lugar de mover el nodo directamente.</li>
+          <li>Verificar que <code>CardEffectSystem._on_card_entered_play</code> reciba la señal y dispare correctamente para cartas jugadas desde mano, no solo desde los flujos de prueba.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">3</div>
+      <div>
+        <h3>Reemplazar <span class="mono">_opponent_auto_pass</span> por un tomador de decisiones</h3>
+        <div class="impact">Convierte "una partida" en "una partida que se juega sola"</div>
+        <ul>
+          <li>Empezar simple: reglas fijas (jugar Oro si está disponible, jugar el aliado más caro pagable, atacar con todo lo que puede atacar, bloquear al atacante más fuerte con el bloqueador más barato que sobrevive).</li>
+          <li>Reutilizar <code>TargetSelector.get_legal_targets()</code> para que el bot elija objetivos válidos sin duplicar lógica de reglas.</li>
+          <li>Este mismo tomador de decisiones, con una bandera, sirve luego para un modo "simular partida completa" de un jugador contra otro — útil para testear cambios de reglas sin jugar manualmente.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">4</div>
+      <div>
+        <h3>Auto-resolver decisiones sin opciones reales</h3>
+        <div class="impact">Reduce clics del jugador humano sin quitarle decisiones</div>
+        <ul>
+          <li>Auto-pasar prioridad cuando el jugador no tiene ninguna acción legal disponible (en vez de mostrar el botón "¿Paso?" igual).</li>
+          <li><code>TargetSelector</code>: si <code>get_legal_targets()</code> devuelve exactamente un resultado, resolver sin abrir el modo de selección.</li>
+          <li><code>PaymentManager</code>: si solo hay una opción de pago posible, saltar el popup de elección.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">5</div>
+      <div>
+        <h3>Consolidar los sistemas duplicados</h3>
+        <div class="impact">Evita que el próximo cambio desincronice dos motores</div>
+        <p>Elegir <code>ActionPipeline</code> + <code>PriorityManager</code> como el único camino de pila/prioridad y marcar <code>TurnManager.effect_stack</code>/<code>players_passed</code> como código muerto a retirar. Elegir <code>EffectController</code>/<code>CardManager</code> como el único camino de movimiento de zonas y retirar la duplicación en <code>ZoneManager</code> y <code>ActionModule</code>.</p>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">6</div>
+      <div>
+        <h3>Modo de simulación sin interfaz</h3>
+        <div class="impact">Testea el motor de reglas sin tocar la UI en absoluto</div>
+        <p><code>TestScene.gd</code> ya prototipó la idea de un oponente simulado con funciones dedicadas (<code>_on_opponent_pass</code>, <code>_on_opponent_respond</code>, <code>_on_opponent_annul</code>), pero corre sobre un tablero de juguete desconectado del motor real. Vale la pena construir su sucesor sobre <code>GameManager</code>/<code>TurnManager</code> reales una vez resueltas las fases 1–3: una escena headless que corre partidas completas jugador-vs-bot y registra el resultado, para validar reglas sin clicar nada.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="indice">
+    <div class="section-head"><span class="section-num">08</span><h2>Índice de archivos clave</h2></div>
+    <div class="filegrid">
+      <div class="cell"><span class="fn">Main.gd</span><span class="desc">Orquestador de escena — instancia todos los módulos</span></div>
+      <div class="cell"><span class="fn">GameBootstrap.gd</span><span class="desc">Carga de cartas, mazos, duelo de dados</span></div>
+      <div class="cell"><span class="fn">PhaseFlowController.gd</span><span class="desc">Máquina de estados de fases visible — el "driver" real</span></div>
+      <div class="cell"><span class="fn">GameManager.gd</span><span class="desc">Estado global simplificado — conduce turno 2+</span></div>
+      <div class="cell"><span class="fn">TurnManager.gd</span><span class="desc">Máquina de fases completa DAR — solo turno 1</span></div>
+      <div class="cell"><span class="fn">PriorityManager.gd</span><span class="desc">Prioridad y pila "real" (la que está conectada)</span></div>
+      <div class="cell"><span class="fn">ActionPipeline.gd</span><span class="desc">Pila de 5 pasos (A–E) DAR — usada solo parcialmente</span></div>
+      <div class="cell"><span class="fn">BattleManager.gd</span><span class="desc">Cálculo de daño de combate</span></div>
+      <div class="cell"><span class="fn">GoldManager.gd</span><span class="desc">Camino real de "jugar carta" — bypassa el motor de efectos</span></div>
+      <div class="cell"><span class="fn">CardEffectSystem.gd</span><span class="desc">Habilidades ETB/activadas — lógica lista, mal conectada</span></div>
+      <div class="cell"><span class="fn">EffectController.gd</span><span class="desc">Operaciones de zona con señales — camino "correcto" sin usar</span></div>
+      <div class="cell"><span class="fn">TargetSelector.gd</span><span class="desc">Selección de objetivos por clic + <code>get_legal_targets()</code></span></div>
+      <div class="cell"><span class="fn">PaymentManager.gd</span><span class="desc">Costes alternativos, X, exhumar — todo por popup</span></div>
+      <div class="cell"><span class="fn">TestScene.gd</span><span class="desc">Sandbox de pruebas aislado, con oponente simulado</span></div>
+    </div>
+  </section>
+
+  <footer>Auditoría generada por revisión estática de <span class="mono">game/scripts</span>, <span class="mono">game/scenes</span> y <span class="mono">project.godot</span>. No se ejecutó el proyecto en el editor de Godot como parte de esta revisión.</footer>
+
+</div>

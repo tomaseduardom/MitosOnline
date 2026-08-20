@@ -1,0 +1,58 @@
+[gd_scene load_steps=2 format=3 uid="uid://stack_visualizer"]
+
+[ext_resource type="Script" path="res://scripts/ui/StackVisualizer.gd" id="1_script"]
+
+[node name="StackVisualizer" type="Control"]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = -400.0
+offset_right = 310.0
+offset_bottom = -10.0
+script = ExtResource("1_script")
+
+[node name="BackgroundPanel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Header" type="HBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 5.0
+offset_bottom = 30.0
+
+[node name="Label" type="Label" parent="Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "PILA DE EFECTOS"
+horizontal_alignment = 1
+
+[node name="StackContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 5.0
+offset_top = 35.0
+offset_right = -5.0
+offset_bottom = -5.0
+theme_override_constants/separation = 8
+
+[node name="EmptyLabel" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -80.0
+offset_top = -10.0
+offset_right = 80.0
+offset_bottom = 10.0
+text = "Pila vacía"
+horizontal_alignment = 1
+vertical_alignment = 1

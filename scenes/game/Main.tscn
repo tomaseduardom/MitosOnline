@@ -1,0 +1,806 @@
+[gd_scene format=3 uid="uid://di6sedj5y4ynl"]
+
+[ext_resource type="Script" uid="uid://c4jk56vjbdsor" path="res://scripts/core/Main.gd" id="1_main"]
+[ext_resource type="Shader" uid="uid://buvlke0h4wghv" path="res://shaders/blur_background.gdshader" id="blur_shader"]
+[ext_resource type="Texture2D" uid="uid://nnyepqymcr2b" path="res://assets/card_backs/dorso_1.png" id="dorso_texture"]
+[ext_resource type="Script" uid="uid://b6ygacksqoci7" path="res://scripts/ui/DynamicHand.gd" id="dynamic_hand"]
+[ext_resource type="Shader" uid="uid://chfoe0j35t7jn" path="res://shaders/mulligan_background.gdshader" id="mulligan_bg_shader"]
+[ext_resource type="Script" uid="uid://doaih45qt3qs1" path="res://scripts/ui/MulliganHand.gd" id="mulligan_hand"]
+[ext_resource type="Texture2D" uid="uid://duvkj0xir0ncf" path="res://tablero_runas.png" id="tablero_runas"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_castillo"]
+bg_color = Color(0, 0, 0, 0)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_mulligan_bg"]
+shader = ExtResource("mulligan_bg_shader")
+shader_parameter/color_deep = Color(0.02, 0.03, 0.06, 1)
+shader_parameter/color_mid = Color(0.05, 0.08, 0.15, 1)
+shader_parameter/color_highlight = Color(0.12, 0.18, 0.28, 1)
+shader_parameter/vignette_strength = 0.7
+shader_parameter/vignette_softness = 0.5
+shader_parameter/noise_intensity = 0.06
+shader_parameter/time_scale = 0.25
+shader_parameter/radial_gradient_power = 1.5
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_blur"]
+shader = ExtResource("blur_shader")
+shader_parameter/blur_amount = 2.0
+shader_parameter/darken_amount = 0.4
+
+[node name="Main" type="Control" unique_id=112728379]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main")
+test_mode = true
+
+[node name="Background" type="TextureRect" parent="." unique_id=321868079]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("tablero_runas")
+expand_mode = 1
+
+[node name="GameBoard" type="Control" parent="." unique_id=752193631]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 1.0
+offset_top = -1.0
+offset_right = 1.0
+offset_bottom = -1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="OpponentArea" type="Control" parent="GameBoard" unique_id=1012841627]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 50.0
+offset_bottom = 340.0
+grow_horizontal = 2
+
+[node name="OpponentCastillo" type="Panel" parent="GameBoard/OpponentArea" unique_id=1916516657]
+custom_minimum_size = Vector2(80, 140)
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -230.0
+offset_top = 80.0
+offset_right = -150.0
+offset_bottom = 220.0
+grow_horizontal = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_castillo")
+
+[node name="DorsoImage" type="TextureRect" parent="GameBoard/OpponentArea/OpponentCastillo" unique_id=1651634279]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("dorso_texture")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="CastilloLabel" type="Label" parent="GameBoard/OpponentArea/OpponentCastillo" unique_id=1275274827]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -35.0
+offset_top = -18.0
+offset_right = 35.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 10
+text = "CASTILLO"
+horizontal_alignment = 1
+
+[node name="Count" type="Label" parent="GameBoard/OpponentArea/OpponentCastillo" unique_id=1268396202]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -20.0
+offset_top = -12.0
+offset_right = 20.0
+offset_bottom = 12.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 22
+text = "50"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="OpponentHand" type="Control" parent="GameBoard/OpponentArea" unique_id=1765076175]
+visible = false
+anchors_preset = 0
+
+[node name="OpponentCementerio" type="Panel" parent="GameBoard/OpponentArea" unique_id=19022849]
+custom_minimum_size = Vector2(80, 140)
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -85.0
+offset_top = 80.0
+offset_right = -5.0
+offset_bottom = 220.0
+grow_horizontal = 0
+
+[node name="CementerioLabel" type="Label" parent="GameBoard/OpponentArea/OpponentCementerio" unique_id=800762820]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -40.0
+offset_top = -18.0
+offset_right = 40.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 10
+text = "CEMENTERIO"
+horizontal_alignment = 1
+
+[node name="Count" type="Label" parent="GameBoard/OpponentArea/OpponentCementerio" unique_id=1100738728]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -20.0
+offset_top = -12.0
+offset_right = 20.0
+offset_bottom = 12.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 22
+text = "0"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="OpponentDestierro" type="Panel" parent="GameBoard/OpponentArea" unique_id=79563552]
+custom_minimum_size = Vector2(80, 140)
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -85.0
+offset_top = 230.0
+offset_right = -5.0
+offset_bottom = 370.0
+grow_horizontal = 0
+
+[node name="DestierroLabel" type="Label" parent="GameBoard/OpponentArea/OpponentDestierro" unique_id=78391193]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -35.0
+offset_top = -18.0
+offset_right = 35.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 10
+text = "DESTIERRO"
+horizontal_alignment = 1
+
+[node name="Count" type="Label" parent="GameBoard/OpponentArea/OpponentDestierro" unique_id=940204957]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -15.0
+offset_top = -10.0
+offset_right = 15.0
+offset_bottom = 10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 18
+text = "0"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="OpponentOroPagado" type="HBoxContainer" parent="GameBoard/OpponentArea" unique_id=586682096]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 20.0
+offset_right = 350.0
+offset_bottom = 125.0
+theme_override_constants/separation = -50
+
+[node name="OpponentOroPagadoLabel" type="Label" parent="GameBoard/OpponentArea" unique_id=584394720]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 2.0
+offset_right = 140.0
+offset_bottom = 20.0
+theme_override_colors/font_color = Color(0.6, 0.5, 0.3, 1)
+theme_override_font_sizes/font_size = 11
+text = "ORO PAGADO"
+
+[node name="OpponentReservaOro" type="HBoxContainer" parent="GameBoard/OpponentArea" unique_id=586682097]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 125.0
+offset_right = 350.0
+offset_bottom = 230.0
+theme_override_constants/separation = -50
+
+[node name="OpponentReservaOroLabel" type="Label" parent="GameBoard/OpponentArea" unique_id=584394721]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 107.0
+offset_right = 140.0
+offset_bottom = 125.0
+theme_override_colors/font_color = Color(0.9, 0.8, 0.3, 1)
+theme_override_font_sizes/font_size = 11
+text = "RESERVA ORO"
+
+[node name="OpponentField" type="HBoxContainer" parent="GameBoard/OpponentArea" unique_id=381619529]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -350.0
+offset_top = 130.0
+offset_right = 350.0
+offset_bottom = 280.0
+grow_horizontal = 2
+alignment = 1
+
+[node name="OpponentFieldLabel" type="Label" parent="GameBoard/OpponentArea" unique_id=1789663288]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -50.0
+offset_top = 110.0
+offset_right = 50.0
+offset_bottom = 128.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.5, 1)
+theme_override_font_sizes/font_size = 10
+text = "L. DEFENSA"
+horizontal_alignment = 1
+
+[node name="CenterArea" type="Control" parent="GameBoard" unique_id=1092268596]
+layout_mode = 1
+anchors_preset = 14
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_top = -40.0
+offset_bottom = 40.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="CenterLine" type="ColorRect" parent="GameBoard/CenterArea" unique_id=1524663900]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_left = 120.0
+offset_top = 18.0
+offset_right = -120.0
+offset_bottom = 22.0
+grow_horizontal = 2
+color = Color(0.35, 0.4, 0.45, 0.4)
+
+[node name="BattleLabel" type="Label" parent="GameBoard/CenterArea" unique_id=279748370]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -70.0
+offset_top = -10.0
+offset_right = 70.0
+offset_bottom = 10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.4, 0.45, 0.5, 1)
+theme_override_font_sizes/font_size = 12
+text = "ZONA DE BATALLA"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="PlayerArea" type="Control" parent="GameBoard" unique_id=1716131524]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -440.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="PlayerCastillo" type="Panel" parent="GameBoard/PlayerArea" unique_id=1193840314]
+custom_minimum_size = Vector2(80, 140)
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -230.0
+offset_top = 50.0
+offset_right = -150.0
+offset_bottom = 190.0
+grow_horizontal = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_castillo")
+
+[node name="DorsoImage" type="TextureRect" parent="GameBoard/PlayerArea/PlayerCastillo" unique_id=571432384]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("dorso_texture")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="CastilloLabel" type="Label" parent="GameBoard/PlayerArea/PlayerCastillo" unique_id=1760807982]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -35.0
+offset_top = -18.0
+offset_right = 35.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 10
+text = "CASTILLO"
+horizontal_alignment = 1
+
+[node name="Count" type="Label" parent="GameBoard/PlayerArea/PlayerCastillo" unique_id=1990005112]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -20.0
+offset_top = -12.0
+offset_right = 20.0
+offset_bottom = -5.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 22
+text = "50"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="PlayerOroPagado" type="HBoxContainer" parent="GameBoard/PlayerArea" unique_id=586682094]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 20.0
+offset_right = 350.0
+offset_bottom = 125.0
+theme_override_constants/separation = -50
+
+[node name="OroPagadoLabel" type="Label" parent="GameBoard/PlayerArea" unique_id=584394718]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 2.0
+offset_right = 120.0
+offset_bottom = 20.0
+theme_override_colors/font_color = Color(0.6, 0.5, 0.3, 1)
+theme_override_font_sizes/font_size = 11
+text = "ORO PAGADO"
+
+[node name="PlayerReservaOro" type="HBoxContainer" parent="GameBoard/PlayerArea" unique_id=586682095]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 125.0
+offset_right = 350.0
+offset_bottom = 230.0
+theme_override_constants/separation = -50
+
+[node name="GoldAreaLabel" type="Label" parent="GameBoard/PlayerArea" unique_id=584394719]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 107.0
+offset_right = 120.0
+offset_bottom = 125.0
+theme_override_colors/font_color = Color(0.9, 0.8, 0.3, 1)
+theme_override_font_sizes/font_size = 11
+text = "RESERVA ORO"
+
+[node name="PlayerField" type="HBoxContainer" parent="GameBoard/PlayerArea" unique_id=1998868327]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -350.0
+offset_right = 350.0
+offset_bottom = 210.0
+grow_horizontal = 2
+theme_override_constants/separation = -60
+alignment = 1
+
+[node name="PlayerFieldLabel" type="Label" parent="GameBoard/PlayerArea" unique_id=2093603837]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -50.0
+offset_top = 212.0
+offset_right = 50.0
+offset_bottom = 230.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.5, 1)
+theme_override_font_sizes/font_size = 10
+text = "L. DEFENSA"
+horizontal_alignment = 1
+
+[node name="PlayerHand" type="Control" parent="GameBoard/PlayerArea" unique_id=1533866774]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 80.0
+offset_top = -220.0
+offset_right = -80.0
+grow_horizontal = 2
+grow_vertical = 0
+script = ExtResource("dynamic_hand")
+
+[node name="HandLabel" type="Label" parent="GameBoard/PlayerArea" unique_id=1829840697]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -25.0
+offset_top = 178.0
+offset_right = 25.0
+offset_bottom = 196.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.45, 0.45, 0.45, 1)
+theme_override_font_sizes/font_size = 10
+text = "MANO"
+horizontal_alignment = 1
+
+[node name="PlayerCementerio" type="Panel" parent="GameBoard/PlayerArea" unique_id=1158503023]
+custom_minimum_size = Vector2(80, 140)
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -85.0
+offset_top = 50.0
+offset_right = -5.0
+offset_bottom = 190.0
+grow_horizontal = 0
+
+[node name="CementerioLabel" type="Label" parent="GameBoard/PlayerArea/PlayerCementerio" unique_id=1140727355]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -40.0
+offset_top = -18.0
+offset_right = 40.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 10
+text = "CEMENTERIO"
+horizontal_alignment = 1
+
+[node name="Count" type="Label" parent="GameBoard/PlayerArea/PlayerCementerio" unique_id=270761100]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -20.0
+offset_top = -12.0
+offset_right = 20.0
+offset_bottom = 12.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 22
+text = "0"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="PlayerDestierro" type="Panel" parent="GameBoard/PlayerArea" unique_id=607127901]
+custom_minimum_size = Vector2(80, 140)
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -85.0
+offset_top = 200.0
+offset_right = -5.0
+offset_bottom = 340.0
+grow_horizontal = 0
+
+[node name="DestierroLabel" type="Label" parent="GameBoard/PlayerArea/PlayerDestierro" unique_id=846720775]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -35.0
+offset_top = -18.0
+offset_right = 35.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 10
+text = "DESTIERRO"
+horizontal_alignment = 1
+
+[node name="Count" type="Label" parent="GameBoard/PlayerArea/PlayerDestierro" unique_id=310709141]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -15.0
+offset_top = -10.0
+offset_right = 15.0
+offset_bottom = 10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 18
+text = "0"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="TopBar" type="Panel" parent="." unique_id=394546918]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 50.0
+grow_horizontal = 2
+
+[node name="TurnLabel" type="Label" parent="TopBar" unique_id=1782860048]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = -15.0
+offset_right = 150.0
+offset_bottom = 15.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 20
+text = "Turno 1 - Tu turno"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="PhaseLabel" type="Label" parent="TopBar" unique_id=2120315365]
+layout_mode = 1
+anchors_preset = 6
+anchor_left = 1.0
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -15.0
+offset_right = -20.0
+offset_bottom = 15.0
+grow_horizontal = 0
+grow_vertical = 2
+theme_override_font_sizes/font_size = 16
+text = "Fase de Vigilia"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="PlayerInfo" type="Label" parent="TopBar" unique_id=317677124]
+layout_mode = 1
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_left = 20.0
+offset_top = -15.0
+offset_right = 200.0
+offset_bottom = 15.0
+grow_vertical = 2
+theme_override_font_sizes/font_size = 16
+text = "Jugador 1"
+vertical_alignment = 1
+
+[node name="TurnTimer" type="PanelContainer" parent="." unique_id=505323634]
+layout_mode = 1
+anchors_preset = 6
+anchor_left = 1.0
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_left = -120.0
+offset_top = -60.0
+offset_right = -20.0
+offset_bottom = 60.0
+grow_horizontal = 0
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="TurnTimer" unique_id=505323635]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="TimerIcon" type="Label" parent="TurnTimer/VBox" unique_id=505323636]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "⏱"
+horizontal_alignment = 1
+
+[node name="TimerLabel" type="Label" parent="TurnTimer/VBox" unique_id=505323637]
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "60"
+horizontal_alignment = 1
+
+[node name="TimerSub" type="Label" parent="TurnTimer/VBox" unique_id=505323638]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+theme_override_font_sizes/font_size = 11
+text = "segundos"
+horizontal_alignment = 1
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=1754653885]
+layer = 10
+
+[node name="DebugPanel" type="Panel" parent="UI" unique_id=1009529385]
+offset_left = 10.0
+offset_top = 60.0
+offset_right = 260.0
+offset_bottom = 130.0
+
+[node name="DebugLabel" type="Label" parent="UI/DebugPanel" unique_id=844045522]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 12
+text = "Debug Info"
+autowrap_mode = 2
+
+[node name="MulliganOverlay" type="Panel" parent="UI" unique_id=532652006]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MulliganBG" type="ColorRect" parent="UI/MulliganOverlay" unique_id=1024905225]
+material = SubResource("ShaderMaterial_mulligan_bg")
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MulliganTitle" type="Label" parent="UI/MulliganOverlay" unique_id=590647472]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 40.0
+offset_right = 200.0
+offset_bottom = 80.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.9, 0.85, 0.6, 1)
+theme_override_font_sizes/font_size = 28
+text = "FASE DE MULLIGAN"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="MulliganInfo" type="Label" parent="UI/MulliganOverlay" unique_id=228172042]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 90.0
+offset_right = 300.0
+offset_bottom = 130.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.7, 1)
+theme_override_font_sizes/font_size = 14
+text = "Puedes quedarte con tu mano o barajar y robar 1 carta menos"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="MulliganCardsLabel" type="Label" parent="UI/MulliganOverlay" unique_id=132085543]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -150.0
+offset_top = 140.0
+offset_right = 150.0
+offset_bottom = 170.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.5, 0.7, 0.9, 1)
+theme_override_font_sizes/font_size = 16
+text = "Mano actual: 8 cartas"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="MulliganHand" type="Control" parent="UI/MulliganOverlay" unique_id=1409947592]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 50.0
+offset_bottom = -80.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("mulligan_hand")
+
+[node name="MulliganButtons" type="HBoxContainer" parent="UI/MulliganOverlay" unique_id=1133546847]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = 160.0
+offset_right = 200.0
+offset_bottom = 210.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 30
+alignment = 1
+
+[node name="KeepHandButton" type="Button" parent="UI/MulliganOverlay/MulliganButtons" unique_id=167196191]
+custom_minimum_size = Vector2(160, 45)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Quedarse"
+
+[node name="MulliganButton" type="Button" parent="UI/MulliganOverlay/MulliganButtons" unique_id=1667289142]
+custom_minimum_size = Vector2(160, 45)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Mulligan (-1)"
+
+[node name="CardInspectionLayer" type="CanvasLayer" parent="." unique_id=1889234567]
+layer = 100
+visible = false
+
+[node name="BlurBackground" type="ColorRect" parent="CardInspectionLayer" unique_id=905784859]
+material = SubResource("ShaderMaterial_blur")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="CardContainer" type="CenterContainer" parent="CardInspectionLayer" unique_id=1519334234]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2

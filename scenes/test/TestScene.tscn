@@ -1,0 +1,627 @@
+[gd_scene format=3 uid="uid://dih3ubgaj5h2v"]
+
+[ext_resource type="Script" uid="uid://d0821cn6wk0ak" path="res://scripts/test/TestScene.gd" id="1_test"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_zone"]
+bg_color = Color(0.12, 0.14, 0.18, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.25, 0.28, 0.35, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="TestScene" type="Control" unique_id=1601523748]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_test")
+
+[node name="Background" type="ColorRect" parent="." unique_id=1726533689]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.06, 0.07, 0.09, 1)
+
+[node name="Title" type="Label" parent="." unique_id=1829752155]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -250.0
+offset_top = 15.0
+offset_right = 250.0
+offset_bottom = 50.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 26
+text = "ESCENARIO DE PRUEBAS"
+horizontal_alignment = 1
+
+[node name="GameArea" type="Control" parent="." unique_id=458867994]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = 70.0
+offset_right = -340.0
+offset_bottom = -20.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="OpponentZones" type="VBoxContainer" parent="GameArea" unique_id=621603424]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 520.0
+grow_horizontal = 2
+theme_override_constants/separation = 12
+
+[node name="OppHeader" type="Label" parent="GameArea/OpponentZones" unique_id=1956988084]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.5, 0.5, 1)
+theme_override_font_sizes/font_size = 16
+text = "OPONENTE"
+
+[node name="OppHandLabel" type="Label" parent="GameArea/OpponentZones" unique_id=1261235595]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.6, 1)
+theme_override_font_sizes/font_size = 11
+text = "Mano del Oponente"
+
+[node name="OppHandZone" type="Panel" parent="GameArea/OpponentZones" unique_id=574395404]
+custom_minimum_size = Vector2(0, 230)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_zone")
+
+[node name="OppHandContainer" type="HBoxContainer" parent="GameArea/OpponentZones/OppHandZone" unique_id=208725149]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = -25
+alignment = 1
+
+[node name="OppFieldLabel" type="Label" parent="GameArea/OpponentZones" unique_id=2027208487]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.4, 0.4, 1)
+theme_override_font_sizes/font_size = 11
+text = "Campo del Oponente"
+
+[node name="OppFieldZone" type="Panel" parent="GameArea/OpponentZones" unique_id=163546608]
+custom_minimum_size = Vector2(0, 230)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_zone")
+
+[node name="OppFieldContainer" type="HBoxContainer" parent="GameArea/OpponentZones/OppFieldZone" unique_id=960120090]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="OppSideZones" type="HBoxContainer" parent="GameArea/OpponentZones" unique_id=530994738]
+layout_mode = 2
+theme_override_constants/separation = 30
+
+[node name="OppDeckZone" type="Panel" parent="GameArea/OpponentZones/OppSideZones" unique_id=1185454845]
+custom_minimum_size = Vector2(100, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_zone")
+
+[node name="Label" type="Label" parent="GameArea/OpponentZones/OppSideZones/OppDeckZone" unique_id=1429841732]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -40.0
+offset_top = 8.0
+offset_right = 40.0
+offset_bottom = 24.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.7, 1)
+theme_override_font_sizes/font_size = 11
+text = "MAZO"
+horizontal_alignment = 1
+
+[node name="OppDeckCount" type="Label" parent="GameArea/OpponentZones/OppSideZones/OppDeckZone" unique_id=1881581782]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -25.0
+offset_right = 25.0
+offset_bottom = 22.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 18
+text = "30"
+horizontal_alignment = 1
+
+[node name="CenterDivider" type="Control" parent="GameArea" unique_id=256007625]
+layout_mode = 1
+anchors_preset = 14
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_top = -25.0
+offset_bottom = 25.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Line" type="ColorRect" parent="GameArea/CenterDivider" unique_id=1833009995]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 23.0
+offset_bottom = 27.0
+grow_horizontal = 2
+color = Color(0.5, 0.4, 0.25, 0.6)
+
+[node name="BattleLabel" type="Label" parent="GameArea/CenterDivider" unique_id=954290122]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -80.0
+offset_top = -12.0
+offset_right = 80.0
+offset_bottom = 12.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.6, 0.55, 0.4, 1)
+theme_override_font_sizes/font_size = 14
+text = "ZONA DE BATALLA"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="PlayerZones" type="VBoxContainer" parent="GameArea" unique_id=1683918977]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -560.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_constants/separation = 12
+
+[node name="PlayerHeader" type="Label" parent="GameArea/PlayerZones" unique_id=1834612682]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.8, 0.5, 1)
+theme_override_font_sizes/font_size = 16
+text = "TU LADO"
+
+[node name="FieldLabel" type="Label" parent="GameArea/PlayerZones" unique_id=2136343996]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4, 0.7, 0.4, 1)
+theme_override_font_sizes/font_size = 11
+text = "Tu Campo de Batalla"
+
+[node name="FieldZone" type="Panel" parent="GameArea/PlayerZones" unique_id=166221675]
+custom_minimum_size = Vector2(0, 230)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_zone")
+
+[node name="FieldContainer" type="HBoxContainer" parent="GameArea/PlayerZones/FieldZone" unique_id=1080159943]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 15
+alignment = 1
+
+[node name="HandLabel" type="Label" parent="GameArea/PlayerZones" unique_id=961829001]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.7, 0.9, 1)
+theme_override_font_sizes/font_size = 11
+text = "Tu Mano (click para seleccionar)"
+
+[node name="HandZone" type="Panel" parent="GameArea/PlayerZones" unique_id=830104260]
+custom_minimum_size = Vector2(0, 230)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_zone")
+
+[node name="HandContainer" type="HBoxContainer" parent="GameArea/PlayerZones/HandZone" unique_id=44876319]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = -25
+alignment = 1
+
+[node name="SideZones" type="HBoxContainer" parent="GameArea/PlayerZones" unique_id=1727402362]
+layout_mode = 2
+theme_override_constants/separation = 30
+
+[node name="DeckZone" type="Panel" parent="GameArea/PlayerZones/SideZones" unique_id=1060027639]
+custom_minimum_size = Vector2(100, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_zone")
+
+[node name="Label" type="Label" parent="GameArea/PlayerZones/SideZones/DeckZone" unique_id=236571440]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -40.0
+offset_top = 8.0
+offset_right = 40.0
+offset_bottom = 24.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.6, 0.7, 0.9, 1)
+theme_override_font_sizes/font_size = 11
+text = "MAZO"
+horizontal_alignment = 1
+
+[node name="DeckCount" type="Label" parent="GameArea/PlayerZones/SideZones/DeckZone" unique_id=337990002]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -25.0
+offset_right = 25.0
+offset_bottom = 22.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.7, 0.85, 1, 1)
+theme_override_font_sizes/font_size = 18
+text = "30"
+horizontal_alignment = 1
+
+[node name="GraveZone" type="Panel" parent="GameArea/PlayerZones/SideZones" unique_id=1824915954]
+custom_minimum_size = Vector2(100, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_zone")
+
+[node name="Label" type="Label" parent="GameArea/PlayerZones/SideZones/GraveZone" unique_id=1192768729]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -45.0
+offset_top = 8.0
+offset_right = 45.0
+offset_bottom = 24.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.7, 0.5, 0.5, 1)
+theme_override_font_sizes/font_size = 11
+text = "CEMENTERIO"
+horizontal_alignment = 1
+
+[node name="GraveCount" type="Label" parent="GameArea/PlayerZones/SideZones/GraveZone" unique_id=1584151254]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -25.0
+offset_right = 25.0
+offset_bottom = 22.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(1, 0.7, 0.7, 1)
+theme_override_font_sizes/font_size = 18
+text = "0"
+horizontal_alignment = 1
+
+[node name="ExileZone" type="Panel" parent="GameArea/PlayerZones/SideZones" unique_id=73234710]
+custom_minimum_size = Vector2(100, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_zone")
+
+[node name="Label" type="Label" parent="GameArea/PlayerZones/SideZones/ExileZone" unique_id=587956807]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -40.0
+offset_top = 8.0
+offset_right = 40.0
+offset_bottom = 24.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.7, 0.5, 0.8, 1)
+theme_override_font_sizes/font_size = 11
+text = "DESTIERRO"
+horizontal_alignment = 1
+
+[node name="ExileCount" type="Label" parent="GameArea/PlayerZones/SideZones/ExileZone" unique_id=742688001]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -25.0
+offset_right = 25.0
+offset_bottom = 22.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.9, 0.7, 1, 1)
+theme_override_font_sizes/font_size = 18
+text = "0"
+horizontal_alignment = 1
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=421896802]
+layer = 10
+
+[node name="SidePanel" type="Panel" parent="UI" unique_id=298936119]
+offset_left = 1600.0
+offset_top = 10.0
+offset_right = 1915.0
+offset_bottom = 1070.0
+
+[node name="SidePanelBG" type="ColorRect" parent="UI/SidePanel" unique_id=867156157]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.1, 0.11, 0.14, 1)
+
+[node name="ButtonPanel" type="VBoxContainer" parent="UI" unique_id=1363830537]
+offset_left = 1610.0
+offset_top = 15.0
+offset_right = 1905.0
+offset_bottom = 380.0
+theme_override_constants/separation = 4
+
+[node name="ActionsTitle" type="Label" parent="UI/ButtonPanel" unique_id=545168448]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.9, 0.5, 1)
+theme_override_font_sizes/font_size = 14
+text = "ACCIONES"
+horizontal_alignment = 1
+
+[node name="Sep1" type="HSeparator" parent="UI/ButtonPanel" unique_id=156886433]
+layout_mode = 2
+
+[node name="LoadCardBtn" type="Button" parent="UI/ButtonPanel" unique_id=2014842943]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Buscar Mazo Dragon"
+
+[node name="DrawBtn" type="Button" parent="UI/ButtonPanel" unique_id=447877575]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Robar Carta del Mazo"
+
+[node name="PlayCardBtn" type="Button" parent="UI/ButtonPanel" unique_id=1434160096]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Jugar Carta Seleccionada"
+
+[node name="TestEffectBtn" type="Button" parent="UI/ButtonPanel" unique_id=196727197]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Probar Efecto Manual"
+
+[node name="Sep2" type="HSeparator" parent="UI/ButtonPanel" unique_id=1786438066]
+layout_mode = 2
+
+[node name="EndTurnBtn" type="Button" parent="UI/ButtonPanel" unique_id=1787322304]
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Terminar Turno"
+
+[node name="Sep3" type="HSeparator" parent="UI/ButtonPanel" unique_id=1459169275]
+layout_mode = 2
+
+[node name="ClearLogBtn" type="Button" parent="UI/ButtonPanel" unique_id=1841915806]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Limpiar Log"
+
+[node name="ResetBtn" type="Button" parent="UI/ButtonPanel" unique_id=1909790167]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Reiniciar Escenario"
+
+[node name="StatePanel" type="Panel" parent="UI" unique_id=749327427]
+offset_left = 1610.0
+offset_top = 395.0
+offset_right = 1905.0
+offset_bottom = 600.0
+
+[node name="StatePanelBG" type="ColorRect" parent="UI/StatePanel" unique_id=1643482842]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.08, 0.1, 0.12, 1)
+
+[node name="StateTitle" type="Label" parent="UI/StatePanel" unique_id=1905978898]
+layout_mode = 1
+offset_left = 10.0
+offset_top = 8.0
+offset_right = 290.0
+offset_bottom = 28.0
+theme_override_colors/font_color = Color(0.6, 0.8, 1, 1)
+theme_override_font_sizes/font_size = 14
+text = "ESTADO DEL JUEGO"
+
+[node name="StateLabel" type="Label" parent="UI/StatePanel" unique_id=932962180]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = 35.0
+offset_right = -12.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.85, 0.85, 0.85, 1)
+theme_override_font_sizes/font_size = 12
+text = "Cargando..."
+autowrap_mode = 2
+
+[node name="LogPanel" type="Panel" parent="UI" unique_id=840507420]
+offset_left = 1610.0
+offset_top = 615.0
+offset_right = 1905.0
+offset_bottom = 1055.0
+
+[node name="LogPanelBG" type="ColorRect" parent="UI/LogPanel" unique_id=613363907]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.05, 0.06, 0.08, 1)
+
+[node name="LogTitle" type="Label" parent="UI/LogPanel" unique_id=1780326820]
+layout_mode = 1
+offset_left = 10.0
+offset_top = 8.0
+offset_right = 290.0
+offset_bottom = 28.0
+theme_override_colors/font_color = Color(0.5, 0.7, 0.5, 1)
+theme_override_font_sizes/font_size = 14
+text = "LOG DE EVENTOS"
+
+[node name="LogText" type="RichTextLabel" parent="UI/LogPanel" unique_id=1123468663]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 35.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/default_color = Color(0.8, 0.9, 0.8, 1)
+theme_override_font_sizes/normal_font_size = 11
+bbcode_enabled = true
+scroll_following = true
+
+[node name="ChoicePanel" type="Panel" parent="UI" unique_id=1753798645]
+visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -180.0
+offset_right = 220.0
+offset_bottom = 180.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ChoiceBG" type="ColorRect" parent="UI/ChoicePanel" unique_id=846268806]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.12, 0.14, 0.18, 1)
+
+[node name="ChoiceBorder" type="ColorRect" parent="UI/ChoicePanel" unique_id=1020877191]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -3.0
+offset_top = -3.0
+offset_right = 3.0
+offset_bottom = 3.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.9, 0.75, 0.3, 0.8)
+
+[node name="ChoiceInner" type="ColorRect" parent="UI/ChoicePanel" unique_id=233351003]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.1, 0.12, 0.16, 1)
+
+[node name="ChoiceTitle" type="Label" parent="UI/ChoicePanel" unique_id=759923296]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 20.0
+offset_right = 200.0
+offset_bottom = 55.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.9, 0.5, 1)
+theme_override_font_sizes/font_size = 18
+text = "Elige una opción:"
+horizontal_alignment = 1
+
+[node name="ChoiceContainer" type="VBoxContainer" parent="UI/ChoicePanel" unique_id=1428977720]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -180.0
+offset_top = -60.0
+offset_right = 180.0
+offset_bottom = 120.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 12
+alignment = 1

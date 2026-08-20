@@ -1,0 +1,43 @@
+{
+    "name": "Venganza de Horus",
+    "type": "Talisman",
+    "cost": 1,
+    "restrictions": [
+        "ONLY_ONE_PER_TURN"
+    ],
+    "on_resolution": "BANISH_SELF",
+    "choice_config": {
+        "amount_to_choose": 2,
+        "options": [
+            {
+                "id": "opt1",
+                "text": "Draw 2",
+                "action": {
+                    "type": "DRAW",
+                    "value": 2
+                }
+            },
+            {
+                "id": "opt2",
+                "text": "Search 2 Non-Talisman",
+                "action": {
+                    "type": "SEARCH",
+                    "value": 2,
+                    "zone": "DECK",
+                    "filter": {
+                        "exclude_type": "Talisman"
+                    }
+                }
+            },
+            {
+                "id": "opt3",
+                "text": "Opponent Mill 5",
+                "action": {
+                    "type": "MILL",
+                    "value": 5,
+                    "target": "OPPONENT"
+                }
+            }
+        ]
+    }
+}

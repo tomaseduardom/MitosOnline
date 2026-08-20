@@ -1,0 +1,124 @@
+[gd_scene load_steps=4 format=3 uid="uid://menu_main_001"]
+
+[ext_resource type="Script" path="res://scripts/menu/MainMenu.gd" id="1_script"]
+[ext_resource type="Texture2D" path="res://fondo_inicio.png" id="2_background"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button"]
+bg_color = Color(0.15, 0.12, 0.2, 0.9)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.8, 0.65, 0.3, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_script")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("2_background")
+expand_mode = 1
+stretch_mode = 6
+
+[node name="DarkOverlay" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.3)
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = 50.0
+offset_right = 150.0
+offset_bottom = 380.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 20
+
+[node name="PlayButton" type="Button" parent="VBoxContainer"]
+custom_minimum_size = Vector2(300, 60)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.95, 0.8, 1)
+theme_override_colors/font_hover_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 28
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "JUGAR"
+
+[node name="DecksButton" type="Button" parent="VBoxContainer"]
+custom_minimum_size = Vector2(300, 60)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.95, 0.8, 1)
+theme_override_colors/font_hover_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 28
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "MAZOS"
+
+[node name="BacksButton" type="Button" parent="VBoxContainer"]
+custom_minimum_size = Vector2(300, 60)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.95, 0.8, 1)
+theme_override_colors/font_hover_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 28
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "DORSOS"
+
+[node name="TestButton" type="Button" parent="VBoxContainer"]
+custom_minimum_size = Vector2(300, 60)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 1.0, 0.8, 1)
+theme_override_colors/font_hover_color = Color(0.4, 1.0, 0.6, 1)
+theme_override_font_sizes/font_size = 22
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "TESTEO"
+
+[node name="ExitButton" type="Button" parent="VBoxContainer"]
+custom_minimum_size = Vector2(300, 60)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.95, 0.8, 1)
+theme_override_colors/font_hover_color = Color(1, 0.85, 0.4, 1)
+theme_override_font_sizes/font_size = 28
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "SALIR"
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 80.0
+offset_right = 300.0
+offset_bottom = 160.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.9, 0.6, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.8)
+theme_override_constants/shadow_offset_x = 3
+theme_override_constants/shadow_offset_y = 3
+theme_override_font_sizes/font_size = 56
+text = "MITOS Y LEYENDAS"
+horizontal_alignment = 1
+vertical_alignment = 1
