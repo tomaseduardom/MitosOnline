@@ -46,23 +46,19 @@ func _ready() -> void:
 
 func _connect_to_effect_controller() -> void:
 	"""Conecta al EffectController para escuchar entradas y salidas de zonas"""
-	var effect_ctrl = get_node_or_null("/root/EffectController")
+	# (2026-08-28, "módulos gordos" punto 1): EffectController es autoload y
+	# carga ANTES que CardEffectSystem (ver orden en project.godot), así que
+	# el retry con call_deferred nunca se disparaba — se saca el lookup y el
+	# fallback muerto.
+	var enter_callable = Callable(self, "_on_card_entered_play")
+	if not EffectController.on_card_entered_play.is_connected(enter_callable):
+		EffectController.on_card_entered_play.connect(enter_callable)
 
-	if effect_ctrl:
-		# Conectar a la señal de entrada al juego
-		var enter_callable = Callable(self, "_on_card_entered_play")
-		if not effect_ctrl.on_card_entered_play.is_connected(enter_callable):
-			effect_ctrl.on_card_entered_play.connect(enter_callable)
+	var leave_callable = Callable(self, "_on_card_left_play")
+	if not EffectController.on_card_left_play.is_connected(leave_callable):
+		EffectController.on_card_left_play.connect(leave_callable)
 
-		# Conectar a la señal de salida del juego (para desactivar habilidades continuas)
-		var leave_callable = Callable(self, "_on_card_left_play")
-		if not effect_ctrl.on_card_left_play.is_connected(leave_callable):
-			effect_ctrl.on_card_left_play.connect(leave_callable)
-
-		print("[CardEffectSystem] Conectado a EffectController (entrada y salida)")
-	else:
-		# Reintentar en el siguiente frame (por orden de autoloads)
-		call_deferred("_connect_to_effect_controller")
+	print("[CardEffectSystem] Conectado a EffectController (entrada y salida)")
 
 
 # =============================================================================
@@ -412,27 +408,32 @@ func _get_continuous_ability_targets(source_card: Node, ability: Dictionary) -> 
 	if not main:
 		return targets
 
+	# Un Aliado puede estar en Defensa o en Ataque (consolidación 2026-08-20)
+	var own_fields = [main.player_field, main.player_linea_ataque] if controller_id == 0 else [main.opponent_field, main.opponent_linea_ataque]
+	var enemy_fields = [main.opponent_field, main.opponent_linea_ataque] if controller_id == 0 else [main.player_field, main.player_linea_ataque]
+
 	match target_type:
 		"own_allies":
-			for card in main.player_field.get_children() if controller_id == 0 else main.opponent_field.get_children():
-				if card.get("card_type") == Constants.CardType.ALIADO:
-					targets.append(card)
+			for field in own_fields:
+				for card in field.get_children():
+					if card.get("card_type") == Constants.CardType.ALIADO:
+						targets.append(card)
 
 		"enemy_allies":
-			var opponent_id = 1 - controller_id
-			for card in main.player_field.get_children() if opponent_id == 0 else main.opponent_field.get_children():
-				if card.get("card_type") == Constants.CardType.ALIADO:
-					targets.append(card)
+			for field in enemy_fields:
+				for card in field.get_children():
+					if card.get("card_type") == Constants.CardType.ALIADO:
+						targets.append(card)
 
 		"all_allies":
-			for field in [main.player_field, main.opponent_field]:
+			for field in own_fields + enemy_fields:
 				for card in field.get_children():
 					if card.get("card_type") == Constants.CardType.ALIADO:
 						targets.append(card)
 
 		"own_cards":
-			var field = main.player_field if controller_id == 0 else main.opponent_field
-			targets.append_array(field.get_children())
+			for field in own_fields:
+				targets.append_array(field.get_children())
 
 	# Aplicar condición adicional si existe
 	if ability.has("condition"):

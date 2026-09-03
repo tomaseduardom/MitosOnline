@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## ActionModule - Funciones modulares para acciones de cartas (DAR Sección 8)
 ## Emite señales para AnimationQueue y maneja triggers simultáneos (DAR 7.4)
 
@@ -49,25 +49,25 @@ signal action_validation_passed(action_type: String, can_resolve_percent: float)
 # REFERENCIAS
 # =============================================================================
 var _game_board: Node = null
-var _trigger_system: Node = null
-var _anim_queue: Node = null
-var _effect_controller: Node = null
+
+## Módulo extraído (Fase 4 de reestructuración)
+var _validator: ActionValidator
 
 
 func _ready() -> void:
+	_validator = ActionValidator.new()
+	_validator.setup(self)
+
 	# Obtener referencias diferidas (por orden de autoloads)
 	call_deferred("_get_references")
 	print("[ActionModule] Inicializado")
 
 
-var _damage_manager: Node = null
-
 func _get_references() -> void:
-	_trigger_system = get_node_or_null("/root/TriggerSystem")
-	_anim_queue = get_node_or_null("/root/AnimationQueue")
-	_effect_controller = get_node_or_null("/root/EffectController")
-	_damage_manager = get_node_or_null("/root/DamageManager")
-
+	# (2026-08-28, "módulos gordos" punto 1): TriggerSystem/AnimationQueue/
+	# DamageManager son autoloads garantizados — se sacó el cacheo redundante
+	# vía get_node_or_null() (EffectController se cacheaba pero nunca se
+	# usaba en este archivo).
 	if GameManager:
 		_game_board = GameManager.game_board
 
@@ -81,434 +81,10 @@ func _get_game_board() -> Node:
 
 
 # =============================================================================
-# VALIDACIÓN DE ESTADO DE JUEGO (DAR Sección 6)
-# "La acción debe poder resolverse en alguna medida mayor a 0%"
+# VALIDACIÓN DE ESTADO DE JUEGO (implementación en ActionValidator.gd)
 # =============================================================================
-
 func validate_action(action_type: String, params: Dictionary, context: Dictionary = {}) -> Dictionary:
-	"""Valida si una acción puede resolverse en alguna medida > 0%
-	DAR Sección 6: Verificar estado del juego antes de ejecutar
-
-	Args:
-		action_type: Tipo de acción (draw, search, mill, destroy, banish, discard)
-		params: Parámetros de la acción
-		context: Contexto adicional (player_id, source_card, etc.)
-
-	Returns: {
-		valid: bool,           # Si la acción puede ejecutarse
-		can_resolve: float,    # Porcentaje estimado de resolución (0.0 - 1.0)
-		reason: String,        # Razón si no es válida
-		warnings: Array        # Advertencias (ejecución parcial probable)
-	}
-	"""
-	var player_id = context.get("player_id", params.get("player_id", 0))
-
-	match action_type:
-		"draw":
-			return _validate_draw(player_id, params.get("amount", 1))
-		"search":
-			return _validate_search(player_id, params.get("zone", Constants.Zone.CASTILLO), params.get("filter", {}), params.get("amount", 1))
-		"mill":
-			return _validate_mill(player_id, params.get("amount", 1))
-		"destroy":
-			return _validate_destroy(params.get("targets", []), context)
-		"banish", "exile":
-			return _validate_banish(params.get("targets", []))
-		"discard":
-			return _validate_discard(player_id, params.get("cards", []), params.get("amount", 0))
-		"look":
-			return _validate_look(player_id, params.get("amount", 1))
-		"return_to_deck":
-			return _validate_return_to_deck(params.get("cards", []))
-		"damage":
-			return _validate_damage(params.get("targets", []), params.get("amount", 1))
-		"buff":
-			return _validate_buff(params.get("targets", []))
-		"shuffle":
-			return _validate_shuffle(player_id)
-		"virtual_gold":
-			return {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-		_:
-			return {"valid": false, "can_resolve": 0.0, "reason": "unknown_action_type", "warnings": []}
-
-
-func _validate_draw(player_id: int, amount: int) -> Dictionary:
-	"""Valida si se puede robar al menos 1 carta"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	var board = _get_game_board()
-	if not board:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_game_board"
-		return result
-
-	var deck_size = board.get_cards_in_zone(Constants.Zone.CASTILLO, player_id).size()
-
-	if deck_size == 0:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "deck_empty"
-		emit_signal("action_validation_failed", "draw", result.reason, {"player_id": player_id})
-		return result
-
-	if deck_size < amount:
-		result.can_resolve = float(deck_size) / float(amount)
-		result.warnings.append("partial_draw: only %d of %d available" % [deck_size, amount])
-
-	emit_signal("action_validation_passed", "draw", result.can_resolve)
-	return result
-
-
-func _validate_search(player_id: int, zone: int, filter: Dictionary, amount: int) -> Dictionary:
-	"""Valida si hay cartas que cumplan el filtro en la zona"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	var zone_cards = _get_searchable_zone_data(player_id, zone)
-	if zone_cards == null:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "unsupported_zone"
-		return result
-
-	if zone_cards.is_empty():
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "zone_empty"
-		emit_signal("action_validation_failed", "search", result.reason, {"player_id": player_id, "zone": zone})
-		return result
-
-	# Aplicar filtro para ver cuántas coinciden
-	var matching = _apply_card_filter(zone_cards, filter)
-
-	if matching.is_empty():
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_matching_cards"
-		emit_signal("action_validation_failed", "search", result.reason, {"player_id": player_id, "filter": filter})
-		return result
-
-	if matching.size() < amount:
-		result.can_resolve = float(matching.size()) / float(amount)
-		result.warnings.append("partial_search: only %d of %d matching" % [matching.size(), amount])
-
-	emit_signal("action_validation_passed", "search", result.can_resolve)
-	return result
-
-
-func _validate_mill(player_id: int, amount: int) -> Dictionary:
-	"""Valida si hay cartas para moler"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	var board = _get_game_board()
-	if not board:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_game_board"
-		return result
-
-	var deck_size = board.get_cards_in_zone(Constants.Zone.CASTILLO, player_id).size()
-
-	if deck_size == 0:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "deck_empty"
-		emit_signal("action_validation_failed", "mill", result.reason, {"player_id": player_id})
-		return result
-
-	if deck_size < amount:
-		result.can_resolve = float(deck_size) / float(amount)
-		result.warnings.append("partial_mill: only %d of %d available" % [deck_size, amount])
-
-	emit_signal("action_validation_passed", "mill", result.can_resolve)
-	return result
-
-
-func _validate_destroy(targets: Array, context: Dictionary) -> Dictionary:
-	"""Valida si hay objetivos válidos para destruir"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	if targets.is_empty():
-		# Sin objetivos predefinidos, verificar si hay cartas destruibles en juego
-		var board = _get_game_board()
-		if board:
-			var has_destroyable = false
-			for player_id in [0, 1]:
-				for zone in Constants.ZONES_IN_PLAY:
-					var cards = board.get_cards_in_zone(zone, player_id)
-					for card in cards:
-						if _can_be_destroyed(card, context.get("source_card", null)):
-							has_destroyable = true
-							break
-					if has_destroyable:
-						break
-				if has_destroyable:
-					break
-
-			if not has_destroyable:
-				result.valid = false
-				result.can_resolve = 0.0
-				result.reason = "no_valid_targets"
-				emit_signal("action_validation_failed", "destroy", result.reason, {})
-				return result
-		else:
-			result.valid = false
-			result.can_resolve = 0.0
-			result.reason = "no_game_board"
-			return result
-	else:
-		# Verificar objetivos específicos
-		var valid_targets = 0
-		for target in targets:
-			if is_instance_valid(target) and _can_be_destroyed(target, context.get("source_card", null)):
-				valid_targets += 1
-
-		if valid_targets == 0:
-			result.valid = false
-			result.can_resolve = 0.0
-			result.reason = "no_valid_targets"
-			emit_signal("action_validation_failed", "destroy", result.reason, {"targets": targets})
-			return result
-
-		result.can_resolve = float(valid_targets) / float(targets.size())
-		if valid_targets < targets.size():
-			result.warnings.append("partial_destroy: only %d of %d valid" % [valid_targets, targets.size()])
-
-	emit_signal("action_validation_passed", "destroy", result.can_resolve)
-	return result
-
-
-func _validate_banish(targets: Array) -> Dictionary:
-	"""Valida si hay objetivos válidos para desterrar"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	if targets.is_empty():
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_targets_specified"
-		emit_signal("action_validation_failed", "banish", result.reason, {})
-		return result
-
-	var valid_targets = 0
-	for target in targets:
-		if is_instance_valid(target):
-			valid_targets += 1
-
-	if valid_targets == 0:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_valid_targets"
-		emit_signal("action_validation_failed", "banish", result.reason, {"targets": targets})
-		return result
-
-	result.can_resolve = float(valid_targets) / float(targets.size())
-	if valid_targets < targets.size():
-		result.warnings.append("partial_banish: only %d of %d valid" % [valid_targets, targets.size()])
-
-	emit_signal("action_validation_passed", "banish", result.can_resolve)
-	return result
-
-
-func _validate_discard(player_id: int, cards: Array, amount: int) -> Dictionary:
-	"""Valida si hay cartas para descartar"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	var board = _get_game_board()
-	if not board:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_game_board"
-		return result
-
-	if not cards.is_empty():
-		# Cartas específicas
-		var valid_cards = 0
-		for card in cards:
-			if is_instance_valid(card):
-				valid_cards += 1
-
-		if valid_cards == 0:
-			result.valid = false
-			result.can_resolve = 0.0
-			result.reason = "no_valid_cards"
-			emit_signal("action_validation_failed", "discard", result.reason, {})
-			return result
-
-		result.can_resolve = float(valid_cards) / float(cards.size())
-	elif amount > 0:
-		# Cantidad a descartar - verificar mano
-		var hand_size = board.get_cards_in_zone(Constants.Zone.MANO, player_id).size()
-
-		if hand_size == 0:
-			result.valid = false
-			result.can_resolve = 0.0
-			result.reason = "hand_empty"
-			emit_signal("action_validation_failed", "discard", result.reason, {"player_id": player_id})
-			return result
-
-		if hand_size < amount:
-			result.can_resolve = float(hand_size) / float(amount)
-			result.warnings.append("partial_discard: only %d of %d in hand" % [hand_size, amount])
-
-	emit_signal("action_validation_passed", "discard", result.can_resolve)
-	return result
-
-
-func _validate_look(player_id: int, amount: int) -> Dictionary:
-	"""Valida si hay cartas para mirar"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	var board = _get_game_board()
-	if not board:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_game_board"
-		return result
-
-	var deck_size = board.get_cards_in_zone(Constants.Zone.CASTILLO, player_id).size()
-
-	if deck_size == 0:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "deck_empty"
-		emit_signal("action_validation_failed", "look", result.reason, {"player_id": player_id})
-		return result
-
-	if deck_size < amount:
-		result.can_resolve = float(deck_size) / float(amount)
-		result.warnings.append("partial_look: only %d of %d available" % [deck_size, amount])
-
-	emit_signal("action_validation_passed", "look", result.can_resolve)
-	return result
-
-
-func _validate_return_to_deck(cards: Array) -> Dictionary:
-	"""Valida si hay cartas para devolver al mazo"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	if cards.is_empty():
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_cards_specified"
-		emit_signal("action_validation_failed", "return_to_deck", result.reason, {})
-		return result
-
-	var valid_cards = 0
-	for card in cards:
-		if is_instance_valid(card):
-			valid_cards += 1
-
-	if valid_cards == 0:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_valid_cards"
-		emit_signal("action_validation_failed", "return_to_deck", result.reason, {})
-		return result
-
-	result.can_resolve = float(valid_cards) / float(cards.size())
-	emit_signal("action_validation_passed", "return_to_deck", result.can_resolve)
-	return result
-
-
-func _validate_damage(targets: Array, amount: int) -> Dictionary:
-	"""Valida si hay objetivos para recibir daño"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	if amount <= 0:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "invalid_damage_amount"
-		return result
-
-	if targets.is_empty():
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_targets_specified"
-		emit_signal("action_validation_failed", "damage", result.reason, {})
-		return result
-
-	var valid_targets = 0
-	for target in targets:
-		if is_instance_valid(target):
-			valid_targets += 1
-
-	if valid_targets == 0:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_valid_targets"
-		emit_signal("action_validation_failed", "damage", result.reason, {})
-		return result
-
-	result.can_resolve = float(valid_targets) / float(targets.size())
-	emit_signal("action_validation_passed", "damage", result.can_resolve)
-	return result
-
-
-func _validate_buff(targets: Array) -> Dictionary:
-	"""Valida si hay objetivos para buff/debuff"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	if targets.is_empty():
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_targets_specified"
-		emit_signal("action_validation_failed", "buff", result.reason, {})
-		return result
-
-	var valid_targets = 0
-	for target in targets:
-		if is_instance_valid(target):
-			valid_targets += 1
-
-	if valid_targets == 0:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_valid_targets"
-		emit_signal("action_validation_failed", "buff", result.reason, {})
-		return result
-
-	result.can_resolve = float(valid_targets) / float(targets.size())
-	emit_signal("action_validation_passed", "buff", result.can_resolve)
-	return result
-
-
-func _validate_shuffle(player_id: int) -> Dictionary:
-	"""Valida si se puede barajar (siempre válido si hay mazo)"""
-	var result = {"valid": true, "can_resolve": 1.0, "reason": "", "warnings": []}
-
-	var board = _get_game_board()
-	if not board:
-		result.valid = false
-		result.can_resolve = 0.0
-		result.reason = "no_game_board"
-		return result
-
-	# Barajar siempre es válido, incluso con 0 cartas (no hace nada pero es válido)
-	emit_signal("action_validation_passed", "shuffle", result.can_resolve)
-	return result
-
-
-func _can_be_destroyed(card: Node, source: Node) -> bool:
-	"""Verifica si una carta puede ser destruida.
-	Pasa por KeywordManager.can_be_destroyed() (igual que BattleManager) en vez
-	de leer card.has_keyword() directo — si no, un silenciado que le quite
-	Indestructible vía KeywordManager no se respetaría acá."""
-	if not is_instance_valid(card):
-		return false
-
-	var kw_mgr = get_node_or_null("/root/KeywordManager")
-	if kw_mgr and kw_mgr.has_method("can_be_destroyed"):
-		if not kw_mgr.can_be_destroyed(card):
-			return false
-	elif card.has_method("has_keyword") and card.has_keyword(Constants.Keyword.INDESTRUCTIBLE):
-		return false
-
-	# Verificar protección contra la fuente
-	if source and card.has_method("has_protection_from"):
-		if card.has_protection_from(source):
-			return false
-
-	return true
+	return _validator.validate_action(action_type, params, context)
 
 
 # =============================================================================
@@ -539,7 +115,7 @@ func draw(player_id: int, amount: int, source: String = "", skip_validation: boo
 
 	# DAR Sección 6: Validar estado del juego
 	if not skip_validation:
-		var validation = _validate_draw(player_id, amount)
+		var validation = _validator._validate_draw(player_id, amount)
 		if not validation.valid:
 			result.success = false
 			result.error = validation.reason
@@ -561,11 +137,10 @@ func draw(player_id: int, amount: int, source: String = "", skip_validation: boo
 	emit_signal("action_draw_started", player_id, amount, source)
 
 	# Añadir comando a AnimationQueue
-	if _anim_queue:
-		_anim_queue.add_command(AnimationQueue.CommandType.SHOW_MESSAGE, {
-			"text": "Robando %d carta(s)..." % amount,
-			"duration": 0.5
-		})
+	AnimationQueue.add_command(AnimationQueue.CommandType.SHOW_MESSAGE, {
+		"text": "Robando %d carta(s)..." % amount,
+		"duration": 0.5
+	})
 
 	var deck_cards = board.get_cards_in_zone(Constants.Zone.CASTILLO, player_id)
 
@@ -577,11 +152,10 @@ func draw(player_id: int, amount: int, source: String = "", skip_validation: boo
 				result.triggered_loss = true
 				result.success = false
 				print("[ActionModule] DERROTA: Jugador %d intentó robar con mazo vacío" % player_id)
-				# Usar DamageManager si existe, fallback a GameManager
-				if _damage_manager and _damage_manager.has_method("check_defeat_condition"):
-					_damage_manager.check_defeat_condition(player_id)
-				elif GameManager:
-					GameManager.trigger_loss(player_id, "deck_empty")
+				# (2026-08-28): 'GameManager.trigger_loss' nunca existió — el
+				# fallback de abajo era código muerto siempre (DamageManager
+				# es autoload garantizado y check_defeat_condition() sí existe).
+				DamageManager.check_defeat_condition(player_id)
 			break
 
 		# Tomar carta del tope
@@ -591,13 +165,12 @@ func draw(player_id: int, amount: int, source: String = "", skip_validation: boo
 		emit_signal("action_draw_card", player_id, card, i, amount)
 
 		# Añadir animación
-		if _anim_queue:
-			_anim_queue.add_command(AnimationQueue.CommandType.DRAW_CARD, {
-				"card": card,
-				"player_id": player_id,
-				"from_zone": Constants.Zone.CASTILLO,
-				"to_zone": Constants.Zone.MANO
-			})
+		AnimationQueue.add_command(AnimationQueue.CommandType.DRAW_CARD, {
+			"card": card,
+			"player_id": player_id,
+			"from_zone": Constants.Zone.CASTILLO,
+			"to_zone": Constants.Zone.MANO
+		})
 
 		# Mover carta
 		board.move_card(card, Constants.Zone.MANO, player_id)
@@ -619,9 +192,7 @@ func draw(player_id: int, amount: int, source: String = "", skip_validation: boo
 	# LOG DE EFECTO PARCIAL (DAR Sección 6 - "en medida de lo posible")
 	# ─────────────────────────────────────────────────────────────────────────
 	if result.actual < result.requested and result.actual > 0:
-		var combat_log = get_node_or_null("/root/CombatLog")
-		if combat_log and combat_log.has_method("log_partial_draw"):
-			combat_log.log_partial_draw(result.requested, result.actual, player_id)
+		CombatLog.log_partial_draw(result.requested, result.actual, player_id)
 		result.partial = true
 
 	# Finalizar y procesar triggers
@@ -641,13 +212,13 @@ func _draw_fallback(player_id: int, amount: int, source: String) -> Dictionary:
 		"deck_empty": false, "triggered_loss": false
 	}
 	var main = get_node_or_null("/root/Main")
-	if not main or not main.has_method("draw_card"):
+	if not main or not main.get("_zone_manager"):
 		result.success = false
 		result.error = "no_main"
 		return result
 
 	for i in range(amount):
-		var drew: bool = await main.draw_card(player_id)
+		var drew: bool = await main._zone_manager.draw_card(player_id)
 		if not drew:
 			result.deck_empty = true
 			if i == 0:
@@ -673,14 +244,11 @@ func _get_searchable_zone_data(player_id: int, zone: int) -> Variant:
 	Se lee vía CardManager, que está sincronizado por referencia con
 	Main.player_deck/player_cemetery (ver CardManager.sync_from_main) — así
 	que remover una entrada acá remueve la carta de verdad."""
-	var cm := get_node_or_null("/root/CardManager")
-	if not cm:
-		return null
 	match zone:
 		Constants.Zone.CASTILLO:
-			return cm.get_deck(player_id)
+			return CardManager.get_deck(player_id)
 		Constants.Zone.CEMENTERIO:
-			return cm.get_cemetery(player_id)
+			return CardManager.get_cemetery(player_id)
 		_:
 			return null
 
@@ -688,14 +256,10 @@ func _get_searchable_zone_data(player_id: int, zone: int) -> Variant:
 func shuffle_deck(player_id: int) -> void:
 	"""Baraja el Castillo (mazo) de un jugador — vía CardManager, sincronizado
 	por referencia con Main.player_deck/opponent_deck (ver sync_from_main)."""
-	var cm := get_node_or_null("/root/CardManager")
-	if cm and cm.has_method("shuffle_deck"):
-		cm.shuffle_deck(player_id)
-	else:
-		push_warning("[ActionModule] No se pudo barajar: CardManager no disponible")
+	CardManager.shuffle_deck(player_id)
 
 
-func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_fail: bool = true, skip_validation: bool = false, may_play: bool = false, source_card: Node = null) -> Dictionary:
+func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_fail: bool = true, skip_validation: bool = false, may_play: bool = false, source_card: Node = null, destination: int = Constants.Zone.MANO, distinct_names: bool = false) -> Dictionary:
 	"""Busca cartas en el Castillo o Cementerio que cumplan el filtro (DAR
 	Sección 8). El jugador elige cuáles llevarse (o todas, si hay menos que
 	amount). Si may_play es true, cada carta encontrada se juega de inmediato
@@ -703,13 +267,23 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 	queda en la mano igual — nunca se pierde la carta encontrada).
 
 	Args:
-		player_id: ID del jugador
+		player_id: ID del jugador dueño de la zona buscada (el destino
+			también es SUYO — buscar en el Castillo rival y desterrar manda
+			al Destierro del rival, no al propio; DAR: la carta sigue siendo
+			del jugador de quien salió)
 		zone: Zona donde buscar (CASTILLO o CEMENTERIO — únicas zonas con datos)
 		filter: Filtro de cartas {type, raza, cost_max, cost_min, strength_min,
 			name_contains, keyword}
 		amount: Cantidad máxima a seleccionar
 		can_fail: Si puede fallar sin encontrar (false = obligatorio)
 		skip_validation: Si omitir validación previa
+		destination: Zona final de las cartas encontradas (2026-08-25).
+			Constants.Zone.MANO (default, puede jugarse si may_play) o
+			Constants.Zone.DESTIERRO (p.ej. Rey de Amarillo: 'busca en un
+			Castillo... y Destiérralas' — va directo, sin pasar por la mano).
+		distinct_names: Si true, las cartas elegidas no pueden repetir nombre
+			entre sí (2026-08-25, p.ej. necro-titan: 'busca... dos cartas de
+			distinto nombre').
 		may_play: Si true, intenta jugar cada carta encontrada en vez de solo
 			guardarla en mano (DAR: 'puedes ponerla en juego pagando su coste')
 		source_card: Carta que causa la búsqueda (para triggers/log)
@@ -726,7 +300,7 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 
 	# DAR Sección 6: Validar estado del juego
 	if not skip_validation:
-		var validation = _validate_search(player_id, zone, filter, amount)
+		var validation = _validator._validate_search(player_id, zone, filter, amount)
 		if not validation.valid:
 			result.success = can_fail
 			result.error = validation.reason
@@ -763,7 +337,7 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 
 	# Si hay cartas, el jugador debe elegir (o se toman todas si hay ≤ amount)
 	var to_select = mini(amount, matching.size())
-	var selected_data: Array = await _select_search_results(matching, to_select)
+	var selected_data: Array = await _select_search_results(matching, to_select, distinct_names)
 	result.selected = selected_data
 
 	emit_signal("action_search_selected", player_id, selected_data)
@@ -775,7 +349,22 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 		zone_data.erase(card_data)
 		card_data["esta_oculta"] = false
 
-		if main:
+		if destination == Constants.Zone.DESTIERRO:
+			# Va directo al Destierro, sin pasar por la mano ni crear un
+			# nodo Card (2026-08-25, p.ej. Rey de Amarillo).
+			CardManager.add_to_exile(player_id, card_data)
+			_notify_trigger("on_search_found", {
+				"player_id": player_id, "card": card_data, "from_zone": zone
+			})
+		elif destination == Constants.Zone.RESERVA_ORO and main and main._gold_manager:
+			# Va directo a la Reserva de Oro, sin pasar por la mano ni pagar
+			# coste (2026-08-29, p.ej. Don de Amma: 'busca un Oro en tu
+			# Castillo y ponlo en tu Reserva').
+			var card_node = await main._gold_manager.put_gold_directly_in_reserva(player_id, card_data)
+			_notify_trigger("on_search_found", {
+				"player_id": player_id, "card": card_node, "from_zone": zone
+			})
+		elif main:
 			var card_node = await _put_found_card_into_play(main, player_id, card_data, may_play)
 			_notify_trigger("on_search_found", {
 				"player_id": player_id, "card": card_node, "from_zone": zone
@@ -784,11 +373,10 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 	# Barajar si buscó en el Castillo (DAR: siempre se baraja tras buscar en el mazo)
 	if result.must_shuffle:
 		zone_data.shuffle()
-		if _anim_queue:
-			_anim_queue.add_command(AnimationQueue.CommandType.CUSTOM, {
-				"callable": Callable(_anim_queue, "animate_shuffle").bind(player_id),
-				"description": "Barajar mazo"
-			})
+		AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+			"callable": Callable(AnimationQueue, "animate_shuffle").bind(player_id),
+			"description": "Barajar mazo"
+		})
 
 	emit_signal("action_search_completed", player_id, result)
 
@@ -797,40 +385,62 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 	return result
 
 
-func _select_search_results(matching: Array, to_select: int) -> Array:
+func _select_search_results(matching: Array, to_select: int, distinct_names: bool = false) -> Array:
 	"""Abre el overlay de selección (SelectionManager) y espera a que el
 	jugador elija. Si hay ≤ to_select coincidencias, se toman todas sin
-	abrir UI. Si el jugador cancela, no se toma ninguna.
+	abrir UI (salvo con distinct_names, ver más abajo). Si el jugador
+	cancela, no se toma ninguna.
 
 	IMPORTANTE: con max_selections == 1, SelectionManager cierra en el
 	primer clic y emite 'card_selected' (un solo Dictionary) en vez de
 	'selection_completed' (un Array) — hay que escuchar ambas señales o el
 	await se queda colgado para siempre (mismo caso ya resuelto en
 	SelectionModule.open_discard_selection())."""
+	if distinct_names:
+		# No se puede usar el atajo "tomar todas" ni un multi-select de un
+		# solo tiro: aunque matching.size() <= to_select, puede haber
+		# nombres repetidos entre esas pocas coincidencias. Se elige de a
+		# una (2026-08-25, p.ej. necro-titan: 'dos cartas de distinto
+		# nombre'), sacando del resto cualquier carta que comparta nombre
+		# con la ya elegida antes de ofrecer la siguiente ronda.
+		var picked: Array = []
+		var pool: Array = matching.duplicate()
+		while picked.size() < to_select and not pool.is_empty():
+			var one := await _select_search_results(pool, 1, false)
+			if one.is_empty():
+				break  # el jugador canceló esta ronda — se queda con lo ya elegido
+			var chosen: Dictionary = one[0]
+			picked.append(chosen)
+			var chosen_name = chosen.get("nombre", chosen.get("name", ""))
+			pool = pool.filter(func(c): return c.get("nombre", c.get("name", "")) != chosen_name)
+		return picked
+
 	if to_select >= matching.size():
 		return matching.duplicate()
 
-	var sel_mgr = get_node_or_null("/root/SelectionManager")
-	if not sel_mgr or not sel_mgr.has_method("open_search"):
-		return matching.slice(0, to_select)
+	var sel_mgr = SelectionManager
 
-	var picked: Array = []
-	var resolved := false
+	# state es Dictionary a propósito (2026-08-22): los lambdas de GDScript
+	# capturan variables locales POR VALOR — reasignar 'picked'/'resolved'
+	# DENTRO del lambda solo movía la copia local del lambda, la de afuera
+	# nunca se enteraba y 'while not resolved' colgaba para siempre en
+	# silencio (confirmado con un test aislado en Godot).
+	var state := {"resolved": false, "picked": []}
 	var on_completed := func(cards: Array):
-		picked = cards
-		resolved = true
+		state.picked = cards
+		state.resolved = true
 	var on_single_selected := func(card_data: Dictionary):
-		picked = [card_data]
-		resolved = true
+		state.picked = [card_data]
+		state.resolved = true
 	var on_cancelled := func():
-		resolved = true
+		state.resolved = true
 
 	sel_mgr.selection_completed.connect(on_completed, CONNECT_ONE_SHOT)
 	sel_mgr.card_selected.connect(on_single_selected, CONNECT_ONE_SHOT)
 	sel_mgr.selection_cancelled.connect(on_cancelled, CONNECT_ONE_SHOT)
 	sel_mgr.open_search(matching, to_select)
 
-	while not resolved:
+	while not state.resolved:
 		await get_tree().process_frame
 
 	if sel_mgr.selection_completed.is_connected(on_completed):
@@ -840,7 +450,7 @@ func _select_search_results(matching: Array, to_select: int) -> Array:
 	if sel_mgr.selection_cancelled.is_connected(on_cancelled):
 		sel_mgr.selection_cancelled.disconnect(on_cancelled)
 
-	return picked
+	return state.picked
 
 
 func _put_found_card_into_play(main: Node, player_id: int, card_data: Dictionary, may_play: bool) -> Node:
@@ -860,7 +470,7 @@ func _put_found_card_into_play(main: Node, player_id: int, card_data: Dictionary
 	if may_play and player_id == 0:
 		await get_tree().create_timer(0.3).timeout
 		if PaymentManager.puede_jugar_carta(card_node, player_id):
-			await main.play_card(card_node)
+			await main._gold_manager.play_card(card_node)
 		# Si no puede pagarla, se queda en la mano — nunca se pierde.
 
 	return card_node
@@ -892,7 +502,7 @@ func mill(player_id: int, amount: int, to_exile: bool = false, source: String = 
 
 	# DAR Sección 6: Validar estado del juego
 	if not skip_validation:
-		var validation = _validate_mill(player_id, amount)
+		var validation = _validator._validate_mill(player_id, amount)
 		if not validation.valid:
 			result.success = false
 			result.error = validation.reason
@@ -906,15 +516,11 @@ func mill(player_id: int, amount: int, to_exile: bool = false, source: String = 
 	if not board:
 		# GameBoard legacy no disponible — delegar en el fallback de
 		# EffectController.mill_cards() (ver docs/audit, hallazgo 2/4).
-		var effect_ctrl = get_node_or_null("/root/EffectController")
-		if effect_ctrl:
-			var ec_result: Dictionary = await effect_ctrl.mill_cards(player_id, amount, destination)
-			result.success = ec_result.get("success", false)
-			result.actual = ec_result.get("actual", 0)
-			if result.actual < result.requested and result.actual > 0:
-				result.partial = true
-		else:
-			result.success = false
+		var ec_result: Dictionary = await EffectController.mill_cards(player_id, amount, destination)
+		result.success = ec_result.get("success", false)
+		result.actual = ec_result.get("actual", 0)
+		if result.actual < result.requested and result.actual > 0:
+			result.partial = true
 		return result
 
 	_begin_trigger_collection()
@@ -931,13 +537,12 @@ func mill(player_id: int, amount: int, to_exile: bool = false, source: String = 
 
 		emit_signal("action_mill_card", player_id, card, destination, i)
 
-		if _anim_queue:
-			_anim_queue.add_command(AnimationQueue.CommandType.MILL_CARD, {
-				"card": card,
-				"player_id": player_id,
-				"to_exile": to_exile,
-				"index": i
-			})
+		AnimationQueue.add_command(AnimationQueue.CommandType.MILL_CARD, {
+			"card": card,
+			"player_id": player_id,
+			"to_exile": to_exile,
+			"index": i
+		})
 
 		# Revelar la carta antes de enviarla
 		card.esta_oculta = false
@@ -961,16 +566,13 @@ func mill(player_id: int, amount: int, to_exile: bool = false, source: String = 
 	# LOG DE EFECTO PARCIAL (DAR Sección 6 - "en medida de lo posible")
 	# ─────────────────────────────────────────────────────────────────────────
 	if result.actual < result.requested and result.actual > 0:
-		var combat_log = get_node_or_null("/root/CombatLog")
-		if combat_log and combat_log.has_method("log_partial_mill"):
-			combat_log.log_partial_mill(result.requested, result.actual, player_id, result.cards)
+		CombatLog.log_partial_mill(result.requested, result.actual, player_id, result.cards)
 		result.partial = true
 
 	# ─────────────────────────────────────────────────────────────────────────
 	# DETECCIÓN DE DERROTA: Verificar si el mazo quedó vacío
 	# ─────────────────────────────────────────────────────────────────────────
-	if _damage_manager and _damage_manager.has_method("check_defeat_condition"):
-		result.defeated = _damage_manager.check_defeat_condition(player_id)
+	result.defeated = DamageManager.check_defeat_condition(player_id)
 
 	await _end_trigger_collection_and_resolve()
 
@@ -1000,7 +602,7 @@ func destroy(targets: Array, source: Node = null, can_be_prevented: bool = true,
 
 	# DAR Sección 6: Validar estado del juego
 	if not skip_validation:
-		var validation = _validate_destroy(targets, {"source_card": source})
+		var validation = _validator._validate_destroy(targets, {"source_card": source})
 		if not validation.valid:
 			result.success = false
 			result.error = validation.reason
@@ -1044,12 +646,11 @@ func destroy(targets: Array, source: Node = null, can_be_prevented: bool = true,
 
 			emit_signal("action_destroy_card", target, source)
 
-			if _anim_queue:
-				_anim_queue.add_command(AnimationQueue.CommandType.DESTROY_CARD, {
-					"card": target,
-					"source": source,
-					"from_zone": from_zone
-				})
+			AnimationQueue.add_command(AnimationQueue.CommandType.DESTROY_CARD, {
+				"card": target,
+				"source": source,
+				"from_zone": from_zone
+			})
 
 			# ─────────────────────────────────────────────────────────────────
 			# FLAG EXHUMAR: Cartas jugadas via Exhumar van a DESTIERRO
@@ -1070,12 +671,10 @@ func destroy(targets: Array, source: Node = null, can_be_prevented: bool = true,
 				# EffectController.destroy_card()/exile_card() ya respetan la
 				# regla de exhumación (is_exhumed) y mantienen los contadores
 				# de UI sincronizados vía CardManager.
-				var effect_ctrl = get_node_or_null("/root/EffectController")
-				if effect_ctrl:
-					if destination == Constants.Zone.DESTIERRO:
-						await effect_ctrl.exile_card(owner_id, target)
-					else:
-						await effect_ctrl.destroy_card(owner_id, target)
+				if destination == Constants.Zone.DESTIERRO:
+					await EffectController.exile_card(owner_id, target)
+				else:
+					await EffectController.destroy_card(owner_id, target)
 			result.destroyed.append(target)
 
 			# Trigger después de destruir
@@ -1116,7 +715,7 @@ func banish(targets: Array, source: Node = null, skip_validation: bool = false) 
 
 	# DAR Sección 6: Validar estado del juego
 	if not skip_validation:
-		var validation = _validate_banish(targets)
+		var validation = _validator._validate_banish(targets)
 		if not validation.valid:
 			result.success = false
 			result.error = validation.reason
@@ -1137,25 +736,28 @@ func banish(targets: Array, source: Node = null, skip_validation: bool = false) 
 			result.failed.append({"card": target, "reason": "invalid"})
 			continue
 
+		# "Prevenir que una carta sea afectada por un efecto oponente"
+		# (2026-08-30, Estaca) — mismo chequeo que destroy().
+		if EffectController.try_consume_opponent_effect_prevention(target, source):
+			result.failed.append({"card": target, "reason": "prevented"})
+			continue
+
 		var from_zone = target.current_zone if target.get("current_zone") != null else -1
 		var owner_id = target.owner_id if target.get("owner_id") != null else 0
 
 		emit_signal("action_banish_card", target, from_zone)
 
-		if _anim_queue:
-			_anim_queue.add_command(AnimationQueue.CommandType.EXILE_CARD, {
-				"card": target,
-				"source": source,
-				"from_zone": from_zone
-			})
+		AnimationQueue.add_command(AnimationQueue.CommandType.EXILE_CARD, {
+			"card": target,
+			"source": source,
+			"from_zone": from_zone
+		})
 
 		if board:
 			board.move_card(target, Constants.Zone.DESTIERRO, owner_id)
 		else:
 			# GameBoard legacy no disponible (docs/audit, hallazgo 2/4)
-			var effect_ctrl = get_node_or_null("/root/EffectController")
-			if effect_ctrl:
-				await effect_ctrl.exile_card(owner_id, target)
+			await EffectController.exile_card(owner_id, target)
 		result.banished.append(target)
 
 		_notify_trigger("on_exiled", {
@@ -1170,6 +772,41 @@ func banish(targets: Array, source: Node = null, skip_validation: bool = false) 
 	await _end_trigger_collection_and_resolve()
 
 	return result
+
+
+# =============================================================================
+# RETURN TO DECK - Devolver una carta EN JUEGO a su Castillo (DAR)
+# =============================================================================
+func return_to_deck(card: Node, player_id: int, to_top: bool = true) -> bool:
+	"""Devuelve una carta que está EN JUEGO a su Castillo (tope o fondo del
+	mazo — 'devuelve al mazo'/'pon en el fondo del mazo'). El patrón real de
+	ABILITY_PATTERNS['RETURN_DECK'] ya existía pero apuntaba a esta función,
+	que nunca se había escrito. Si tenía Armas equipadas, también vuelven al
+	mazo con ella (el Arma sigue al portador, igual que al destruir/desterrar
+	— ver CardManager.destroy_card()/exile_card())."""
+	if not is_instance_valid(card):
+		return false
+
+	if card.get("equipped_weapons"):
+		for weapon in card.equipped_weapons.duplicate():
+			if is_instance_valid(weapon):
+				return_to_deck(weapon, player_id, to_top)
+
+	var card_data: Dictionary = card.card_data.duplicate() if card.get("card_data") else {}
+	card_data["esta_oculta"] = true  # el Castillo es una zona privada, a diferencia del Cementerio/Destierro
+	if to_top:
+		CardManager.add_to_deck_top(player_id, card_data)
+	else:
+		CardManager.add_to_deck_bottom(player_id, card_data)
+
+	# Desconectar señales de interacción ANTES de liberar (2026-08-29, mismo
+	# bug que CardManager.destroy_card()/exile_card()) — sin esto, un hover
+	# que sigue apuntando al nodo después de queue_free() tira "Invalid
+	# access... on a base object of type previously freed" al tocar
+	# .modulate en el próximo evento de mouse.
+	CardManager._disconnect_card_interaction_signals(card)
+	card.queue_free()
+	return true
 
 
 # =============================================================================
@@ -1194,7 +831,7 @@ func discard(player_id: int, cards: Array, source: String = "", skip_validation:
 
 	# DAR Sección 6: Validar estado del juego
 	if not skip_validation:
-		var validation = _validate_discard(player_id, cards, 0)
+		var validation = _validator._validate_discard(player_id, cards, 0)
 		if not validation.valid:
 			result.success = false
 			result.error = validation.reason
@@ -1217,12 +854,11 @@ func discard(player_id: int, cards: Array, source: String = "", skip_validation:
 
 		emit_signal("action_discard_card", player_id, card, i)
 
-		if _anim_queue:
-			_anim_queue.add_command(AnimationQueue.CommandType.DISCARD_CARD, {
-				"card": card,
-				"player_id": player_id,
-				"index": i
-			})
+		AnimationQueue.add_command(AnimationQueue.CommandType.DISCARD_CARD, {
+			"card": card,
+			"player_id": player_id,
+			"index": i
+		})
 
 		card.esta_oculta = false
 		if not board:
@@ -1259,21 +895,12 @@ func _discard_card_fallback(player_id: int, card: Node) -> void:
 	open_discard_selection()."""
 	var data: Dictionary = card.card_data.duplicate() if card.get("card_data") else {}
 	data["esta_oculta"] = false
-	var cm := get_node_or_null("/root/CardManager")
-	if cm:
-		cm.add_to_cemetery(player_id, data)
+	CardManager.add_to_cemetery(player_id, data)
 	var main := get_node_or_null("/root/Main")
 	if player_id == 0 and main and main.player_hand and main.player_hand.has_method("remove_card"):
 		main.player_hand.remove_card(card, true)
 	elif main and main.get("_opponent_fan") and main._opponent_fan.has_method("remove_card"):
 		main._opponent_fan.remove_card(card, true)
-	if not cm and main:
-		if player_id == 0:
-			main.player_cemetery.append(data)
-			UIManager.update_cementerio_count(0, main.player_cemetery.size())
-		else:
-			main.opponent_cemetery.append(data)
-			UIManager.update_cementerio_count(1, main.opponent_cemetery.size())
 
 
 # =============================================================================
@@ -1288,8 +915,7 @@ func _begin_trigger_collection() -> void:
 	_collecting_triggers = true
 	_collected_triggers.clear()
 
-	if _trigger_system:
-		_trigger_system.begin_collecting()
+	TriggerSystem.begin_collecting()
 
 
 func _notify_trigger(trigger_type: String, event_data: Dictionary) -> void:
@@ -1322,8 +948,7 @@ func _notify_trigger(trigger_type: String, event_data: Dictionary) -> void:
 
 					_collected_triggers.append(trigger_data)
 
-					if _trigger_system:
-						_trigger_system.register_trigger(card, trigger_type, event_data)
+					TriggerSystem.register_trigger(card, trigger_type, event_data)
 
 
 func _end_trigger_collection_and_resolve() -> void:
@@ -1350,8 +975,7 @@ func _end_trigger_collection_and_resolve() -> void:
 	emit_signal("triggers_collected", active_triggers, opponent_triggers)
 
 	# Finalizar recolección en TriggerSystem
-	if _trigger_system:
-		_trigger_system.end_collecting_and_queue()
+	await TriggerSystem.end_collecting_and_queue()
 
 	# Resolver triggers
 	await _resolve_collected_triggers(active_triggers + opponent_triggers)
@@ -1373,8 +997,7 @@ func _resolve_collected_triggers(triggers: Array) -> void:
 		emit_signal("trigger_resolution_completed", trigger, result)
 
 		# Pequeña pausa entre triggers para animaciones
-		if _anim_queue:
-			await _anim_queue.wait_until_empty()
+		await AnimationQueue.wait_until_empty()
 
 
 # =============================================================================
@@ -1394,10 +1017,14 @@ func _apply_card_filter(cards: Array, filter: Dictionary) -> Array:
 	for card_data in cards:
 		var matches = true
 
-		# Filtro por tipo
+		# Filtro por tipo — admite un tipo único o una lista ("busca un Arma
+		# o un Oro", p.ej. Tyet, 2026-08-22)
 		if filter.has("type"):
 			var card_type = card_data.get("tipo", -1)
-			if card_type != filter.type:
+			if filter.type is Array:
+				if card_type not in filter.type:
+					matches = false
+			elif card_type != filter.type:
 				matches = false
 
 		# Filtro por raza
@@ -1447,8 +1074,12 @@ func _check_destruction_prevention(target: Node, source: Node) -> Dictionary:
 	"""Verifica si la destrucción puede ser prevenida"""
 	var result = {"prevented": false, "prevented_by": null}
 
-	# Verificar indestructible
-	if target.has_method("has_keyword") and target.has_keyword(Constants.Keyword.INDESTRUCTIBLE):
+	# Verificar indestructible — vía KeywordManager.can_be_destroyed(),
+	# no card.has_keyword() directo (2026-09-02, refactor: mismo motivo ya
+	# documentado en ActionValidator._can_be_destroyed() — un silenciado
+	# que le quite Indestructible por KeywordManager no se respetaba acá,
+	# porque card.has_keyword() no mira los overrides de KeywordManager).
+	if not KeywordManager.can_be_destroyed(target):
 		result.prevented = true
 		result.prevented_by = target
 		return result
@@ -1460,6 +1091,12 @@ func _check_destruction_prevention(target: Node, source: Node) -> Dictionary:
 			result.prevented_by = target
 			return result
 
-	# TODO: Verificar efectos de otras cartas que prevengan destrucción
+	# "Prevenir que una carta sea afectada por un efecto oponente" (2026-08-30,
+	# Estaca) — cargas puntuales por carta, consumidas contra el efecto de
+	# un jugador distinto al controlador del target.
+	if EffectController.try_consume_opponent_effect_prevention(target, source):
+		result.prevented = true
+		result.prevented_by = target
+		return result
 
 	return result

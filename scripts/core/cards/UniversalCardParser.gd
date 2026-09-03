@@ -57,6 +57,9 @@ enum CostType {
 	GOLD,           # Paga X Oro
 	DISCARD,        # Descarta una carta
 	TAP,            # Gira esta carta
+	SELF_AS_GOLD,   # "Pagar este Oro" — la propia carta se gasta como Oro (2026-08-29, p.ej. Tyet)
+	SELF_BANISH,    # "Puedes Desterrarlo" — la propia carta se destierra como costo (2026-08-30, p.ej. Legión Paladín, Ramón Freire)
+	SELF_TO_DECK_BOTTOM, # "Puedes poner esta ... carta(s) en el fondo de tu Castillo" — la propia carta (+ otra) al fondo del mazo como costo (2026-08-30, p.ej. Tyet)
 }
 
 enum TargetType {
@@ -68,98 +71,6 @@ enum TargetType {
 	CARD_ALL,       # Todas las cartas (de un tipo/zona)
 	CARD_RANDOM,    # Carta aleatoria
 	ZONE            # Una zona específica
-}
-
-# =============================================================================
-# PATRONES DE TEXTO (Español)
-# =============================================================================
-const PATTERNS = {
-	# Robar
-	"draw": [
-		"roba (\\d+) cartas?",
-		"robas? (\\d+) cartas?",
-		"roba una carta",
-		"robar (\\d+) cartas?"
-	],
-	# Botar (Mill)
-	"mill": [
-		"bota (\\d+) cartas? del mazo",
-		"bota las (\\d+) primeras cartas",
-		"el oponente bota (\\d+)",
-		"oponente bota (\\d+) cartas?"
-	],
-	# Descartar
-	"discard": [
-		"descarta (\\d+) cartas?",
-		"descartas? (\\d+) cartas?",
-		"descarta una carta",
-		"descarta al azar"
-	],
-	# Destruir
-	"destroy": [
-		"destruye (\\d+|una?|todas?)",
-		"destruir (\\d+|una?|todas?)",
-		"es destruida"
-	],
-	# Desterrar
-	"banish": [
-		"destierra (\\d+|una?|todas?)",
-		"desterrar (\\d+|una?|todas?)",
-		"destiérrala",
-		"al destierro"
-	],
-	# Buscar
-	"search": [
-		"busca (\\d+|una?) cartas?",
-		"buscar en tu mazo",
-		"busca en tu (?:mazo|castillo)"
-	],
-	# Daño
-	"damage": [
-		"inflige (\\d+) de daño",
-		"hace (\\d+) de daño",
-		"recibe (\\d+) de daño"
-	],
-	# Buff/Debuff
-	"buff": [
-		"obtiene \\+(\\d+)/\\+(\\d+)",
-		"gana \\+(\\d+) de fuerza",
-		"\\+(\\d+)/\\+(\\d+)"
-	],
-	"debuff": [
-		"obtiene -(\\d+)/-(\\d+)",
-		"pierde (\\d+) de fuerza",
-		"-(\\d+)/-(\\d+)"
-	],
-	# Devolver
-	"return_hand": [
-		"devuelve a la mano",
-		"regresa a la mano",
-		"vuelve a tu mano"
-	],
-	"return_deck": [
-		"devuelve al mazo",
-		"pon en el fondo del mazo",
-		"baraja en el mazo"
-	],
-	# Revelar
-	"reveal": [
-		"revela (\\d+|una?|las?) cartas?",
-		"muestra (\\d+|una?|las?) cartas?"
-	],
-	# Mirar
-	"look": [
-		"mira las? (\\d+) primeras? cartas?",
-		"mira el tope de"
-	]
-}
-
-# Patrones de conectores
-const CONNECTOR_PATTERNS = {
-	"luego": ["luego,?", "después,?", "entonces,?", "a continuación,?"],
-	"y": ["y ", ", y "],
-	"o": [" o ", ", o "],
-	"en_medida": ["en medida de lo posible", "si es posible", "hasta donde sea posible"]
 }
 
 # Patrones de objetivo
@@ -238,7 +149,7 @@ const ABILITY_PATTERNS: Dictionary = {
 		# (zona, tipo de carta, cantidad, si se puede jugar) lo extrae
 		# TriggerSystem._execute_targeted_search() releyendo el texto
 		# completo de la carta, no este único grupo de captura.
-		"regex":        "busca (?:\\d+|una?|un) (?:cartas?|aliados?|talismanes?|talisman|tótems?|totems?|armas?|oros?)|busca en tu (?:mazo|castillo|cementerio)",
+		"regex":        "busca (?:\\d+|una?|un) (?:cartas?|aliados?|talismanes?|talisman|tótems?|totems?|armas?|oros?)|busca en (?:tu|un|el) (?:mazo|castillo|cementerio)",
 		"manager_path": "/root/ActionModule",
 		"method":       "search",
 		"action_type":  ActionType.SEARCH,
@@ -289,9 +200,16 @@ const ABILITY_PATTERNS: Dictionary = {
 		"group_amount": 0,
 	},
 	"GOLD": {
-		"regex":        "genera (\\d+) oro virtual|añade (\\d+) oro",
-		"manager_path": "/root/PaymentManager",
-		"method":       "generar_oros_virtuales",
+		# Cubre dígito o palabra ('un', 'dos'...) y el calificador opcional
+		# 'por el turno'/'virtual(es)' (2026-08-28, p.ej. Lobo Sagrado:
+		# 'Cuando ataques, genera un Oro por el turno') — antes exigía la
+		# palabra literal 'virtual' y solo dígitos, así que nunca matcheaba
+		# el texto real de ninguna carta. Ejecución real en
+		# TargetedEffectExecutor.execute_parsed_action() (case "GOLD"), no
+		# via manager_path/method (GoldManager no es autoload de /root).
+		"regex":        "(?:genera|añade) (\\w+) oros?(?: virtuales?)?(?: por el turno)?",
+		"manager_path": "",
+		"method":       "",
 		"action_type":  ActionType.GOLD,
 		"group_amount": 1,
 	},
@@ -310,7 +228,10 @@ const ABILITY_PATTERNS: Dictionary = {
 		"group_amount": 1,
 	},
 	"SILENCE": {
-		"regex":        "pierde todas sus habilidades|no tiene habilidades ni palabras clave|es silenciad[oa]",
+		# "Silenciar" no es un término de Mitos y Leyendas — es solo el nombre
+		# interno (KeywordManager.silence_card/is_silenced). El texto real de
+		# carta dice "pierde su habilidad" (DAR), no "es silenciada".
+		"regex":        "pierde su habilidad|pierde todas sus habilidades|no tiene habilidades ni palabras clave",
 		"manager_path": "/root/KeywordManager",
 		"method":       "silence_card",
 		"action_type":  ActionType.SILENCE,
@@ -347,7 +268,8 @@ const TRIGGER_EVENTS: Dictionary = {
 	"al atacar":         "ATTACK",
 	"cuando ataca":      "ATTACK",
 	"al bloquear":       "BLOCK",
-	"al morir":          "DIE",
+	# "al morir" no es terminología real del juego (2026-08-28, a pedido
+	# del usuario) — se sacó, queda "cuando es destruida" para DIE.
 	"cuando es destruida": "DIE",
 	"al comienzo de":    "TURN_START",
 	"al inicio de":      "TURN_START",
@@ -364,6 +286,21 @@ class TurnRegistry:
 
 	func register(card_id: String, ability_index: int, turn: int) -> void:
 		_used["%s|%d|%d" % [card_id, ability_index, turn]] = true
+
+	func register_ability_use(source_card: Node, ability: Dictionary) -> void:
+		"""Envoltorio de register() que extrae ability_index/turno y usa el
+		instance_id de source_card como clave — extraído (2026-08-30) de las
+		mismas 4 líneas que se repetían copiadas en prácticamente todas las
+		funciones _activate_* de CardInspectionLayer.gd (Don de Amma, Tesoro
+		de los Césares, Miguel, las dos de Tyet, Ramón Freire).
+		instance_id, NO card_data.id (2026-08-30, corrección: card_data.id es
+		el ID de la CARTA/impresión, compartido por TODAS las copias en juego
+		— con 2 Aho en juego, usar uno marcaba el cupo de 'una vez por turno'
+		también para el otro, un bug real reportado por el usuario. Cada copia
+		física necesita su propio cupo)."""
+		var card_id: String = str(source_card.get_instance_id())
+		var ability_index: int = ability.get("ability_index", 0)
+		register(card_id, ability_index, GameManager.current_turn)
 
 	func was_used(card_id: String, ability_index: int, turn: int) -> bool:
 		return _used.has("%s|%d|%d" % [card_id, ability_index, turn])
@@ -384,202 +321,22 @@ class TurnRegistry:
 # =============================================================================
 # REFERENCIAS
 # =============================================================================
-var _action_executor: Node = null
 ## Registro de usos "Una vez por turno" — compartido con ActionPipeline
 var turn_registry: TurnRegistry = TurnRegistry.new()
 
 
 func _ready() -> void:
-	call_deferred("_get_references")
+	call_deferred("_connect_signals")
 
 
-func _get_references() -> void:
-	_action_executor = get_node_or_null("/root/ActionExecutor")
+func _connect_signals() -> void:
 	# Resetear TurnRegistry al inicio de cada turno nuevo
-	var gm := get_node_or_null("/root/GameManager")
-	if gm and gm.has_signal("turn_started"):
-		if not gm.turn_started.is_connected(_on_turn_started_reset_registry):
-			gm.turn_started.connect(_on_turn_started_reset_registry)
+	if not GameManager.turn_started.is_connected(_on_turn_started_reset_registry):
+		GameManager.turn_started.connect(_on_turn_started_reset_registry)
 
 
 func _on_turn_started_reset_registry(_player_id: int, turn_number: int) -> void:
 	turn_registry.reset_for_turn(turn_number)
-
-
-# =============================================================================
-# PARSING PRINCIPAL
-# =============================================================================
-func parse_ability_text(ability_text: String, card_data: Dictionary = {}) -> Array[Dictionary]:
-	"""Parsea el texto de una habilidad y retorna un array de acciones
-
-	Args:
-		ability_text: Texto de la habilidad (ej: "Roba 2 cartas. Luego, el oponente bota 3.")
-		card_data: Datos opcionales de la carta para contexto
-
-	Returns: Array de objetos Action [{type, amount, target, connector, raw_text}]
-	"""
-	var actions: Array[Dictionary] = []
-
-	if ability_text.is_empty():
-		return actions
-
-	# Normalizar texto
-	var text = ability_text.to_lower().strip_edges()
-
-	# Dividir por oraciones/conectores
-	var segments = _split_by_connectors(text)
-
-	for i in range(segments.size()):
-		var segment = segments[i]
-		var action = _parse_segment(segment.text, segment.connector)
-
-		if not action.is_empty():
-			action["index"] = i
-			action["raw_text"] = segment.text
-			actions.append(action)
-
-	emit_signal("parsing_completed", card_data.get("name", "???"), actions)
-	return actions
-
-
-func _split_by_connectors(text: String) -> Array[Dictionary]:
-	"""Divide el texto en segmentos por conectores
-
-	Returns: [{text, connector}]
-	"""
-	var segments: Array[Dictionary] = []
-	var current_text = text
-	var current_connector = Connector.NONE
-
-	# Primero, marcar posiciones de conectores
-	var connector_positions: Array[Dictionary] = []
-
-	# Buscar "luego"
-	for pattern in CONNECTOR_PATTERNS.luego:
-		var regex = RegEx.new()
-		regex.compile("(?i)" + pattern)
-		var matches = regex.search_all(current_text)
-		for m in matches:
-			connector_positions.append({
-				"pos": m.get_start(),
-				"end": m.get_end(),
-				"type": Connector.LUEGO
-			})
-
-	# Buscar "en medida de lo posible"
-	for pattern in CONNECTOR_PATTERNS.en_medida:
-		var regex = RegEx.new()
-		regex.compile("(?i)" + pattern)
-		var matches = regex.search_all(current_text)
-		for m in matches:
-			connector_positions.append({
-				"pos": m.get_start(),
-				"end": m.get_end(),
-				"type": Connector.EN_MEDIDA
-			})
-
-	# Ordenar por posición
-	connector_positions.sort_custom(func(a, b): return a.pos < b.pos)
-
-	# Si no hay conectores, retornar todo como un segmento
-	if connector_positions.is_empty():
-		# Dividir por puntos
-		var sentences = text.split(".")
-		for sentence in sentences:
-			var clean = sentence.strip_edges()
-			if not clean.is_empty():
-				segments.append({
-					"text": clean,
-					"connector": Connector.NONE if segments.is_empty() else Connector.Y
-				})
-		return segments
-
-	# Extraer segmentos entre conectores
-	var last_end = 0
-	for conn in connector_positions:
-		var before = current_text.substr(last_end, conn.pos - last_end).strip_edges()
-		if not before.is_empty() and before != "." and before != ",":
-			segments.append({
-				"text": before.trim_suffix(".").trim_suffix(",").strip_edges(),
-				"connector": current_connector
-			})
-		current_connector = conn.type
-		last_end = conn.end
-
-	# Agregar texto restante
-	var remaining = current_text.substr(last_end).strip_edges()
-	if not remaining.is_empty() and remaining != "." and remaining != ",":
-		segments.append({
-			"text": remaining.trim_suffix(".").trim_suffix(",").strip_edges(),
-			"connector": current_connector
-		})
-
-	return segments
-
-
-func _parse_segment(text: String, connector: Connector) -> Dictionary:
-	"""Parsea un segmento individual de texto
-
-	Returns: {type, amount, target, connector, filter, zone}
-	"""
-	var action: Dictionary = {
-		"type": ActionType.CUSTOM,
-		"amount": 1,
-		"target": TargetType.SELF,
-		"connector": connector,
-		"filter": {},
-		"zone": "FIELD"
-	}
-
-	# Detectar tipo de acción
-	for action_type in PATTERNS:
-		for pattern in PATTERNS[action_type]:
-			var regex = RegEx.new()
-			regex.compile("(?i)" + pattern)
-			var result = regex.search(text)
-
-			if result:
-				action.type = _string_to_action_type(action_type)
-
-				# Extraer cantidad si hay grupo de captura
-				if result.get_group_count() > 0:
-					var amount_str = result.get_string(1)
-					action.amount = _parse_amount(amount_str)
-
-				break
-
-		if action.type != ActionType.CUSTOM:
-			break
-
-	# Detectar objetivo
-	action.target = _detect_target(text)
-
-	# Detectar filtros (tipo de carta, etc.)
-	action.filter = _detect_filter(text)
-
-	# Detectar zona
-	action.zone = _detect_zone(text)
-
-	return action
-
-
-func _string_to_action_type(type_str: String) -> ActionType:
-	"""Convierte string a ActionType enum"""
-	match type_str:
-		"draw": return ActionType.DRAW
-		"mill": return ActionType.MILL
-		"discard": return ActionType.DISCARD
-		"destroy": return ActionType.DESTROY
-		"banish": return ActionType.BANISH
-		"search": return ActionType.SEARCH
-		"damage": return ActionType.DAMAGE
-		"buff": return ActionType.BUFF
-		"debuff": return ActionType.DEBUFF
-		"return_hand": return ActionType.RETURN_HAND
-		"return_deck": return ActionType.RETURN_DECK
-		"reveal": return ActionType.REVEAL
-		"look": return ActionType.LOOK
-		_: return ActionType.CUSTOM
 
 
 func _parse_amount(amount_str: String) -> int:
@@ -610,652 +367,19 @@ func _detect_target(text: String) -> TargetType:
 	return TargetType.SELF
 
 
-func _detect_filter(text: String) -> Dictionary:
-	"""Detecta filtros de tipo de carta"""
-	var filter: Dictionary = {}
-	var lower = text.to_lower()
 
-	# Filtrar por tipo
-	if "aliado" in lower:
-		filter["type"] = "Aliado"
-	elif "talismán" in lower or "talisman" in lower:
-		filter["type"] = "Talisman"
-	elif "arma" in lower:
-		filter["type"] = "Arma"
-	elif "tótem" in lower or "totem" in lower:
-		filter["type"] = "Totem"
-	elif "oro" in lower:
-		filter["type"] = "Oro"
-
-	# Excluir tipo
-	if "que no sea" in lower:
-		if "talismán" in lower or "talisman" in lower:
-			filter["exclude_type"] = "Talisman"
-
-	# Filtrar por coste
-	var cost_regex = RegEx.new()
-	cost_regex.compile("coste (\\d+) o menos")
-	var cost_match = cost_regex.search(lower)
-	if cost_match:
-		filter["max_cost"] = int(cost_match.get_string(1))
-
-	return filter
-
-
-func _detect_zone(text: String) -> String:
-	"""Detecta la zona objetivo"""
-	var lower = text.to_lower()
-
-	if "mazo" in lower or "castillo" in lower:
-		return "DECK"
-	elif "cementerio" in lower:
-		return "CEMETERY"
-	elif "mano" in lower:
-		return "HAND"
-	elif "destierro" in lower or "exilio" in lower:
-		return "EXILE"
-	elif "campo" in lower or "juego" in lower:
-		return "FIELD"
-
-	return "FIELD"
-
-
-# =============================================================================
-# RESOLUCIÓN DE CADENA DE ACCIONES
-# =============================================================================
-func resolve_chain(actions: Array, context: Dictionary = {}) -> Dictionary:
-	"""Resuelve una cadena de acciones respetando conectores
-
-	Conectores:
-	- NONE/Y: Siempre ejecuta
-	- LUEGO: Solo ejecuta si la anterior tuvo éxito completo
-	- EN_MEDIDA: Ejecuta lo que se pueda, éxito parcial cuenta como éxito
-	- O: Solo ejecuta si la anterior falló
-
-	Args:
-		actions: Array de acciones parseadas
-		context: {controller_id, source_card, game_state}
-
-	Returns: {success, results[], partial, stopped_at}
-	"""
-	var result = {
-		"success": true,
-		"results": [],
-		"partial": false,
-		"stopped_at": -1,
-		"total_actions": actions.size(),
-		"executed_actions": 0
-	}
-
-	if actions.is_empty():
-		return result
-
-	emit_signal("chain_resolution_started", actions)
-
-	var previous_success = true
-	var previous_partial = false
-
-	for i in range(actions.size()):
-		var action = actions[i]
-		var connector = action.get("connector", Connector.NONE)
-
-		# Evaluar si debemos ejecutar según el conector
-		var should_execute = _should_execute_action(connector, previous_success, previous_partial)
-
-		if not should_execute:
-			print("[UniversalCardParser] Acción %d saltada por conector %s" % [i, _connector_to_string(connector)])
-			result.stopped_at = i
-			break
-
-		# Ejecutar acción
-		var action_result = await _execute_action(action, context)
-		result.results.append(action_result)
-		result.executed_actions += 1
-
-		emit_signal("action_resolved", action, action_result)
-
-		# Evaluar resultado según conector
-		if connector == Connector.EN_MEDIDA:
-			# En medida de lo posible: éxito parcial cuenta
-			previous_success = action_result.get("success", false) or action_result.get("partial", false)
-			previous_partial = action_result.get("partial", false)
-			if previous_partial:
-				result.partial = true
-		else:
-			previous_success = action_result.get("success", false)
-			previous_partial = action_result.get("partial", false)
-
-		# Si LUEGO y falló, marcar y detener
-		if connector == Connector.LUEGO and not previous_success:
-			result.success = false
-			result.stopped_at = i
-			break
-
-	# Éxito general si todas las acciones necesarias se completaron
-	if result.stopped_at == -1:
-		result.success = previous_success or result.partial
-
-	emit_signal("chain_resolution_completed", result.results)
-	return result
-
-
-func _should_execute_action(connector: Connector, prev_success: bool, prev_partial: bool) -> bool:
-	"""Determina si una acción debe ejecutarse según su conector"""
-	match connector:
-		Connector.NONE, Connector.Y, Connector.EN_MEDIDA:
-			# Siempre ejecutar
-			return true
-		Connector.LUEGO:
-			# Solo si anterior tuvo éxito
-			return prev_success
-		Connector.O:
-			# Solo si anterior falló
-			return not prev_success
-		_:
-			return true
-
-
-func _connector_to_string(connector: Connector) -> String:
-	"""Convierte Connector a string para debug"""
-	match connector:
-		Connector.NONE: return "NONE"
-		Connector.Y: return "Y"
-		Connector.LUEGO: return "LUEGO"
-		Connector.O: return "O"
-		Connector.EN_MEDIDA: return "EN_MEDIDA"
-		_: return "UNKNOWN"
-
-
-func _execute_action(action: Dictionary, context: Dictionary) -> Dictionary:
-	"""Ejecuta una acción individual
-
-	Returns: {success, partial, data}
-	"""
-	var result = {
-		"success": false,
-		"partial": false,
-		"data": {}
-	}
-
-	var action_type = action.get("type", ActionType.CUSTOM)
-	var amount = action.get("amount", 1)
-	var target = action.get("target", TargetType.SELF)
-	var filter = action.get("filter", {})
-	var zone = action.get("zone", "FIELD")
-
-	var controller_id = context.get("controller_id", 0)
-	var target_player = controller_id if target == TargetType.SELF else 1 - controller_id
-
-	# Obtener ActionModule
-	var action_module = get_node_or_null("/root/ActionModule")
-
-	match action_type:
-		ActionType.DRAW:
-			if action_module:
-				var draw_result = await action_module.draw(target_player, amount, "ability")
-				result.success = draw_result.get("success", false)
-				result.partial = draw_result.get("actual", 0) < amount and draw_result.get("actual", 0) > 0
-				result.data = draw_result
-			else:
-				result.success = true  # Simulado
-				result.data = {"simulated": true, "amount": amount}
-
-		ActionType.MILL:
-			if action_module:
-				var mill_result = await action_module.mill(target_player, amount, false, "ability")
-				result.success = mill_result.get("success", false)
-				result.partial = mill_result.get("actual", 0) < amount and mill_result.get("actual", 0) > 0
-				result.data = mill_result
-			else:
-				result.success = true
-				result.data = {"simulated": true, "amount": amount}
-
-		ActionType.DISCARD:
-			if action_module:
-				# Necesita selección de cartas
-				var discard_result = await action_module.discard(target_player, [], "ability")
-				result.success = discard_result.get("success", false)
-				result.data = discard_result
-			else:
-				result.success = true
-				result.data = {"simulated": true, "amount": amount}
-
-		ActionType.DESTROY:
-			if action_module:
-				# Necesita targets
-				var destroy_result = await action_module.destroy([], context.get("source_card", null))
-				result.success = destroy_result.get("success", false)
-				result.data = destroy_result
-			else:
-				result.success = true
-				result.data = {"simulated": true}
-
-		ActionType.BANISH:
-			if action_module:
-				var banish_result = await action_module.banish([], context.get("source_card", null))
-				result.success = banish_result.get("success", false)
-				result.data = banish_result
-			else:
-				result.success = true
-				result.data = {"simulated": true}
-
-		ActionType.SEARCH:
-			if action_module:
-				var zone_id = _zone_string_to_constant(zone)
-				var search_result = await action_module.search(target_player, zone_id, filter, amount)
-				result.success = search_result.get("success", false)
-				result.data = search_result
-			else:
-				result.success = true
-				result.data = {"simulated": true, "amount": amount}
-
-		ActionType.DAMAGE:
-			# TODO: Sistema de daño
-			result.success = true
-			result.data = {"simulated": true, "amount": amount}
-
-		ActionType.BUFF, ActionType.DEBUFF:
-			# TODO: Sistema de modificadores
-			result.success = true
-			result.data = {"simulated": true, "amount": amount}
-
-		ActionType.RETURN_HAND, ActionType.RETURN_DECK:
-			# TODO: Devolver cartas
-			result.success = true
-			result.data = {"simulated": true}
-
-		ActionType.LOOK:
-			var look_result = await _execute_look(target_player, amount)
-			result.success = look_result.get("success", false)
-			result.data = look_result
-
-		ActionType.REVEAL:
-			# TODO: Revelar públicamente al oponente (LOOK ya implementado abajo)
-			result.success = true
-			result.data = {"simulated": true, "amount": amount}
-
-		ActionType.SHUFFLE:
-			if action_module and action_module.has_method("shuffle_deck"):
-				action_module.shuffle_deck(target_player)
-			result.success = true
-			result.data = {"player": target_player}
-
-		_:
-			print("[UniversalCardParser] Acción no implementada: %s" % action_type)
-			result.success = true  # Asumir éxito para no bloquear
-			result.data = {"unimplemented": true}
-
-	return result
-
-
-func _execute_look(player_id: int, amount: int) -> Dictionary:
-	"""Muestra al jugador las N cartas del tope de su Castillo, sin
-	modificar su orden — DAR: 'Mirar' es privado, informa pero no reordena
-	ni mueve cartas. Primera implementación real de LOOK (antes era
-	'simulated': no mostraba nada). Reordenar queda pendiente."""
-	var cm = get_node_or_null("/root/CardManager")
-	if not cm:
-		return {"success": false, "error": "no_card_manager"}
-
-	var deck: Array = cm.get_deck(player_id)
-	var top_cards: Array = deck.slice(0, mini(amount, deck.size()))
-
-	if top_cards.is_empty():
-		return {"success": true, "cards": []}
-
-	SelectionManager.open_reveal(top_cards, "Mirando %d carta(s) del tope de tu Castillo" % top_cards.size())
-	return {"success": true, "cards": top_cards}
-
-
-func _zone_string_to_constant(zone: String) -> int:
-	"""Convierte string de zona a Constants.Zone"""
-	match zone.to_upper():
-		"DECK", "CASTILLO": return Constants.Zone.CASTILLO
-		"CEMETERY", "CEMENTERIO": return Constants.Zone.CEMENTERIO
-		"HAND", "MANO": return Constants.Zone.MANO
-		"EXILE", "DESTIERRO": return Constants.Zone.DESTIERRO
-		"FIELD": return Constants.Zone.LINEA_DEFENSA
-		_: return Constants.Zone.CASTILLO
-
-
-# =============================================================================
-# VENTANA DE RESPUESTA (PASO D)
-# =============================================================================
-func play_card_with_response_window(card_data: Dictionary, context: Dictionary = {}) -> Dictionary:
-	"""Juega una carta con ventana de respuesta para el oponente (Paso D)
-
-	Flujo:
-	1. Parsear habilidades de la carta
-	2. Registrar carta en el pipeline
-	3. Abrir ventana de respuesta
-	4. Si no hay respuesta/anulación, resolver cadena
-	5. Aplicar condición post-resolución
-
-	Args:
-		card_data: Datos de la carta a jugar
-		context: {controller_id, played_from, etc.}
-
-	Returns: {success, was_annulled, results, final_destination}
-	"""
-	var result = {
-		"success": false,
-		"was_annulled": false,
-		"results": [],
-		"final_destination": "CEMENTERIO"
-	}
-
-	var card_name = card_data.get("name", card_data.get("nombre", "???"))
-	var controller_id = context.get("controller_id", 0)
-
-	print("[UniversalCardParser] Jugando carta con ventana de respuesta: %s" % card_name)
-
-	# 1. Parsear habilidades
-	var ability_text = card_data.get("ability", card_data.get("habilidad", ""))
-	var actions = parse_ability_text(ability_text, card_data)
-
-	# Si tiene choice_config, usar eso en lugar de parsear
-	var choice_config = card_data.get("choice_config", {})
-	if not choice_config.is_empty():
-		actions = _convert_choice_config_to_actions(choice_config, context)
-
-	# Si tiene hability_blocks, usar eso
-	var hability_blocks = card_data.get("hability_blocks", [])
-	if not hability_blocks.is_empty():
-		actions = _convert_hability_blocks_to_actions(hability_blocks, context)
-
-	# 2. Registrar en pipeline
-	if _action_executor:
-		_action_executor.enter_pipeline(card_data, {
-			"controller_id": controller_id,
-			"pending_actions": actions,
-			"phase": "waiting_response"
-		})
-
-	emit_signal("response_window_requested", card_data, actions)
-
-	# 3. Abrir ventana de respuesta
-	var response = await _open_response_window(card_data, actions, context)
-
-	# 4. Verificar si fue anulada
-	if response.get("was_annulled", false):
-		result.was_annulled = true
-		result.final_destination = _get_annulled_destination(card_data)
-
-		if _action_executor:
-			_action_executor.exit_pipeline()
-
-		print("[UniversalCardParser] Carta anulada, destino: %s" % result.final_destination)
-		return result
-
-	# 5. Resolver cadena de acciones
-	if not actions.is_empty():
-		var chain_context = context.duplicate()
-		chain_context["source_card"] = card_data
-
-		var chain_result = await resolve_chain(actions, chain_context)
-		result.results = chain_result.results
-		result.success = chain_result.success
-	else:
-		result.success = true
-
-	# 6. Determinar destino final
-	result.final_destination = _get_final_destination(card_data, context)
-
-	# 7. Salir del pipeline
-	if _action_executor:
-		_action_executor.exit_pipeline()
-
-	print("[UniversalCardParser] Resolución completa, destino: %s" % result.final_destination)
-	return result
-
-
-func _open_response_window(card_data: Dictionary, actions: Array, context: Dictionary) -> Dictionary:
-	"""Abre la ventana de respuesta y espera decisión del oponente
-
-	Returns: {had_response, was_annulled, response_card}
-	"""
-	var result = {
-		"had_response": false,
-		"was_annulled": false,
-		"response_card": null
-	}
-
-	if not _action_executor:
-		_action_executor = get_node_or_null("/root/ActionExecutor")
-
-	if _action_executor:
-		var response = await _action_executor.open_response_window(null, {
-			"card_data": card_data,
-			"pending_actions": actions,
-			"controller_id": context.get("controller_id", 0)
-		})
-
-		result.had_response = response.get("had_response", false)
-
-		if result.had_response and response.get("response_card"):
-			# Verificar si es anulación
-			if _action_executor.check_annullment(response.response_card):
-				result.was_annulled = true
-				result.response_card = response.response_card
-	else:
-		# Sin ActionExecutor, simular pase automático
-		print("[UniversalCardParser] Sin ActionExecutor, oponente pasa automáticamente")
-		await get_tree().create_timer(0.5).timeout
-
-	return result
-
-
-func _get_annulled_destination(card_data: Dictionary) -> String:
-	"""Determina el destino de una carta anulada
-
-	Si la carta dice BANISH_SELF, va al destierro aunque sea anulada
-	"""
-	var on_resolution = card_data.get("on_resolution", "")
-	if on_resolution == "BANISH_SELF":
-		return "DESTIERRO"
-	return "CEMENTERIO"
-
-
-func _get_final_destination(card_data: Dictionary, context: Dictionary) -> String:
-	"""Determina el destino final de una carta tras resolución"""
-	# Si fue jugada via Exhumar
-	if context.get("played_via_exhumar", false):
-		return "DESTIERRO"
-
-	# Verificar resolution_rules
-	var resolution_rules = card_data.get("resolution_rules", {})
-	if context.get("played_via_exhumar", false) and resolution_rules.has("on_exhumar_resolve"):
-		return _normalize_destination(resolution_rules.on_exhumar_resolve)
-
-	if resolution_rules.has("on_resolve"):
-		return _normalize_destination(resolution_rules.on_resolve)
-
-	# Verificar on_resolution
-	var on_resolution = card_data.get("on_resolution", "GRAVEYARD")
-	return _normalize_destination(on_resolution)
-
-
-func _normalize_destination(dest: String) -> String:
-	"""Normaliza strings de destino"""
-	match dest.to_upper():
-		"MOVE_TO_CEMENTERIO", "GRAVEYARD", "CEMENTERIO", "DESTROY_SELF":
-			return "CEMENTERIO"
-		"MOVE_TO_DESTIERRO", "BANISH_SELF", "EXILE", "DESTIERRO":
-			return "DESTIERRO"
-		"MOVE_TO_MANO", "RETURN_TO_HAND", "HAND", "MANO":
-			return "MANO"
-		"MOVE_TO_CASTILLO", "RETURN_TO_DECK", "DECK", "CASTILLO":
-			return "CASTILLO"
-		_:
-			return "CEMENTERIO"
-
-
-# =============================================================================
-# CONVERSIÓN DE FORMATOS
-# =============================================================================
-func _convert_choice_config_to_actions(choice_config: Dictionary, context: Dictionary) -> Array:
-	"""Convierte choice_config a array de acciones
-
-	Usado cuando la carta tiene formato de selección de efectos
-	"""
-	var actions: Array = []
-	var selected = context.get("selected_options", [])
-	var options = choice_config.get("options", [])
-
-	for opt in options:
-		var opt_id = opt.get("id", "")
-		if opt_id in selected or selected.is_empty():
-			var action_data = opt.get("action", {})
-			actions.append({
-				"type": _action_string_to_type(action_data.get("type", "CUSTOM")),
-				"amount": action_data.get("value", 1),
-				"target": _target_string_to_type(action_data.get("target", "SELF")),
-				"connector": Connector.Y,
-				"filter": action_data.get("filter", {}),
-				"zone": action_data.get("zone", "DECK"),
-				"raw_text": opt.get("text", "")
-			})
-
-	return actions
-
-
-func _convert_hability_blocks_to_actions(hability_blocks: Array, context: Dictionary) -> Array:
-	"""Convierte hability_blocks a array de acciones"""
-	var actions: Array = []
-
-	for block in hability_blocks:
-		var effect = block.get("effect", {})
-		if effect.is_empty():
-			continue
-
-		actions.append({
-			"type": _action_string_to_type(effect.get("action", effect.get("type", "CUSTOM"))),
-			"amount": effect.get("value", effect.get("amount", 1)),
-			"target": _target_string_to_type(effect.get("target", "SELF")),
-			"connector": Connector.Y,
-			"filter": effect.get("filter", {}),
-			"zone": effect.get("zone", "FIELD"),
-			"raw_text": block.get("raw_text", ""),
-			"conditions": block.get("conditions", [])
-		})
-
-	return actions
-
-
-func _action_string_to_type(type_str: String) -> ActionType:
-	"""Convierte string de tipo de acción a enum"""
-	match type_str.to_upper():
-		"DRAW": return ActionType.DRAW
-		"MILL": return ActionType.MILL
-		"DISCARD": return ActionType.DISCARD
-		"DESTROY": return ActionType.DESTROY
-		"BANISH", "EXILE": return ActionType.BANISH
-		"SEARCH": return ActionType.SEARCH
-		"DAMAGE": return ActionType.DAMAGE
-		"BUFF": return ActionType.BUFF
-		"DEBUFF": return ActionType.DEBUFF
-		"HEAL": return ActionType.HEAL
-		"RETURN_HAND", "RETURN_TO_HAND": return ActionType.RETURN_HAND
-		"RETURN_DECK", "RETURN_TO_DECK": return ActionType.RETURN_DECK
-		"REVEAL": return ActionType.REVEAL
-		"LOOK": return ActionType.LOOK
-		"SHUFFLE": return ActionType.SHUFFLE
-		"TAP": return ActionType.TAP
-		"UNTAP": return ActionType.UNTAP
-		"TOKEN", "CREATE_TOKEN": return ActionType.CREATE_TOKEN
-		"COPY": return ActionType.COPY
-		"COUNTER", "ANNUL": return ActionType.COUNTER
-		"MOVE": return ActionType.MOVE
-		"GOLD", "VIRTUAL_GOLD": return ActionType.GOLD
-		_: return ActionType.CUSTOM
-
-
-func _target_string_to_type(target_str: String) -> TargetType:
-	"""Convierte string de target a enum"""
-	match target_str.to_upper():
-		"SELF", "CONTROLLER": return TargetType.SELF
-		"OPPONENT", "ENEMY": return TargetType.OPPONENT
-		"BOTH", "ALL_PLAYERS": return TargetType.BOTH
-		"CARD", "TARGET", "TARGETED": return TargetType.CARD_TARGET
-		"ALL", "ALL_CARDS": return TargetType.CARD_ALL
-		"RANDOM": return TargetType.CARD_RANDOM
-		_: return TargetType.SELF
-
-
-# =============================================================================
-# HABILIDADES ACTIVADAS
-# =============================================================================
-func get_activated_abilities(card_data: Dictionary) -> Array[Dictionary]:
-	"""Identifica las habilidades activadas de una carta.
-
-	Una habilidad activada tiene formato: [Costo]: [Efecto]
-	Ejemplos:
-	  "Paga 1 Oro para: roba 1 carta"
-	  "Una vez por turno: +2/+2 a un aliado"
-	  "Descarta una carta: destruye un aliado enemigo"
-
-	Returns: Array[{cost_text, cost_type, cost_amount, effect_text, raw_text, ability_index}]
-	"""
-	var habilidad = card_data.get("habilidad", "")
-	if habilidad.is_empty():
-		return []
-
-	var result: Array[Dictionary] = []
-	var ability_index := 0
-
-	# Dividir por puntos para procesar cada oración
-	for raw_sentence in habilidad.split("."):
-		var sentence = raw_sentence.strip_edges()
-		if sentence.is_empty() or not ":" in sentence:
-			continue
-
-		# Separar en [costo] : [efecto]  (solo primer ':')
-		var colon_pos = sentence.find(":")
-		var cost_part    = sentence.substr(0, colon_pos).strip_edges()
-		var effect_part  = sentence.substr(colon_pos + 1).strip_edges()
-
-		if effect_part.is_empty():
-			continue
-
-		var lower_cost = cost_part.to_lower()
-		var cost_type  = CostType.NONE
-		var cost_amount := 0
-
-		# ── Detectar tipo de costo ────────────────────────────────────────────
-		if "una vez por turno" in lower_cost or "una vez al turno" in lower_cost:
-			cost_type = CostType.ONCE_PER_TURN
-		elif "paga" in lower_cost and ("oro" in lower_cost or "oros" in lower_cost):
-			cost_type   = CostType.GOLD
-			var rx = RegEx.new()
-			rx.compile("(\\d+)")
-			var m = rx.search(lower_cost)
-			cost_amount = int(m.get_string(1)) if m else 1
-		elif "descarta" in lower_cost:
-			cost_type   = CostType.DISCARD
-			cost_amount = 1
-		elif "girar" in lower_cost or "tapa" in lower_cost or "gira" in lower_cost:
-			cost_type = CostType.TAP
-
-		if cost_type == CostType.NONE:
-			continue  # No es habilidad activada reconocida
-
-		result.append({
-			"raw_text":     sentence,
-			"cost_text":    cost_part,
-			"cost_type":    cost_type,
-			"cost_amount":  cost_amount,
-			"effect_text":  effect_part,
-			"ability_index": ability_index,
-			"is_optional":  effect_part.to_lower().begins_with("puedes"),
-		})
-		ability_index += 1
-
-	return result
+# resolve_chain()/play_card_with_response_window() (ActionChainResolver.gd/
+# AbilityRegistry.gd) se eliminaron acá (2026-08-27, limpieza — sin ningún
+# llamador real, ver ActionPipeline.gd para el detalle completo).
 
 
 # =============================================================================
 # PARSE_ABILITIES — Compilador Fase 1 (entrada pública unificada)
 # =============================================================================
+# get_activated_abilities() se eliminó acá (2026-08-28, "módulos gordos"):
+# cero llamadores reales — solo aparecía nombrada en un comentario de
+# ActionPipeline.gd, nunca invocada. parse_abilities() de abajo es la que de
+# verdad usa CardInspectionLayer para los botones de habilidad activada.
 func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 	"""Compilador Fase 1: analiza el texto de una carta y retorna habilidades estructuradas.
 
@@ -1264,8 +388,11 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 	  - ACTIVATED : El jugador la activa desde el Zoom (tiene coste o "Una vez por turno")
 
 	Flags especiales:
-	  is_optional   — La oración contiene "Puedes". Obliga a ActionPipeline a pedir
-	                  confirmación antes de resolver (señal puedes_confirm_requested).
+	  is_optional   — La oración contiene "Puedes". Para ACTIVATED no pide
+	                  confirmación aparte (clickear el botón ya es la
+	                  confirmación, 2026-08-28); para TRIGGER, el "declinar"
+	                  lo ofrece el propio can_cancel del SelectionManager que
+	                  abre TriggerResolution/LookAndPlayResolver.
 	  once_per_turn — Contiene "Una vez por turno". Se registra en TurnRegistry para
 	                  impedir múltiples usos por turno.
 
@@ -1290,10 +417,53 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 
 		var lower_s: String = sentence.to_lower()
 
+		# ── Continuación encadenada ("Luego, busca...") ────────────────────────
+		# Una oración que empieza con un conector de encadenamiento (Luego/
+		# Después/A continuación/Entonces) no es una habilidad nueva — es la
+		# continuación de la anterior (2026-08-29, p.ej. Don de Amma: "...puedes
+		# Desterrar un Oro con habilidad de tu Reserva. Luego, busca un Oro en
+		# tu Castillo y ponlo en tu Reserva."). Antes cada oración se evaluaba
+		# aislada y ésta, sin trigger ni coste propio, se descartaba en
+		# silencio — ni el raw_text que usa CardInspectionLayer para detectar
+		# patrones especiales por botón, ni el effect_text que llega a
+		# ActionPipeline.activate_ability(), veían nunca el "Luego...". Se
+		# concatena a la última entrada agregada en vez de perderse.
+		var is_luego_continuation: bool = false
+		for connector_word: String in ["luego,", "después,", "a continuación,", "entonces,"]:
+			if lower_s.begins_with(connector_word):
+				is_luego_continuation = true
+				break
+		if is_luego_continuation and not result.is_empty():
+			var prev: Dictionary = result[result.size() - 1]
+			prev["raw_text"]    = "%s. %s" % [prev.get("raw_text", ""), sentence]
+			prev["effect_text"] = "%s. %s" % [prev.get("effect_text", ""), sentence]
+			continue
+
 		# ── Flags globales de la oración ──────────────────────────────────────
 		var is_optional:   bool = "puedes" in lower_s
+		# "una vez EN tu/su turno" (p.ej. Padre de la Patria, 2026-08-28) es
+		# una tercera variante real de esta cláusula que no matcheaba antes.
 		var once_per_turn: bool = ("una vez por turno" in lower_s
-			or "una vez al turno" in lower_s)
+			or "una vez al turno" in lower_s
+			or "una vez en tu turno" in lower_s
+			or "una vez en su turno" in lower_s)
+
+		# "Sólo puedes utilizar la habilidad de X una vez por turno" (2026-08-30,
+		# p.ej. Ramón Freire) — oración de CIERRE que solo reafirma la
+		# restricción de la habilidad ACTIVADA anterior, no una habilidad
+		# nueva. Sin este chequeo, 'una vez por turno' la clasificaba como su
+		# propia entrada ACTIVATED separada y espuria, sin ninguna acción
+		# real asociada (un botón que no hacía nada con sentido al clickear).
+		var is_once_per_turn_qualifier_only: bool = once_per_turn and (
+			"solo puedes utilizar la habilidad" in lower_s
+			or "sólo puedes utilizar la habilidad" in lower_s
+			or "solo puedes usar esta habilidad" in lower_s
+			or "sólo puedes usar esta habilidad" in lower_s
+		)
+		if is_once_per_turn_qualifier_only and not result.is_empty():
+			var prev_qual: Dictionary = result[result.size() - 1]
+			prev_qual["once_per_turn"] = true
+			continue
 
 		# ── Detectar Trigger ──────────────────────────────────────────────────
 		var trigger_event: String = ""
@@ -1308,8 +478,41 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 		var cost_text:   String = ""
 		var effect_text: String = sentence
 
+		# "Puedes pagarlo..." (2026-08-30, corrección: el texto real de Tyet en
+		# caché/API es "Puedes pagarlo para que..." con pronombre, no "pagar
+		# este Oro" — el chequeo original nunca matcheaba el texto real de la
+		# carta, así que esta oración (y por lo tanto también la siguiente,
+		# que dependía de que ÉSTA llegara a ACTIVATED para poder encadenarse)
+		# quedaban fuera de 'result' por completo, sin ningún botón.
+		var pays_self_as_gold: bool = ("pagar este oro" in lower_s or "pagar esta carta" in lower_s
+			or "puedes pagarlo" in lower_s)
+		# "Puedes Desterrarlo/Desterrarla..." (2026-08-30, p.ej. Legión
+		# Paladín, Ramón Freire — masculino; Estaca: 'Puedes Desterrarla
+		# para prevenir...' — femenino, "la Estaca") — coste de
+		# autodesterrarse, tampoco tiene 'una vez por turno' ni ':'. Sin
+		# este chequeo la oración quedaba fuera de 'result' igual que el
+		# caso de arriba — Legión Paladín parece no haber disparado nunca
+		# su botón real hasta este fix (el patrón especial que lo maneja en
+		# CardInspectionLayer nunca era alcanzable porque esta oración
+		# jamás llegaba a ability_type ACTIVATED).
+		var pays_self_banish: bool = "puedes desterrarlo" in lower_s or "puedes desterrarla" in lower_s
+		# "Puedes poner esta y otra carta de tu mano en el fondo de tu
+		# Castillo..." (2026-08-30, p.ej. Tyet) — coste de mandar esta carta
+		# (+ otra) al fondo del mazo, tampoco tiene 'una vez por turno' ni
+		# ':'. Sin este chequeo caía en la rama de "sin coste ni trigger", y
+		# como la oración ANTERIOR (la de pagarlo como Oro) no es ACTIVATED
+		# hasta el fix de arriba, tampoco encadenaba como continuación —
+		# quedaba fuera de 'result' por completo, sin botón.
+		var pays_self_to_deck_bottom: bool = "poner esta" in lower_s and "fondo de tu castillo" in lower_s
+
 		if once_per_turn:
 			cost_type = CostType.ONCE_PER_TURN
+		elif pays_self_as_gold:
+			cost_type = CostType.SELF_AS_GOLD
+		elif pays_self_banish:
+			cost_type = CostType.SELF_BANISH
+		elif pays_self_to_deck_bottom:
+			cost_type = CostType.SELF_TO_DECK_BOTTOM
 		elif ":" in sentence:
 			var colon_pos: int = sentence.find(":")
 			cost_text   = sentence.substr(0, colon_pos).strip_edges()
@@ -1334,8 +537,23 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 		elif cost_type != CostType.NONE:
 			ability_type = "ACTIVATED"
 		else:
+			# Oración sin coste ni trigger propio: si no es una regla estática/pasiva
+			# y viene justo después de una habilidad ACTIVADA abierta, es su continuación
+			# (p.ej. Tesoro de los Césares: "Una vez por turno... nombrar una carta. Esa carta cuesta...").
+			var is_static_rule := lower_s.begins_with("no se puede") or lower_s.begins_with("los aliados") \
+				or lower_s.begins_with("tus aliados") or lower_s.begins_with("los talismán") \
+				or lower_s.begins_with("las armas") or lower_s.begins_with("los tótem") \
+				or lower_s.begins_with("juega mostrando") or lower_s.begins_with("mientras controles") \
+				or lower_s.begins_with("mientras esté en juego") or lower_s.begins_with("gana ") \
+				or lower_s.begins_with("pierde ") or lower_s.begins_with("no puede ser ")
+
+			if not is_static_rule and not result.is_empty() and result[result.size() - 1].get("ability_type", "") == "ACTIVATED":
+				var prev_open: Dictionary = result[result.size() - 1]
+				prev_open["raw_text"]    = "%s. %s" % [prev_open.get("raw_text", ""), sentence]
+				prev_open["effect_text"] = "%s. %s" % [prev_open.get("effect_text", ""), sentence]
+				continue
 			# Oración sin coste ni trigger → no es habilidad activada reconocida
-			# (puede ser texto de reglas pasivo)
+			# (puede ser texto de reglas pasivo o palabra clave)
 			ability_index += 1
 			continue
 
@@ -1409,6 +627,9 @@ func extract_action(text: String) -> Dictionary:
 	"""Extrae la primera acción reconocida del texto de una habilidad.
 
 	Prioridad:
+	  0. Patrones compuestos "puedes [costo] y Roba N" (SHUFFLE_FOR_DRAW,
+	     PLAY_WEAPON_DISCOUNT_DRAW) — deben ir antes del robo canónico o
+	     éste los captura primero (ver sección 0 abajo)
 	  1. Patrón de robo canónico (DRAW_REGEX)
 	  2. Resto de ABILITY_PATTERNS en orden de iteración
 
@@ -1420,6 +641,102 @@ func extract_action(text: String) -> Dictionary:
 	"""
 	if text.is_empty():
 		return {"matched": false}
+
+	# ── 0. Patrones compuestos "puedes [costo] y Roba N cartas" (2026-08-22) ──
+	# Van ANTES que todo lo demás, incluido el robo canónico (sección 1): si
+	# no, 'puedes barajar... y Roba dos cartas' se adelanta y ejecuta 'Roba
+	# dos cartas' suelto, ignorando el 'puedes' y el costo que lo condiciona
+	# — bug real visto con Bernardo O'Higgins y Lobo Sagrado. extract_action()
+	# solo soporta UN grupo de cantidad genérico y estos casos necesitan
+	# varios números a la vez, así que se resuelven aparte.
+	var shuffle_draw_rx := RegEx.new()
+	shuffle_draw_rx.compile("(?i)puedes barajar cartas? cuyos? costes? sum(?:en|an) hasta (\\w+)[^.]*?y robar? (\\w+) cartas?")
+	var m_sd := shuffle_draw_rx.search(text)
+	if m_sd:
+		var max_sum: int = _parse_amount(m_sd.get_string(1))
+		var draw_amt: int = _parse_amount(m_sd.get_string(2))
+		print("[Parser] Acción detectada: SHUFFLE_FOR_DRAW | Suma máx: %d | Roba: %d" % [max_sum, draw_amt])
+		return {
+			"matched":      true,
+			"type":         "SHUFFLE_FOR_DRAW",
+			"action_type":  ActionType.CUSTOM,
+			"value":        draw_amt,
+			"params":       {"max_cost_sum": max_sum, "draw_amount": draw_amt},
+			"raw_text":     m_sd.get_string(0),
+		}
+
+	var weapon_draw_rx := RegEx.new()
+	weapon_draw_rx.compile("(?i)puedes jugar un arma desde tu mano o cementerio reduciendo su coste en (\\w+) oros?, hasta un m[ií]nimo de (\\w+)[^.]*?y robar? (\\w+) cartas?")
+	var m_wd := weapon_draw_rx.search(text)
+	if m_wd:
+		var discount: int = _parse_amount(m_wd.get_string(1))
+		var floor_val: int = _parse_amount(m_wd.get_string(2))
+		var draw_amt2: int = _parse_amount(m_wd.get_string(3))
+		print("[Parser] Acción detectada: PLAY_WEAPON_DISCOUNT_DRAW | Descuento: %d | Mínimo: %d | Roba: %d" % [discount, floor_val, draw_amt2])
+		return {
+			"matched":      true,
+			"type":         "PLAY_WEAPON_DISCOUNT_DRAW",
+			"action_type":  ActionType.CUSTOM,
+			"value":        draw_amt2,
+			"params":       {"discount": discount, "floor": floor_val, "draw_amount": draw_amt2},
+			"raw_text":     m_wd.get_string(0),
+		}
+
+	# Variante sin robo, solo desde la mano (p.ej. Hanta: "puedes jugar un
+	# Arma de tu mano reduciendo su coste en 1 Oro, hasta un mínimo de 0").
+	var weapon_hand_rx := RegEx.new()
+	weapon_hand_rx.compile("(?i)puedes jugar un arma de tu mano reduciendo su coste en (\\w+) oros?,?\\s*hasta un m[ií]nimo de (\\w+)")
+	var m_wh := weapon_hand_rx.search(text)
+	if m_wh:
+		var discount2: int = _parse_amount(m_wh.get_string(1))
+		var floor_val2: int = _parse_amount(m_wh.get_string(2))
+		print("[Parser] Acción detectada: PLAY_WEAPON_DISCOUNT | Descuento: %d | Mínimo: %d" % [discount2, floor_val2])
+		return {
+			"matched":      true,
+			"type":         "PLAY_WEAPON_DISCOUNT",
+			"action_type":  ActionType.CUSTOM,
+			"value":        discount2,
+			"params":       {"discount": discount2, "floor": floor_val2, "hand_only": true, "draw_amount": 0},
+			"raw_text":     m_wh.get_string(0),
+		}
+
+	# Patrón "sube un Arma que controles a la mano de su dueño para jugar un
+	# Arma del mismo o menor coste desde tu mano sin pagar su coste" (p.ej.
+	# Padre de la Patria, 2026-08-28) — swap de Armas, no descuento fijo
+	# como Lobo Sagrado/Hanta, por eso no reusa weapon_draw_rx/weapon_hand_rx.
+	var weapon_swap_rx := RegEx.new()
+	weapon_swap_rx.compile("(?i)subir un arma que controles a la mano de su due[ñn]o para jugar un arma del mismo o menor coste desde tu mano sin pagar su coste")
+	var m_ws := weapon_swap_rx.search(text)
+	if m_ws:
+		print("[Parser] Acción detectada: RETURN_WEAPON_SWAP_FREE")
+		return {
+			"matched":      true,
+			"type":         "RETURN_WEAPON_SWAP_FREE",
+			"action_type":  ActionType.CUSTOM,
+			"value":        0,
+			"params":       {},
+			"raw_text":     m_ws.get_string(0),
+		}
+
+	# Patrón "convertir un Oro o una carta de coste N o menos en una carta
+	# del mismo tipo sin habilidad" (DAR Sección 8 - Convertir, p.ej.
+	# Capitán O'Brien, 2026-08-28) — misma carta física, misma
+	# tipo/coste/Fuerza, solo pierde la habilidad. Objetivo: dentro del
+	# juego (propio o enemigo), salvo que el texto diga lo contrario.
+	var convert_rx := RegEx.new()
+	convert_rx.compile("(?i)convertir un oro o una carta de coste (\\w+) o menos en una carta del mismo tipo sin habilidad")
+	var m_cv := convert_rx.search(text)
+	if m_cv:
+		var max_cost: int = _parse_amount(m_cv.get_string(1))
+		print("[Parser] Acción detectada: CONVERT_ORO_OR_LOW_COST | Coste máx: %d" % max_cost)
+		return {
+			"matched":      true,
+			"type":         "CONVERT_ORO_OR_LOW_COST",
+			"action_type":  ActionType.CUSTOM,
+			"value":        max_cost,
+			"params":       {"max_cost": max_cost},
+			"raw_text":     m_cv.get_string(0),
+		}
 
 	# ── 1. Patrón de robo canónico ─────────────────────────────────────────────
 	var draw_rx := RegEx.new()
@@ -1468,147 +785,9 @@ func extract_action(text: String) -> Dictionary:
 	return {"matched": false}
 
 
-# =============================================================================
-# PARSE_TEXT — Regex Pattern Matching (GameAction Objects)
-# =============================================================================
-
-## Triggers: frases de inicio que identifican efectos condicionales
-const TRIGGER_RX: Array = [
-	"cuando entra",
-	"al salir",
-	"al atacar",
-	"al comienzo de",
-]
-
-## Costes: [{pattern, cost_type, group}]
-## group = índice del grupo de captura con la cantidad (0 = sin captura)
-const COST_RX: Array = [
-	{"pattern": "paga (\\d+) oro",     "cost_type": CostType.GOLD,         "group": 1},
-	{"pattern": "destierra una carta", "cost_type": CostType.DISCARD,       "group": 0},
-	{"pattern": "una vez por turno",   "cost_type": CostType.ONCE_PER_TURN, "group": 0},
-]
-
-## Acciones: [{pattern, action_key, group, manager_path, method}]
-const ACTION_RX: Array = [
-	{"pattern": "roba (\\d+)",       "action_key": "DRAW",    "group": 1,
-	 "manager_path": "/root/ActionModule", "method": "draw"},
-	{"pattern": "destruye",          "action_key": "DESTROY", "group": 0,
-	 "manager_path": "/root/ActionModule", "method": "destroy"},
-	{"pattern": "baraja",            "action_key": "SHUFFLE", "group": 0,
-	 "manager_path": "/root/ActionModule", "method": "shuffle_deck"},
-	{"pattern": "busca en tu mazo",  "action_key": "SEARCH",  "group": 0,
-	 "manager_path": "/root/ActionModule", "method": "search"},
-]
-
-
-func parse_text(text: String) -> Array[Dictionary]:
-	"""Analiza texto libre de carta mediante Regex y retorna objetos GameAction.
-
-	Detecta 3 categorías por oración:
-	  - TRIGGER : "Cuando entra", "Al salir", "Al atacar", "Al comienzo de"
-	  - COST    : "Paga N Oro", "Destierra una carta", "Una vez por turno"
-	  - ACTION  : "Roba N", "Destruye", "Baraja", "Busca en tu mazo"
-
-	Cada GameAction devuelto contiene:
-	  {segment_type, action_key, action_type, amount,
-	   manager_path, method, params,
-	   raw_text, is_optional, has_cost, cost_type, cost_amount}
-
-	Las oraciones con has_cost == true se usan en CardInspectionLayer
-	para generar botones de activación automáticos.
-	"""
-	var results: Array[Dictionary] = []
-	if text.is_empty():
-		return results
-
-	for raw_sentence in text.split("."):
-		var sentence: String = raw_sentence.strip_edges()
-		if sentence.is_empty():
-			continue
-		var lower_s: String = sentence.to_lower()
-
-		var segment: Dictionary = {
-			"raw_text":     sentence,
-			"segment_type": "ACTION",
-			"action_key":   "",
-			"action_type":  ActionType.CUSTOM,
-			"amount":       1,
-			"manager_path": "",
-			"method":       "",
-			"params":       {},
-			"is_optional":  "puedes" in lower_s,
-			"has_cost":     false,
-			"cost_type":    CostType.NONE,
-			"cost_amount":  0,
-		}
-
-		var found := false
-
-		# ── Trigger ──────────────────────────────────────────────────────────
-		for trigger_pattern: String in TRIGGER_RX:
-			if trigger_pattern in lower_s:
-				segment.segment_type = "TRIGGER"
-				segment.action_key   = trigger_pattern.replace(" ", "_").to_upper()
-				found = true
-				break
-
-		# ── Costo ─────────────────────────────────────────────────────────────
-		for cost_entry: Dictionary in COST_RX:
-			var rx := RegEx.new()
-			rx.compile("(?i)" + cost_entry["pattern"])
-			var m := rx.search(sentence)
-			if m:
-				segment.has_cost     = true
-				segment.cost_type    = cost_entry["cost_type"]
-				var grp: int = cost_entry["group"]
-				segment.cost_amount  = int(m.get_string(grp)) if grp > 0 and m.get_group_count() >= grp else 1
-				found = true
-				break
-
-		# ── Acción ────────────────────────────────────────────────────────────
-		for action_entry: Dictionary in ACTION_RX:
-			var rx := RegEx.new()
-			rx.compile("(?i)" + action_entry["pattern"])
-			var m := rx.search(sentence)
-			if m:
-				segment.action_key   = action_entry["action_key"]
-				segment.action_type  = _action_string_to_type(action_entry["action_key"])
-				segment.manager_path = action_entry["manager_path"]
-				segment.method       = action_entry["method"]
-				var grp: int = action_entry["group"]
-				if grp > 0 and m.get_group_count() >= grp:
-					segment.amount = int(m.get_string(grp))
-				segment.params = {"amount": segment.amount, "target_player": 0}
-				found = true
-				break
-
-		if found:
-			results.append(segment)
-
-	return results
-
-
-# =============================================================================
-# UTILIDADES DE DEBUG
-# =============================================================================
-func debug_parse(ability_text: String) -> void:
-	"""Parsea y muestra el resultado en consola"""
-	print("=" .repeat(50))
-	print("PARSING: %s" % ability_text)
-	print("-" .repeat(50))
-
-	var actions = parse_ability_text(ability_text)
-
-	for i in range(actions.size()):
-		var action = actions[i]
-		print("Acción %d:" % i)
-		print("  Tipo: %s" % ActionType.keys()[action.type])
-		print("  Cantidad: %s" % action.amount)
-		print("  Objetivo: %s" % TargetType.keys()[action.target])
-		print("  Conector: %s" % _connector_to_string(action.connector))
-		print("  Filtro: %s" % action.filter)
-		print("  Zona: %s" % action.zone)
-		print("  Texto: %s" % action.raw_text)
-		print("")
-
-	print("=" .repeat(50))
+# parse_text()/TRIGGER_RX/COST_RX/ACTION_RX/debug_parse() se eliminaron acá
+# (2026-08-27, limpieza a pedido del usuario): sin ningún llamador real —
+# era una implementación paralela y más vieja de lo que parse_abilities()
+# hace hoy (que es lo que CardInspectionLayer usa de verdad para los
+# botones de habilidad activada, pese a que el docstring de parse_text()
+# decía que ERA esa fuente).

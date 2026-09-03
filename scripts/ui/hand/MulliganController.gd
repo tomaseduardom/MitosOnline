@@ -16,7 +16,7 @@ func setup(main: Node) -> void:
 
 func start_mulligan_phase() -> void:
 	print("[Mulligan] === Iniciando ===")
-	_main._setup_oro_inicial()
+	_main._bootstrap._setup_oro_inicial()
 	print("[Mulligan] Cartas en mazo jugador: %d" % _main.player_deck.size())
 	is_in_mulligan = true
 	mulligan_count = 0
@@ -40,7 +40,7 @@ func _draw_mulligan_hand(count: int) -> void:
 		var card_data = _main.player_deck.pop_front()
 		mulligan_hand_data.append(card_data)
 	_main.mulligan_hand.add_cards_with_animation(mulligan_hand_data, _main._create_card)
-	_main._update_castillo_counts()
+	_main._zone_manager._update_castillo_counts()
 
 
 func _update_mulligan_ui() -> void:
@@ -72,7 +72,7 @@ func on_mulligan_pressed() -> void:
 	await get_tree().create_timer(0.5).timeout
 	for card_data in mulligan_hand_data:
 		_main.player_deck.append(card_data)
-	_main.shuffle_deck(0)
+	_main._zone_manager.shuffle_deck(0)
 	_draw_mulligan_hand(next_hand_size)
 	_update_mulligan_ui()
 	_main.keep_hand_button.disabled = false
@@ -89,12 +89,15 @@ func _end_mulligan_phase() -> void:
 		_main.player_hand.add_card(card)
 		_main._connect_card_signals(card)
 	mulligan_hand_data.clear()
-	await _main.draw_initial_hand(1, _main.INITIAL_HAND_SIZE)
+	await _main._zone_manager.draw_initial_hand(1, _main.INITIAL_HAND_SIZE)
+	# DEBUG TEMPORAL (2026-09-02, "solo por ahora" — ver el comentario
+	# completo en GameBootstrap._debug_spawn_opponent_test_allies()): 3
+	# Aliados rivales ya en juego para poder probar efectos "carta
+	# oponente" (Estaca, etc.) sin jugar una partida entera antes.
+	_main._bootstrap._debug_spawn_opponent_test_allies(3)
 	GameManager.start_game(_main._dice_winner)
-	var card_manager = get_node_or_null("/root/CardManager")
-	if card_manager:
-		card_manager.sync_from_main()
-	_main._update_gold_display()
-	_main._update_castillo_counts()
+	CardManager.sync_from_main()
+	_main._gold_manager._update_gold_display()
+	_main._zone_manager._update_castillo_counts()
 	_main._sync_oro_ui()
 	_main._update_debug("Partida iniciada! Mano: %d cartas" % _main.player_hand.get_child_count())

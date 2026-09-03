@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://card_scene"]
 
-[ext_resource type="Script" path="res://scripts/cards/Card.gd" id="1_card"]
+[ext_resource type="Script" path="res://scripts/entities/Card.gd" id="1_card"]
 
 [node name="Card" type="Control"]
 custom_minimum_size = Vector2(150, 210)
@@ -8,6 +8,7 @@ layout_mode = 3
 anchors_preset = 0
 offset_right = 150.0
 offset_bottom = 210.0
+pivot_offset = Vector2(75, 105)
 script = ExtResource("1_card")
 
 [node name="CardBase" type="Panel" parent="."]

@@ -143,9 +143,8 @@ func _change_phase(new_phase: Constants.Phase) -> void:
 func _process_agrupacion() -> void:
 	"""
 	Fase de Agrupación (DAR 5.1):
-	1. Aliados de Línea de Ataque → Línea de Defensa  (no aplica: no hay líneas
-	   separadas en el tablero actual, un Aliado que atacó ya está "de vuelta"
-	   visualmente en el mismo contenedor de campo)
+	1. Aliados de Línea de Ataque → Línea de Defensa  (vía PhaseFlowController,
+	   caso AGRUPACION de _on_phase_state_machine() — llama unmark_attackers())
 	2. Oros Pagados → Reserva de Oro                   (vía PhaseFlowController._reset_gold())
 	3. Limpiar enfermedad de invocación (DAR 3.1) — a partir de acá los
 	   Aliados del jugador activo pueden atacar sin necesitar Furia.
@@ -160,9 +159,7 @@ func _process_agrupacion() -> void:
 	"""
 	print("[GameManager] Procesando agrupación...")
 
-	var card_factory = get_node_or_null("/root/CardFactory")
-	if card_factory and card_factory.has_method("on_turn_start_clear_summon_sickness"):
-		card_factory.on_turn_start_clear_summon_sickness(active_player_id)
+	CardFactory.on_turn_start_clear_summon_sickness(active_player_id)
 
 	# Dar tiempo a que el anunciador de AGRUPACIÓN sea visible antes de avanzar.
 	await get_tree().create_timer(1.5).timeout
@@ -183,6 +180,15 @@ func _process_vigilia() -> void:
 	- Usar habilidades
 	"""
 	oro_played_this_turn = false
+	# Limpiar atacantes/bloqueadores de la ÚLTIMA batalla real (2026-08-22):
+	# si un turno termina SIN atacar, PhaseFlowController salta directo de
+	# VIGILIA a FINAL (ver 'Paso: omitiendo batalla → Fase Final') y jamás
+	# pasa por _start_batalla(), que era el único lugar que vaciaba
+	# 'attackers' — un Aliado que atacó quedaba en esa lista para siempre
+	# hasta que OTRO Aliado forzara la fase de Ataque de rebote. Acá se
+	# limpia sí o sí al empezar cada Vigilia, haya habido batalla o no.
+	attackers.clear()
+	blockers.clear()
 	print("[GameManager] Vigilia activa - Jugador puede jugar cartas")
 	# El jugador tiene el control ahora
 
@@ -198,15 +204,12 @@ func play_oro() -> void:
 
 
 func proceed_to_battle() -> void:
-	"""Pasa de Vigilia a Batalla Mitológica"""
+	"""Pasa de Vigilia a Batalla Mitológica — único disparador ahora es el
+	botón "Atacar" (2026-08-28). Si nadie ataca, confirm_attackers() con la
+	lista vacía manda directo a Fase Final de todos modos (_end_batalla()),
+	así que ya no hace falta un atajo aparte para "saltar la batalla"."""
 	if current_phase == Constants.Phase.VIGILIA:
 		_change_phase(Constants.Phase.ATAQUE)
-
-
-func skip_battle() -> void:
-	"""Salta la Batalla y va directo a Fase Final"""
-	if current_phase == Constants.Phase.VIGILIA:
-		_change_phase(Constants.Phase.FINAL)
 
 
 # =============================================================================
@@ -218,10 +221,11 @@ var attackers: Array[Node] = []
 var blockers: Dictionary = {}  # {atacante: bloqueador}
 
 func _start_batalla() -> void:
-	"""Inicia la Batalla Mitológica"""
-	attackers.clear()
-	blockers.clear()
-	# La fase ya es ATAQUE, procesamos
+	"""Inicia la Batalla Mitológica — disparada por el botón "Atacar"
+	(proceed_to_battle(), 2026-08-28). NO limpiar 'attackers'/'blockers'
+	acá: siguen vacíos porque recién ahora, ya en fase Ataque, se pueden
+	declarar (_process_vigilia() ya garantiza que arrancan vacíos al
+	empezar cada Vigilia nueva)."""
 	print("[GameManager] Batalla Mitológica iniciada - Paso de Ataque")
 
 
@@ -239,30 +243,28 @@ func declare_attacker(ally: Node) -> bool:  # coroutine — el llamador debe usa
 	carta quedaba con el aspecto de atacante para siempre sin haberse
 	agregado realmente al combate — nunca hacía daño, y como nada revertía
 	ese aspecto, parecía 'desaparecer'/quedar con un color raro."""
+	# Ya no acepta VIGILIA (2026-08-28, reemplaza el diseño de 2026-08-23 a
+	# pedido del usuario): declarar atacantes requiere haber pasado antes
+	# por el botón "Atacar" (GameManager.proceed_to_battle()), que es lo
+	# único que ahora termina Vigilia y empieza la Batalla Mitológica.
 	if current_phase != Constants.Phase.ATAQUE:
 		return false
 	if ally in attackers:
 		return false
-	var turn_mgr = get_node_or_null("/root/TurnManager")
-	if turn_mgr and turn_mgr.has_method("can_attack"):
-		var validation = turn_mgr.can_attack(ally)
-		if not validation.get("can_attack", true):
-			print("[GameManager] %s no puede atacar: %s" % [ally.name, validation.get("reason", "")])
-			return false
+	var validation = TurnManager.can_attack(ally)
+	if not validation.get("can_attack", true):
+		print("[GameManager] %s no puede atacar: %s" % [ally.name, validation.get("reason", "")])
+		return false
 	attackers.append(ally)
 	print("[GameManager] Atacante declarado: %s" % ally.name)
 
-	# Disparar habilidades "cuando ataque" (DAR 5.3.1). Se llama DIRECTO con
-	# 'await' (no por señal fire-and-forget) para que el trigger termine de
-	# resolverse antes de seguir — mismo motivo que en GoldManager._trigger_
-	# enter_play(). TriggerSystem aísla la oración correcta del texto para
-	# no re-disparar otro disparador de la misma carta (p.ej. "Al entrar").
-	var effect_ctrl = get_node_or_null("/root/EffectController")
-	if effect_ctrl:
-		effect_ctrl.emit_signal("on_card_attacks", active_player_id, ally)
-	await TriggerSystem._collect_triggers_for_event("on_attack", {
-		"player_id": active_player_id, "card": ally
-	})
+	# "Cuando ataque" (DAR 5.3.1) YA NO se dispara acá (2026-08-29, corrige
+	# exploit real reportado: declarar/desdeclarar el mismo Aliado varias
+	# veces antes de confirmar disparaba el trigger una vez POR CADA
+	# declare, generando Oro/robando cartas/etc. de más — p.ej. Lobo
+	# Sagrado, "Cuando ataques, genera un Oro por el turno", Oro infinito).
+	# Se dispara una sola vez por Aliado en confirm_attackers(), cuando el
+	# ataque ya es definitivo — ver ese comentario para el detalle.
 	return true
 
 
@@ -274,7 +276,9 @@ func undeclare_attacker(ally: Node) -> bool:
 	Ataque, antes de presionar ¿Paso? para confirmar a todos juntos.
 	No revierte el trigger 'cuando ataque' que ya se disparó (DAR: una vez
 	resuelto un trigger no se deshace) — solo saca a la carta del combate
-	que está por resolverse."""
+	que está por resolverse. Ya no acepta VIGILIA (2026-08-28): mismo
+	cambio que declare_attacker(), ahora solo se declara/deshace una vez
+	que la fase ya es Ataque."""
 	if current_phase != Constants.Phase.ATAQUE:
 		return false
 	if ally not in attackers:
@@ -284,7 +288,7 @@ func undeclare_attacker(ally: Node) -> bool:
 	return true
 
 
-func confirm_attackers() -> void:
+func confirm_attackers() -> void:  # coroutine — el llamador debe usar 'await'
 	"""Confirma los atacantes y pasa al paso de Bloqueo — o directo a Guerra
 	de Talismanes si el defensor no tiene ningún Aliado con el que bloquear
 	(hoy es siempre el caso mientras el oponente-bot no juegue Aliados)."""
@@ -292,11 +296,115 @@ func confirm_attackers() -> void:
 		# Sin atacantes, terminar batalla
 		_end_batalla()
 		return
+
+	# "Cuando ataque" (DAR 5.3.1) se dispara ACÁ, una sola vez por Aliado,
+	# no en declare_attacker() (2026-08-29, corrige exploit real: declarar/
+	# desdeclarar el mismo Aliado varias veces antes de confirmar disparaba
+	# el trigger una vez POR CADA declare — p.ej. Lobo Sagrado, "genera un
+	# Oro por el turno", permitía Oro infinito). 'attackers' ya es la lista
+	# final deduplicada — declare_attacker() rechaza duplicados y
+	# undeclare_attacker() los saca — así que cada Aliado dispara su propio
+	# 'cuando ataque' exactamente una vez acá, sin importar cuántas veces
+	# se declaró/desdeclaró antes de este punto.
+	for ally in attackers:
+		if is_instance_valid(ally):
+			EffectController.emit_signal("on_card_attacks", active_player_id, ally)
+			await TriggerSystem._collect_triggers_for_event("on_attack", {
+				"player_id": active_player_id, "card": ally
+			})
+			await _check_wielder_attack_triggers(ally, active_player_id)
+
+	# "Cuando ataques con tres o más Aliados..." (2026-08-30, p.ej. Sable de
+	# Napoleón) — condición sobre la CANTIDAD TOTAL de atacantes confirmados,
+	# no un trigger por Aliado individual (el loop de arriba dispara "cuando
+	# ataque" una vez por cada uno; esto es aparte, una sola vez).
+	_check_attack_count_triggers(active_player_id, attackers.size())
+
 	if not _defender_has_blockers():
 		print("[GameManager] Defensor sin Aliados para bloquear — saltando Bloqueo")
 		_change_phase(Constants.Phase.GUERRA_TALISMANES)
 	else:
 		_change_phase(Constants.Phase.BLOQUEO)
+
+
+func _check_wielder_attack_triggers(ally: Node, player_id: int) -> void:
+	"""'Cuando el portador ataque, si es de coste 1 o más, genera un Oro o
+	Roba una carta' (2026-08-30, p.ej. Garfio Pirata) — trigger propio de un
+	Arma equipada sobre el ataque de SU portador. El camino genérico
+	(TriggerSystem._collect_triggers_for_event) solo revisa el texto de la
+	carta que ataca, no el de sus Armas equipadas (mismo motivo por el que
+	_check_attack_count_triggers() existe aparte para Sable de Napoleón) —
+	se resuelve acá, directo, con el mismo criterio."""
+	if not is_instance_valid(ally):
+		return
+	var weapons = ally.get("equipped_weapons")
+	if not (weapons is Array):
+		return
+	for w in weapons:
+		if is_instance_valid(w) and _card_has_wielder_attack_choice(w):
+			await _resolve_wielder_attack_choice(w, ally, player_id)
+
+
+func _card_has_wielder_attack_choice(card: Node) -> bool:
+	var text: String = str(card.get("card_ability")) if card.get("card_ability") != null else ""
+	var lower := text.to_lower()
+	return ("cuando el portador ataque" in lower and "genera un oro" in lower and "roba una carta" in lower)
+
+
+func _resolve_wielder_attack_choice(weapon: Node, ally: Node, player_id: int) -> void:
+	if int(ally.get("card_cost")) < 1:
+		return
+	if player_id != 0:
+		return  # el bot no usa esta elección todavía
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return
+	var choose_gold: bool = await SelectionManager.await_two_choice(
+		main, weapon.card_name if weapon.get("card_name") else "Arma", "Generar un Oro", "Robar una carta")
+	if choose_gold:
+		if main._gold_manager:
+			main._gold_manager.generar_oros_virtuales(1)
+	else:
+		await ActionModule.draw(player_id, 1, "weapon_attack_trigger", true)
+
+
+func _check_attack_count_triggers(player_id: int, attacker_count: int) -> void:
+	"""'Cuando ataques con tres o más Aliados, las cartas que estén o sean
+	puestas en los Cementerios este turno pierden su habilidad hasta tu
+	próximo turno' (2026-08-30, p.ej. Sable de Napoleón). Se resuelve UNA
+	SOLA VEZ acá (no es un trigger por Aliado, es una condición sobre el
+	total de atacantes confirmados) — apenas se encuentra una fuente con
+	este texto, se aplica y se corta (no tiene sentido aplicar dos veces
+	aunque hubiera dos copias)."""
+	if attacker_count < 3:
+		return
+	var main = get_node_or_null("/root/Main")
+	if not main:
+		return
+	var fields = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo] if player_id == 0 \
+		else [main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
+	for field in fields:
+		if not field:
+			continue
+		for card in field.get_children():
+			if not is_instance_valid(card):
+				continue
+			var weapons = card.get("equipped_weapons")
+			if weapons is Array:
+				for w in weapons:
+					if is_instance_valid(w) and _card_has_attack_count_cemetery_silence(w):
+						CardManager.silence_all_cemetery_cards(player_id)
+						return
+			if _card_has_attack_count_cemetery_silence(card):
+				CardManager.silence_all_cemetery_cards(player_id)
+				return
+
+
+func _card_has_attack_count_cemetery_silence(card: Node) -> bool:
+	var text: String = str(card.get("card_ability")) if card.get("card_ability") != null else ""
+	var lower := text.to_lower()
+	return ("cuando ataques con tres o" in lower and "aliados" in lower
+		and "pierden su habilidad" in lower and "cementerio" in lower)
 
 
 func _defender_has_blockers() -> bool:
@@ -341,9 +449,7 @@ func pass_priority() -> void:
 	Esta función queda por compatibilidad pero no debe ser usada directamente.
 	"""
 	push_warning("[GameManager] pass_priority() llamada directamente — usar PriorityManager.pass_priority()")
-	var pm = get_node_or_null("/root/PriorityManager")
-	if pm:
-		pm.pass_priority()
+	PriorityManager.pass_priority()
 
 
 func _end_batalla() -> void:
@@ -371,13 +477,31 @@ func _process_fase_final() -> void:
 # CONDICIONES DE VICTORIA
 # =============================================================================
 func check_victory() -> void:
-	"""Verifica si algún jugador ha ganado"""
-	for i in range(players.size()):
-		var player = players[i]
-		if player.has_method("get_deck_count"):
-			if player.get_deck_count() <= 0:
-				_end_game(1 - i)  # El otro jugador gana
-				return
+	"""Verifica si algún jugador se quedó sin cartas en el Castillo (DAR
+	2.1 — perder por Castillo vacío).
+
+	2026-08-31, corrección de un bug real (reportado por el usuario: desterró
+	5 cartas del tope de un Castillo con Aho y el Castillo rival quedó en 0,
+	pero el juego nunca declaró ganada la partida): 'players' son dos
+	Node.new() vacíos (ver GameBootstrap._prepare_game(): 'Player1'/
+	'Player2' se crean sin script propio), así que
+	player.has_method('get_deck_count') daba SIEMPRE false — esta función
+	nunca disparó una victoria, ni siquiera en su único llamador real
+	(ZoneManager.draw_card() al intentar robar con el mazo ya vacío). El
+	camino de victoria por DAÑO DE COMBATE nunca pasó por acá — BattleManager
+	calcula el mazo vacío él mismo y llama GameManager.player_loses()
+	directo, por eso ese sí funcionaba. Se lee el tamaño real de
+	player_deck/opponent_deck en Main (mismo patrón que el resto de
+	autoloads para llegar a Main) en vez de los Nodos dummy."""
+	if not is_game_active:
+		return
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return
+	if main.player_deck.is_empty():
+		player_loses(0, "deck_empty")
+	elif main.opponent_deck.is_empty():
+		player_loses(1, "deck_empty")
 
 
 func _end_game(winner_id: int) -> void:
@@ -394,6 +518,8 @@ func player_loses(player_id: int, reason: String) -> void:
 	"""Marca que un jugador ha perdido la partida (DAR 2.1)
 	reason puede ser: "deck_empty", "castle_destroyed", "concede"
 	"""
+	if not is_game_active:
+		return  # ya terminó por otro camino (p.ej. combate y check_victory casi a la vez)
 	var winner_id = 1 - player_id
 	print("[GameManager] Jugador %d pierde por: %s" % [player_id + 1, reason])
 	emit_signal("player_lost", player_id, reason)

@@ -1,4 +1,4 @@
-# game/scripts/ui/UIManager.gd
+# game/scripts/ui/hud/UIManager.gd
 extends Node
 ## UIManager — Único responsable de actualizar etiquetas y contadores de la UI.
 ## Main.gd no escribe Labels directamente; llama a estos métodos o UIManager
@@ -82,27 +82,17 @@ func setup(refs: Dictionary) -> void:
 
 func _connect_signals() -> void:
 	"""Conecta señales de singletons para actualizaciones reactivas."""
-	var cm = get_node_or_null("/root/CardManager")
-	if cm:
-		if cm.has_signal("deck_count_changed") and not cm.deck_count_changed.is_connected(update_castillo_count):
-			cm.deck_count_changed.connect(update_castillo_count)
-		if cm.has_signal("cemetery_count_changed") and not cm.cemetery_count_changed.is_connected(update_cementerio_count):
-			cm.cemetery_count_changed.connect(update_cementerio_count)
-		if cm.has_signal("exile_count_changed") and not cm.exile_count_changed.is_connected(update_destierro_count):
-			cm.exile_count_changed.connect(update_destierro_count)
+	if not CardManager.deck_count_changed.is_connected(update_castillo_count):
+		CardManager.deck_count_changed.connect(update_castillo_count)
+	if not CardManager.cemetery_count_changed.is_connected(update_cementerio_count):
+		CardManager.cemetery_count_changed.connect(update_cementerio_count)
+	if not CardManager.exile_count_changed.is_connected(update_destierro_count):
+		CardManager.exile_count_changed.connect(update_destierro_count)
 
-	var gs = get_node_or_null("/root/GameState")
-	if gs:
-		if gs.has_signal("oro_reserva_changed") and not gs.oro_reserva_changed.is_connected(update_oro_reserva):
-			gs.oro_reserva_changed.connect(update_oro_reserva)
-		if gs.has_signal("oro_pagado_changed") and not gs.oro_pagado_changed.is_connected(update_oro_pagado):
-			gs.oro_pagado_changed.connect(update_oro_pagado)
-
-	# Sistema "Puedes" — ActionPipeline solicita confirmación del jugador
-	var ap = get_node_or_null("/root/ActionPipeline")
-	if ap and ap.has_signal("puedes_confirm_requested"):
-		if not ap.puedes_confirm_requested.is_connected(_on_puedes_confirm_requested):
-			ap.puedes_confirm_requested.connect(_on_puedes_confirm_requested)
+	if not GameState.oro_reserva_changed.is_connected(update_oro_reserva):
+		GameState.oro_reserva_changed.connect(update_oro_reserva)
+	if not GameState.oro_pagado_changed.is_connected(update_oro_pagado):
+		GameState.oro_pagado_changed.connect(update_oro_pagado)
 
 
 # =============================================================================
@@ -180,81 +170,6 @@ func update_timer(seconds_remaining: int) -> void:
 func set_phase_text(text: String) -> void:
 	"""Escribe texto literal en el label de fase (para 'Mulligan', 'Sorteo', 'VICTORIA!', etc.)."""
 	_set_label(phase_label, text)
-
-
-# =============================================================================
-# SISTEMA "PUEDES" — Diálogo de confirmación de habilidades opcionales
-# =============================================================================
-func _on_puedes_confirm_requested(ability_data: Dictionary, _context: Dictionary) -> void:
-	"""Recibe la señal de ActionPipeline y muestra el diálogo modal."""
-	_show_puedes_dialog(ability_data)
-
-
-func _show_puedes_dialog(ability_data: Dictionary) -> void:
-	"""Crea un overlay modal que pregunta al jugador si desea activar la habilidad opcional."""
-	var ap := get_node_or_null("/root/ActionPipeline")
-	if not ap:
-		return
-
-	# Limpiar diálogos previos si los hay
-	for child in _dialog_layer.get_children():
-		child.queue_free()
-
-	var overlay := ColorRect.new()
-	overlay.color = Color(0.0, 0.0, 0.0, 0.55)
-	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_dialog_layer.add_child(overlay)
-
-	var panel := PanelContainer.new()
-	panel.set_anchor(SIDE_LEFT,   0.5)
-	panel.set_anchor(SIDE_TOP,    0.5)
-	panel.set_anchor(SIDE_RIGHT,  0.5)
-	panel.set_anchor(SIDE_BOTTOM, 0.5)
-	panel.set_offset(SIDE_LEFT,  -195)
-	panel.set_offset(SIDE_TOP,   -80)
-	panel.set_offset(SIDE_RIGHT,  195)
-	panel.set_offset(SIDE_BOTTOM, 80)
-	overlay.add_child(panel)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
-	panel.add_child(vbox)
-
-	var title_lbl := Label.new()
-	title_lbl.text = "¿Deseas activar esta habilidad?"
-	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title_lbl.add_theme_font_size_override("font_size", 14)
-	vbox.add_child(title_lbl)
-
-	var effect_lbl := Label.new()
-	var effect_text: String = ability_data.get("effect_text", ability_data.get("raw_text", ""))
-	effect_lbl.text = effect_text.substr(0, 100)
-	effect_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	effect_lbl.add_theme_color_override("font_color", Color(0.75, 0.75, 0.75))
-	effect_lbl.add_theme_font_size_override("font_size", 11)
-	effect_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(effect_lbl)
-
-	var btn_row := HBoxContainer.new()
-	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	btn_row.add_theme_constant_override("separation", 24)
-	vbox.add_child(btn_row)
-
-	var btn_yes := Button.new()
-	btn_yes.text = "Sí, activar"
-	btn_yes.pressed.connect(func():
-		overlay.queue_free()
-		ap.respond_puedes(true)
-	)
-	btn_row.add_child(btn_yes)
-
-	var btn_no := Button.new()
-	btn_no.text = "No"
-	btn_no.pressed.connect(func():
-		overlay.queue_free()
-		ap.respond_puedes(false)
-	)
-	btn_row.add_child(btn_no)
 
 
 # =============================================================================

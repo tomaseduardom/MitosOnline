@@ -23,37 +23,19 @@ func _init() -> void:
 
 
 func _init_keyword_map() -> void:
-	"""Inicializa el mapeo de texto → Constants.Keyword"""
+	"""Inicializa el mapeo de texto → Constants.Keyword.
+	Solo keywords reales de Mitos y Leyendas (corrección 2026-08-20) —
+	"Inmune a X"/"portar múltiples armas" son texto libre, no keywords."""
 	KEYWORD_MAP = {
-		# Nombres exactos en español
 		"furia": Constants.Keyword.FURIA,
 		"imbloqueable": Constants.Keyword.IMBLOQUEABLE,
 		"indestructible": Constants.Keyword.INDESTRUCTIBLE,
 		"indesterrable": Constants.Keyword.INDESTERRABLE,
-		"golpe primero": Constants.Keyword.GOLPE_PRIMERO,
-		"doble golpe": Constants.Keyword.DOBLE_GOLPE,
-		"vigilancia": Constants.Keyword.VIGILANCIA,
-		"alcance": Constants.Keyword.ALCANCE,
-		"arrollar": Constants.Keyword.ARROLLAR,
 		"única": Constants.Keyword.UNICA,
 		"unica": Constants.Keyword.UNICA,
 		"exhumar": Constants.Keyword.EXHUMAR,
-		"regenerar": Constants.Keyword.REGENERAR,
-		"veloz": Constants.Keyword.VELOZ,
-		"evasión": Constants.Keyword.EVASION,
-		"evasion": Constants.Keyword.EVASION,
-		"escudo": Constants.Keyword.ESCUDO,
-		"anular": Constants.Keyword.ANULAR,
-		"inmune a talismanes": Constants.Keyword.INMUNE_TALISMANES,
-		"inmune a habilidades": Constants.Keyword.INMUNE_HABILIDADES,
-		"portar múltiples armas": Constants.Keyword.PORTAR_MULTIPLE,
-		# Variantes en inglés (compatibilidad)
-		"haste": Constants.Keyword.FURIA,
-		"unblockable": Constants.Keyword.IMBLOQUEABLE,
-		"first strike": Constants.Keyword.GOLPE_PRIMERO,
-		"double strike": Constants.Keyword.DOBLE_GOLPE,
-		"trample": Constants.Keyword.ARROLLAR,
-		"reach": Constants.Keyword.ALCANCE,
+		"errante": Constants.Keyword.ERRANTE,
+		"retador": Constants.Keyword.RETADOR,
 	}
 
 
@@ -64,11 +46,8 @@ func _init_keyword_patterns() -> void:
 		Constants.Keyword.IMBLOQUEABLE: ["no puede ser bloqueado", "no puede ser bloquead"],
 		Constants.Keyword.INDESTRUCTIBLE: ["no puede ser destruid", "no es destruid"],
 		Constants.Keyword.INDESTERRABLE: ["no puede ser desterrad"],
-		Constants.Keyword.ARROLLAR: ["daño excedente", "daño sobrante al castillo"],
-		Constants.Keyword.REGENERAR: ["vuelve del cementerio", "regresa del cementerio"],
-		Constants.Keyword.INMUNE_TALISMANES: ["no puede ser objetivo de talismanes"],
-		Constants.Keyword.INMUNE_HABILIDADES: ["no puede ser objetivo de habilidades"],
-		Constants.Keyword.ANULAR: ["anula", "contrarresta", "cancela"],
+		Constants.Keyword.ERRANTE: ["errante"],
+		Constants.Keyword.RETADOR: ["retador"],
 	}
 
 # =============================================================================
@@ -91,9 +70,27 @@ var _removed_keywords: Dictionary = {}
 ## {card_instance_id: [{source, duration}]}
 var _silenced_cards: Dictionary = {}
 
+## Bloqueo de habilidad POR NOMBRE, no por instancia — DAR "nombra una
+## carta para que pierda su habilidad" (2026-08-29, p.ej. Alicia en
+## Wonderland: "en todas las Zonas mientras este Aliado esté en juego").
+## A diferencia de _silenced_cards (una carta puntual ya en juego), esto
+## afecta CUALQUIER copia del nombre, en cualquier zona, incluso una que
+## todavía no exista como Node (una copia en el mazo que se robe después).
+## {nombre_lower: [source_node, ...]} — no se limpia con un unregister
+## explícito: is_name_locked() valida en cada consulta si el source sigue
+## vivo y en juego (auto-expira solo cuando el que nombró sale de juego).
+var _named_ability_locks: Dictionary = {}
+
 
 ## Cache de keywords parseados por carta {card_instance_id: Array}
 var _parsed_cache: Dictionary = {}
+
+
+## "Tus Aliados que porten Arma no pueden perder su habilidad" (2026-08-30,
+## p.ej. Manuel Bulnes) — lista de fuentes activas de esta protección.
+## Array[Node] — sin unregister explícito, se auto-limpia comparando
+## is_instance_valid()/is_in_play() en cada consulta.
+var _weapon_wielder_silence_immunity_sources: Array = []
 
 
 func _ready() -> void:
@@ -214,34 +211,14 @@ func _apply_keyword_flags(card: Node, keywords: Array) -> void:
 				_set_card_flag(card, "is_indestructible", true)
 			Keyword.INDESTERRABLE:
 				_set_card_flag(card, "is_unbanishable", true)
-			Keyword.GOLPE_PRIMERO:
-				_set_card_flag(card, "has_first_strike", true)
-			Keyword.DOBLE_GOLPE:
-				_set_card_flag(card, "has_double_strike", true)
-			Keyword.VIGILANCIA:
-				_set_card_flag(card, "has_vigilance", true)
-			Keyword.ALCANCE:
-				_set_card_flag(card, "has_reach", true)
-			Keyword.ARROLLAR:
-				_set_card_flag(card, "has_trample", true)
 			Keyword.UNICA:
 				_set_card_flag(card, "is_unique", true)
 			Keyword.EXHUMAR:
 				_set_card_flag(card, "has_exhume", true)
-			Keyword.REGENERAR:
-				_set_card_flag(card, "has_regenerate", true)
-			Keyword.VELOZ:
-				_set_card_flag(card, "is_swift", true)
-			Keyword.EVASION:
-				_set_card_flag(card, "has_evasion", true)
-			Keyword.ESCUDO:
-				_set_card_flag(card, "has_shield", true)
-			Keyword.INMUNE_TALISMANES:
-				_set_card_flag(card, "immune_to_talismans", true)
-			Keyword.INMUNE_HABILIDADES:
-				_set_card_flag(card, "immune_to_abilities", true)
-			Keyword.PORTAR_MULTIPLE:
-				_set_card_flag(card, "can_wield_multiple", true)
+			Keyword.ERRANTE:
+				_set_card_flag(card, "is_errante", true)
+			Keyword.RETADOR:
+				_set_card_flag(card, "is_retador", true)
 
 
 func _set_card_flag(card: Node, flag_name: String, value: bool) -> void:
@@ -307,16 +284,24 @@ func _check_inherent_keyword(card: Node, keyword: int) -> bool:
 
 	Orden de verificación:
 	1. Cache de keywords parseados (más eficiente)
-	2. Método card.has_keyword() si existe
+	2. Método card.has_keyword() si existe — ya incluye las keywords que
+	   transmiten las Armas equipadas (ver Card.has_keyword(), 2026-08-24)
 	3. Array de keywords en la carta
 	4. Flags booleanos directos
 	5. Parsing en tiempo real (fallback)
 	"""
 	var card_id = card.get_instance_id()
 
-	# Método 1: Verificar cache (resultado de scan_and_apply_keywords)
-	if _parsed_cache.has(card_id):
-		return keyword in _parsed_cache[card_id]
+	# Método 1: Verificar cache (resultado de scan_and_apply_keywords) — solo
+	# como atajo cuando SÍ encuentra el keyword. El cache son las keywords
+	# propias de la carta, calculadas una vez al entrar en juego, y no se
+	# actualiza si después se le equipa un Arma — un "no está en cache" acá
+	# NO es definitivo, hay que seguir a Método 2 (2026-08-26: Cañón Helios
+	# daba Furia al portador, pero este corte impedía que TurnManager.
+	# can_attack() lo viera nunca, porque nunca llegaba a Método 2, que sí
+	# revisa las Armas equipadas).
+	if _parsed_cache.has(card_id) and keyword in _parsed_cache[card_id]:
+		return true
 
 	# Método 2: card.has_keyword()
 	if card.has_method("has_keyword"):
@@ -357,20 +342,15 @@ func _check_inherent_keyword(card: Node, keyword: int) -> bool:
 				return true
 			if card.get_meta("is_unbanishable", false):
 				return true
-		Keyword.GOLPE_PRIMERO:
-			if card.get("has_first_strike") == true:
+		Keyword.ERRANTE:
+			if card.get("is_errante") == true:
 				return true
-			if card.get_meta("has_first_strike", false):
+			if card.get_meta("is_errante", false):
 				return true
-		Keyword.ARROLLAR:
-			if card.get("has_trample") == true:
+		Keyword.RETADOR:
+			if card.get("is_retador") == true:
 				return true
-			if card.get_meta("has_trample", false):
-				return true
-		Keyword.ALCANCE:
-			if card.get("has_reach") == true:
-				return true
-			if card.get_meta("has_reach", false):
+			if card.get_meta("is_retador", false):
 				return true
 
 	# Método 5: Parsing en tiempo real (fallback más lento)
@@ -393,19 +373,20 @@ func can_attack_immediately(card: Node) -> bool:
 
 
 func can_be_blocked(attacker: Node, blocker: Node = null) -> bool:
-	"""DAR Sección 8: Verifica si un atacante puede ser bloqueado
-
-	- Imbloqueable: No puede ser bloqueado
-	- Alcance: Puede bloquear a Imbloqueables
-	"""
+	"""DAR Sección 8: Verifica si un atacante puede ser bloqueado.
+	Imbloqueable: no puede ser bloqueado, sin excepción por keyword — en
+	Mitos y Leyendas no existe una keyword general tipo 'Alcance'. Si algún
+	Aliado puede bloquear Imbloqueables, lo dice su propio texto."""
 	if not has_keyword(attacker, Keyword.IMBLOQUEABLE):
 		return true  # Atacante normal, puede ser bloqueado
 
-	# Atacante es Imbloqueable
-	if blocker != null and has_keyword(blocker, Keyword.ALCANCE):
-		return true  # Bloqueador con Alcance puede bloquearlo
+	# Atacante es Imbloqueable — solo lo bloquea algo cuyo propio texto lo permita
+	if blocker != null and blocker.get("card_ability") != null:
+		var blocker_text: String = blocker.card_ability.to_lower()
+		if "bloquear" in blocker_text and "imbloqueable" in blocker_text:
+			return true
 
-	return false  # Imbloqueable y sin bloqueador con Alcance
+	return false
 
 
 func can_be_destroyed(card: Node) -> bool:
@@ -413,12 +394,54 @@ func can_be_destroyed(card: Node) -> bool:
 	return not has_keyword(card, Keyword.INDESTRUCTIBLE)
 
 
+func register_weapon_wielder_silence_immunity(source: Node) -> void:
+	"""'Tus Aliados que porten Arma no pueden perder su habilidad' (2026-08-30,
+	p.ej. Manuel Bulnes) — mientras 'source' siga en juego, protege de
+	silence_card() a los Aliados equipados con un Arma que controle el
+	MISMO jugador que controla 'source' (no a los del rival)."""
+	if not is_instance_valid(source):
+		return
+	if source not in _weapon_wielder_silence_immunity_sources:
+		_weapon_wielder_silence_immunity_sources.append(source)
+
+
+func _is_protected_from_silence_by_weapon(card: Node) -> bool:
+	"""Consulta acumulativa de register_weapon_wielder_silence_immunity() —
+	auto-limpia fuentes inválidas/fuera de juego en el camino."""
+	if not is_instance_valid(card):
+		return false
+	var weapons = card.get("equipped_weapons")
+	if not (weapons is Array) or weapons.is_empty():
+		return false
+	var card_controller: int = card.controller_id if card.get("controller_id") != null else -1
+	var still_valid: Array = []
+	var protected_by_weapon := false
+	for source in _weapon_wielder_silence_immunity_sources:
+		if not is_instance_valid(source) or not source.is_in_play():
+			continue
+		still_valid.append(source)
+		var source_controller: int = source.controller_id if source.get("controller_id") != null else -2
+		if source_controller == card_controller:
+			protected_by_weapon = true
+	_weapon_wielder_silence_immunity_sources = still_valid
+	return protected_by_weapon
+
+
 func silence_card(card: Node, source: Node = null, duration: String = "permanent") -> void:
 	"""Silencia una carta: pierde todas sus keywords (vía remove_keyword, así
 	respeta la misma limpieza por duración/salida de juego que cualquier otra
 	remoción) y deja de disparar sus habilidades activadas/disparadas — eso lo
-	filtra TriggerSystem._check_trigger_conditions() consultando is_silenced()."""
+	filtra TriggerSystem._check_trigger_conditions() consultando is_silenced().
+	Respeta la protección de 'Aliados que porten Arma no pueden perder su
+	habilidad' (2026-08-30, Manuel Bulnes) y la de 'prevenir que una carta
+	sea afectada por un efecto oponente' (2026-08-30, Estaca) — si
+	cualquiera de las dos aplica, no hace nada."""
 	if not is_instance_valid(card):
+		return
+	if _is_protected_from_silence_by_weapon(card):
+		print("[KeywordManager] %s no pierde su habilidad — protegido por porta Arma" % _get_card_name(card))
+		return
+	if EffectController.try_consume_opponent_effect_prevention(card, source):
 		return
 	var card_id = card.get_instance_id()
 	if not _silenced_cards.has(card_id):
@@ -429,14 +452,69 @@ func silence_card(card: Node, source: Node = null, duration: String = "permanent
 	print("[KeywordManager] %s fue silenciada (fuente: %s)" % [
 		_get_card_name(card), _get_card_name(source) if source else "efecto"
 	])
+	if card.has_method("_refresh_disabled_rotation"):
+		card._refresh_disabled_rotation()
 
 
 func is_silenced(card: Node) -> bool:
-	"""Verifica si una carta está silenciada (no debe disparar habilidades)."""
+	"""Verifica si una carta está silenciada (no debe disparar habilidades).
+	Incluye el silencio por instancia (_silenced_cards) Y el bloqueo por
+	nombre (_named_ability_locks, 2026-08-29) — ambos comparten el mismo
+	indicador visual (giro 180°, ver Card._refresh_disabled_rotation()) y el
+	mismo choke point real (TriggerSystem._check_trigger_conditions())."""
 	if not is_instance_valid(card):
 		return false
 	var entries = _silenced_cards.get(card.get_instance_id(), [])
-	return not entries.is_empty()
+	if not entries.is_empty():
+		return true
+	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else ""
+	if card_name.is_empty():
+		return false
+	return is_name_locked(card_name)
+
+
+func lock_ability_by_name(card_name: String, source: Node) -> void:
+	"""Registra que TODAS las copias de 'card_name' (en cualquier zona,
+	presentes o futuras) pierden su habilidad mientras 'source' siga vivo y
+	en juego — DAR 'nombra una carta para que pierda su habilidad' (2026-08-29,
+	p.ej. Alicia en Wonderland). No hace falta un unregister explícito:
+	is_name_locked() descarta solo las fuentes que ya no son válidas."""
+	if card_name.is_empty() or not is_instance_valid(source):
+		return
+	var key := card_name.to_lower()
+	if not _named_ability_locks.has(key):
+		_named_ability_locks[key] = []
+	_named_ability_locks[key].append(source)
+	print("[KeywordManager] '%s' pierde su habilidad en todas las Zonas (fuente: %s)" % [
+		card_name, _get_card_name(source)
+	])
+
+
+func is_name_locked(card_name: String) -> bool:
+	"""Verifica si el nombre de carta dado está bloqueado por algún
+	lock_ability_by_name() todavía vigente — descarta en el camino las
+	fuentes inválidas o que ya salieron de juego (auto-limpieza perezosa,
+	sin necesidad de un hook explícito de 'on_left_play' de la fuente)."""
+	var key := card_name.to_lower()
+	if not _named_ability_locks.has(key):
+		return false
+	var sources: Array = _named_ability_locks[key]
+	var still_valid: Array = []
+	var any_active := false
+	for source in sources:
+		if not is_instance_valid(source):
+			continue
+		var zone = source.get("current_zone")
+		if zone != null and zone not in Constants.ZONES_IN_PLAY:
+			continue
+		still_valid.append(source)
+		any_active = true
+	if still_valid.size() != sources.size():
+		if still_valid.is_empty():
+			_named_ability_locks.erase(key)
+		else:
+			_named_ability_locks[key] = still_valid
+	return any_active
 
 
 func can_be_exiled(card: Node) -> bool:
@@ -444,24 +522,14 @@ func can_be_exiled(card: Node) -> bool:
 	return not has_keyword(card, Keyword.INDESTERRABLE)
 
 
-func has_first_strike(card: Node) -> bool:
-	"""Verifica Golpe Primero para ordenamiento de daño"""
-	return has_keyword(card, Keyword.GOLPE_PRIMERO)
+func is_errante(card: Node) -> bool:
+	"""Verifica Errante (solo 1 copia de esta carta en juego a la vez)"""
+	return has_keyword(card, Keyword.ERRANTE)
 
 
-func has_double_strike(card: Node) -> bool:
-	"""Verifica Doble Golpe"""
-	return has_keyword(card, Keyword.DOBLE_GOLPE)
-
-
-func has_trample(card: Node) -> bool:
-	"""Verifica Arrollar (daño excedente al Castillo)"""
-	return has_keyword(card, Keyword.ARROLLAR)
-
-
-func has_vigilance(card: Node) -> bool:
-	"""Verifica Vigilancia (no va a Línea de Ataque)"""
-	return has_keyword(card, Keyword.VIGILANCIA)
+func is_retador(card: Node) -> bool:
+	"""Verifica Retador (el atacante elige qué Aliado enemigo debe bloquearlo)"""
+	return has_keyword(card, Keyword.RETADOR)
 
 
 # =============================================================================
@@ -578,6 +646,11 @@ func _cleanup_by_duration(duration: String) -> void:
 		entries = entries.filter(func(e): return e.duration != duration)
 		if entries.is_empty():
 			_silenced_cards.erase(card_id)
+			# Ya no está silenciada — restaurar el giro visual si tampoco
+			# está convertida (2026-08-26, ver Card._refresh_disabled_rotation).
+			var card_node = instance_from_id(card_id)
+			if card_node and is_instance_valid(card_node) and card_node.has_method("_refresh_disabled_rotation"):
+				card_node._refresh_disabled_rotation()
 		else:
 			_silenced_cards[card_id] = entries
 

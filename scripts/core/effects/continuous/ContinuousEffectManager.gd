@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## ContinuousEffectManager - Gestiona efectos continuos y modificadores (Sección 7.2)
 ## Registra modificadores de cartas en juego y recalcula valores dinámicamente
 
@@ -90,8 +90,17 @@ const NEGATIVE_PRIORITY_ENABLED: bool = true
 # =============================================================================
 var _game_board: Node = null
 
+## Módulos extraídos (Fase 4 de reestructuración)
+var _keyword_query: KeywordQuery
+var _visual_sync: ContinuousVisualSync
+
 
 func _ready() -> void:
+	_keyword_query = KeywordQuery.new()
+	_keyword_query.setup(self)
+	_visual_sync = ContinuousVisualSync.new()
+	_visual_sync.setup(self)
+
 	# Inicializar índices por tipo
 	for type in ModifierType.values():
 		_modifiers_by_type[type] = []
@@ -123,10 +132,8 @@ func _connect_signals() -> void:
 	# que ningún efecto continuo se registraba/limpiaba automáticamente al
 	# entrar o salir de juego. EffectController sí emite estos eventos de
 	# verdad (on_card_entered_play/on_card_left_play).
-	var effect_ctrl = get_node_or_null("/root/EffectController")
-	if effect_ctrl:
-		effect_ctrl.on_card_entered_play.connect(_on_effect_controller_card_entered)
-		effect_ctrl.on_card_left_play.connect(_on_effect_controller_card_left)
+	EffectController.on_card_entered_play.connect(_on_effect_controller_card_entered)
+	EffectController.on_card_left_play.connect(_on_effect_controller_card_left)
 
 
 func _on_effect_controller_card_entered(_player_id: int, card: Node, zone: int) -> void:
@@ -188,6 +195,8 @@ func register_modifier(params: Dictionary) -> String:
 		"filter": params.get("filter", {}),
 		"keywords_add": params.get("keywords_add", []),
 		"keywords_remove": params.get("keywords_remove", []),
+		"protection_type": params.get("protection_type", "ALL"),
+		"restriction_type": params.get("restriction_type", ""),
 		"description": params.get("description", ""),
 		"registered_at": Time.get_unix_time_from_system(),
 		"is_active": true
@@ -219,8 +228,18 @@ func register_modifier(params: Dictionary) -> String:
 	emit_signal("modifier_registered", modifier)
 	print("[ContinuousEffectManager] Modificador registrado: %s (%s)" % [modifier_id, modifier.description])
 
-	# Recalcular y actualizar visuales de las cartas afectadas
-	call_deferred("_update_affected_cards_visuals", targets, modifier.stat)
+	# Recalcular y actualizar visuales de las cartas afectadas. Con target
+	# dinámico (ALL/ALLIES/ENEMIES/OTHER, un String) _resolve_targets()
+	# devuelve vacío a propósito — se resuelve carta por carta en
+	# _get_applicable_modifiers(), no acá — así que sin esto el badge de
+	# Fuerza de los Aliados YA en juego nunca se refrescaba al entrar un
+	# aura nueva (2026-08-25, confirmado con Patria Vieja: el bonus se
+	# calculaba bien pero no se veía hasta que algo más recalculaba esa
+	# carta puntual).
+	var visual_targets: Array = targets
+	if targets.is_empty() and modifier.target is String:
+		visual_targets = _get_all_cards_in_play()
+	_visual_sync.call_deferred("update_affected_cards_visuals", visual_targets, modifier.stat)
 
 	return modifier_id
 
@@ -261,8 +280,12 @@ func unregister_modifier(modifier_id: String) -> bool:
 	emit_signal("modifier_removed", modifier_id)
 	print("[ContinuousEffectManager] Modificador removido: %s" % modifier_id)
 
-	# Recalcular y actualizar visuales de las cartas afectadas
-	call_deferred("_update_affected_cards_visuals", targets, stat)
+	# Recalcular y actualizar visuales de las cartas afectadas — mismo
+	# motivo que en register_modifier() para target dinámico (String).
+	var visual_targets: Array = targets
+	if targets.is_empty() and modifier.target is String:
+		visual_targets = _get_all_cards_in_play()
+	_visual_sync.call_deferred("update_affected_cards_visuals", visual_targets, stat)
 
 	return true
 
@@ -420,61 +443,17 @@ func _get_modified_stat(card: Node, stat: String) -> int:
 			var bonus_diff = current_value - previous_value
 			if bonus_diff > 0:
 				emit_signal("strength_bonus_gained", card, bonus_diff, current_value, last_source_name)
-				_notify_card_visual_update(card, "strength", base_value, current_value, bonus_diff)
+				_visual_sync.notify_card_visual_update(card, "strength", base_value, current_value, bonus_diff)
 			elif bonus_diff < 0:
 				emit_signal("strength_bonus_lost", card, abs(bonus_diff), current_value, last_source_name)
-				_notify_card_visual_update(card, "strength", base_value, current_value, bonus_diff)
+				_visual_sync.notify_card_visual_update(card, "strength", base_value, current_value, bonus_diff)
 
 		# Señales específicas para coste
 		elif stat == "cost":
 			emit_signal("cost_modified", card, previous_value, current_value)
-			_notify_card_visual_update(card, "cost", base_value, current_value, current_value - previous_value)
+			_visual_sync.notify_card_visual_update(card, "cost", base_value, current_value, current_value - previous_value)
 
 	return current_value
-
-
-func _notify_card_visual_update(card: Node, stat: String, base_value: int, modified_value: int, diff: int) -> void:
-	"""Notifica a la carta que actualice su visualización
-
-	Intenta llamar directamente al método de la carta si existe.
-	"""
-	if card == null or not is_instance_valid(card):
-		return
-
-	# Intentar llamar método de actualización visual en la carta
-	if card.has_method("update_stat_display"):
-		card.update_stat_display(stat, base_value, modified_value)
-
-	elif card.has_method("set_modified_strength") and stat == "strength":
-		card.set_modified_strength(modified_value)
-
-	elif card.has_method("set_modified_cost") and stat == "cost":
-		card.set_modified_cost(modified_value)
-
-	# Mostrar indicador visual de cambio
-	if card.has_method("show_stat_change_indicator"):
-		var color = Color.GREEN if diff > 0 else Color.RED
-		card.show_stat_change_indicator(stat, diff, color)
-
-	# Log para CombatLog
-	var combat_log = get_node_or_null("/root/CombatLog")
-	if combat_log:
-		var card_name = _get_card_name(card)
-		var sign_str = "+" if diff > 0 else ""
-		var action_type = "buff" if diff > 0 else "debuff"
-
-		combat_log.add_entry(action_type, "%s: %s %s%d (ahora %d)" % [
-			combat_log.format_card(card_name),
-			stat.to_upper(),
-			sign_str,
-			diff,
-			modified_value
-		], {
-			"card": card_name,
-			"stat": stat,
-			"diff": diff,
-			"new_value": modified_value
-		})
 
 
 func _get_base_stat(card: Node, stat: String) -> int:
@@ -549,20 +528,28 @@ func _card_matches_global_target(card: Node, target_type: String, modifier: Dict
 			return _card_matches_filter(card, filter)
 
 		"ALLIES", "ALIADOS":
-			# Misma mitología/facción que la fuente
-			if source and card:
-				var source_faction = _get_card_faction(source)
-				var card_faction = _get_card_faction(card)
-				if source_faction == card_faction:
+			# Mismo controlador que la fuente (2026-08-24): antes esto comparaba
+			# mitologia/faccion, no dueno real -- "Tus Aliados" en el texto real
+			# de las cartas significa "los que tu controlas", sin importar su
+			# mitologia; con la comparacion vieja, un aura como la de Patria Vieja
+			# habria afectado a Aliados rivales de la misma mitologia y ninguno de
+			# los propios de otra.
+			# EN JUEGO (2026-09-02, bug reportado por el usuario: Sable de
+			# Napoleón le daba Fuerza a Aliados en la MANO) — "Tus Aliados"
+			# significa los que controlás EN JUEGO, nunca los de la mano/
+			# Castillo/Cementerio. _is_card_in_play() ya existía (usado solo
+			# para registrar/desregistrar la fuente al entrar/salir de juego
+			# ella misma) pero nunca se consultaba acá, del lado del OBJETIVO.
+			if source and card and _is_card_in_play(card):
+				if _get_card_owner(source) == _get_card_owner(card):
 					return _card_matches_filter(card, filter)
 			return false
 
 		"ENEMIES", "ENEMIGOS":
-			# Diferente mitología/facción
-			if source and card:
-				var source_faction = _get_card_faction(source)
-				var card_faction = _get_card_faction(card)
-				if source_faction != card_faction:
+			# Distinto controlador que la fuente (mismo motivo que ALLIES),
+			# y mismo chequeo de "en juego" agregado arriba.
+			if source and card and _is_card_in_play(card):
+				if _get_card_owner(source) != _get_card_owner(card):
 					return _card_matches_filter(card, filter)
 			return false
 
@@ -757,179 +744,30 @@ func _apply_operation(current: int, value: int, operation: String) -> int:
 
 
 # =============================================================================
-# KEYWORDS Y HABILIDADES
+# KEYWORDS, HABILIDADES Y RESTRICCIONES (implementación en KeywordQuery.gd)
 # =============================================================================
 func get_active_keywords(card: Node) -> Array:
-	"""Obtiene todas las keywords activas de una carta
-
-	Incluye keywords base + agregadas por modificadores - removidas
-
-	Args:
-		card: Nodo de la carta
-
-	Returns: Array de keywords activas
-	"""
-	var keywords: Array = []
-
-	# Keywords base de la carta
-	if card.get("keywords"):
-		keywords = card.keywords.duplicate()
-	elif card.get("base_keywords"):
-		keywords = card.base_keywords.duplicate()
-
-	# Obtener modificadores de keywords
-	var applicable = _get_applicable_modifiers(card, "")
-
-	for mod in applicable:
-		if not _is_modifier_active(mod):
-			continue
-
-		if mod.type != ModifierType.KEYWORDS:
-			continue
-
-		# Agregar keywords
-		for kw in mod.keywords_add:
-			if kw not in keywords:
-				keywords.append(kw)
-
-		# Remover keywords
-		for kw in mod.keywords_remove:
-			keywords.erase(kw)
-
-	return keywords
+	return _keyword_query.get_active_keywords(card)
 
 
 func has_keyword(card: Node, keyword) -> bool:
-	"""Verifica si una carta tiene una keyword activa
-
-	Args:
-		card: Nodo de la carta
-		keyword: Keyword a verificar (int enum o String)
-
-	Returns: true si tiene la keyword
-	"""
-	var active = get_active_keywords(card)
-
-	for kw in active:
-		if kw == keyword:
-			return true
-		# Comparar string con enum
-		if kw is String and keyword is int:
-			if kw.to_upper() == Constants.Keyword.keys()[keyword]:
-				return true
-		if kw is int and keyword is String:
-			if Constants.Keyword.keys()[kw] == keyword.to_upper():
-				return true
-
-	return false
+	return _keyword_query.has_keyword(card, keyword)
 
 
 func has_protection(card: Node, protection_type: String = "") -> bool:
-	"""Verifica si una carta tiene protección
-
-	Args:
-		card: Nodo de la carta
-		protection_type: Tipo específico ("DESTROY", "BANISH", "TARGET", etc.)
-
-	Returns: true si tiene protección
-	"""
-	# Verificar keyword INDESTRUCTIBLE
-	if protection_type == "" or protection_type == "DESTROY":
-		if has_keyword(card, Constants.Keyword.INDESTRUCTIBLE):
-			return true
-
-	# Verificar keyword INDESTERRABLE
-	if protection_type == "" or protection_type == "BANISH":
-		if has_keyword(card, Constants.Keyword.INDESTERRABLE):
-			return true
-
-	# Verificar modificadores de protección
-	var applicable = _get_applicable_modifiers(card, "")
-
-	for mod in applicable:
-		if not _is_modifier_active(mod):
-			continue
-
-		if mod.type != ModifierType.PROTECTION:
-			continue
-
-		# Verificar tipo de protección
-		var prot_type = mod.get("protection_type", "ALL")
-		if prot_type == "ALL" or prot_type == protection_type:
-			return true
-
-	return false
+	return _keyword_query.has_protection(card, protection_type)
 
 
-# =============================================================================
-# RESTRICCIONES
-# =============================================================================
 func can_attack(card: Node) -> bool:
-	"""Verifica si una carta puede atacar"""
-	var applicable = _get_applicable_modifiers(card, "")
-
-	for mod in applicable:
-		if not _is_modifier_active(mod):
-			continue
-
-		if mod.type != ModifierType.RESTRICTION:
-			continue
-
-		if mod.get("restriction_type") == "CANT_ATTACK":
-			return false
-
-	return true
+	return _keyword_query.can_attack(card)
 
 
 func can_block(card: Node) -> bool:
-	"""Verifica si una carta puede bloquear"""
-	# Verificar IMBLOQUEABLE (esto afecta si puede SER bloqueada, no si puede bloquear)
-	var applicable = _get_applicable_modifiers(card, "")
-
-	for mod in applicable:
-		if not _is_modifier_active(mod):
-			continue
-
-		if mod.type != ModifierType.RESTRICTION:
-			continue
-
-		if mod.get("restriction_type") == "CANT_BLOCK":
-			return false
-
-	return true
+	return _keyword_query.can_block(card)
 
 
 func can_be_targeted(card: Node, source: Node = null) -> bool:
-	"""Verifica si una carta puede ser objetivo de efectos
-
-	Args:
-		card: Carta que sería el objetivo
-		source: Carta fuente del efecto (opcional)
-
-	Returns: true si puede ser objetivo
-	"""
-	var applicable = _get_applicable_modifiers(card, "")
-
-	for mod in applicable:
-		if not _is_modifier_active(mod):
-			continue
-
-		if mod.type != ModifierType.PROTECTION:
-			continue
-
-		var prot_type = mod.get("protection_type", "")
-		if prot_type == "TARGET" or prot_type == "HEXPROOF":
-			# Verificar si la fuente es del mismo controlador
-			if source and card:
-				var card_owner = card.get("controller_id") if card.get("controller_id") != null else card.get("owner_id") if card.get("owner_id") != null else -1
-				var source_owner = source.get("controller_id") if source.get("controller_id") != null else source.get("owner_id") if source.get("owner_id") != null else -1
-				if card_owner == source_owner:
-					continue  # Hexproof no protege de tus propios efectos
-
-			return false
-
-	return true
-
+	return _keyword_query.can_be_targeted(card, source)
 
 # =============================================================================
 # EVENTOS Y LIMPIEZA
@@ -964,7 +802,7 @@ func _on_card_entered_zone(card: Node, zone: int, player_id: int) -> void:
 	Registra efectos continuos de cartas que entran en juego.
 	"""
 	# Solo procesar cartas que entran en zonas de juego
-	if zone not in [Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_APOYO]:
+	if zone not in Constants.ZONES_IN_PLAY:
 		return
 
 	# Verificar si la carta tiene efectos continuos
@@ -980,7 +818,7 @@ func _on_card_left_zone(card: Node, zone: int, player_id: int) -> void:
 	Remueve todos los modificadores de esa carta como fuente.
 	"""
 	# Solo procesar si sale de zonas de juego
-	if zone not in [Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_APOYO]:
+	if zone not in Constants.ZONES_IN_PLAY:
 		return
 
 	# Remover modificadores de esta carta como fuente
@@ -998,8 +836,17 @@ func _register_card_continuous_effects(card: Node) -> void:
 	if card == null:
 		return
 
-	var card_data = card.get_meta("card_data", {})
-	var ability_text = card_data.get("ability", card_data.get("habilidad", ""))
+	# 2026-08-25: antes leía card.get_meta("card_data", {}) — metadata de
+	# Godot que NUNCA se asigna en el juego real (solo en TestScene.gd, una
+	# escena de prueba vieja). Siempre volvía {}, así que ability_text
+	# siempre estaba vacío y este detector nunca encontraba nada, para
+	# ninguna carta — confirmado con Patria Vieja, que no aplicaba su aura
+	# a pesar de tener el patrón ya soportado.
+	var ability_text: String = card.card_ability if card.get("card_ability") != null else ""
+	if ability_text.is_empty():
+		var card_data = card.get("card_data") if card.get("card_data") != null else {}
+		if card_data is Dictionary:
+			ability_text = card_data.get("ability", card_data.get("habilidad", ""))
 
 	# Detectar efectos continuos en el texto
 	_parse_and_register_continuous_effects(card, ability_text)
@@ -1030,6 +877,104 @@ func _parse_and_register_continuous_effects(card: Node, ability_text: String) ->
 			"layer": ModifierLayer.LAYER_7B_CHAR_MODIFY,
 			"description": "Buff a aliados +%d" % buff_value
 		})
+
+	# Detectar buffs a aliados con calificador de coste, forma "ganan N de
+	# Fuerza" (2026-08-24, p.ej. Patria Vieja: "Tus Aliados de coste 1 o más
+	# ganan 1 de Fuerza") — distinto del patrón de arriba, que solo cubre
+	# "obtienen +N" sin calificador de coste.
+	# "(?:que controlas)?" agregado (2026-08-30, p.ej. Sable de Napoleón:
+	# "Los Aliados que controlas ganan 1 de Fuerza") — antes exigía "aliados"
+	# seguido DIRECTO de "ganan" (salvo el calificador de coste), así que
+	# "que controlas" en el medio rompía el match y esta variante quedaba
+	# sin ningún patrón que la reconociera.
+	var qualified_buff_regex = RegEx.new()
+	qualified_buff_regex.compile("(?:tus |los )?aliados(?:\\s+de coste\\s+(\\d+)\\s+o\\s+m[aá]s)?(?:\\s+que controlas)?\\s+ganan?\\s*(\\d+)\\s*de fuerza")
+	var qualified_match = qualified_buff_regex.search(text)
+
+	if qualified_match:
+		var min_cost_str := qualified_match.get_string(1)
+		var qualified_value := int(qualified_match.get_string(2))
+		var qualified_filter: Dictionary = {}
+		if not min_cost_str.is_empty():
+			qualified_filter["min_cost"] = int(min_cost_str)
+
+		register_modifier({
+			"source": card,
+			"target": "ALLIES",
+			"type": ModifierType.STRENGTH,
+			"stat": "strength",
+			"value": qualified_value,
+			"operation": "add",
+			"duration": ModifierDuration.PERMANENT,
+			"layer": ModifierLayer.LAYER_7B_CHAR_MODIFY,
+			"filter": qualified_filter,
+			"description": "Buff a aliados +%d%s" % [
+				qualified_value,
+				(" (coste %d o más)" % qualified_filter.min_cost) if qualified_filter.has("min_cost") else ""
+			]
+		})
+
+		# Cláusula adicional: "...y no son Destruidos cuando bloquean"
+		# (p.ej. Patria Vieja) — protección acotada SOLO a destrucción por
+		# perder un combate bloqueando (BattleManager la consulta con
+		# protection_type "BLOCK_DESTROY"), no protección general.
+		if "no son destruid" in text and "bloquean" in text:
+			register_modifier({
+				"source": card,
+				"target": "ALLIES",
+				"type": ModifierType.PROTECTION,
+				"stat": "",
+				"value": 0,
+				"operation": "add",
+				"duration": ModifierDuration.PERMANENT,
+				"layer": ModifierLayer.LAYER_6_ABILITIES,
+				"filter": qualified_filter,
+				"protection_type": "BLOCK_DESTROY",
+				"description": "No son destruidos cuando bloquean"
+			})
+
+		# Cláusula adicional: "...Furia..." en la misma oración (2026-09-02,
+		# p.ej. Espíritu Kotaix: "Tus Aliados ganan 2 de Fuerza, Furia y no
+		# pueden ser afectados por Talismanes") — mismo criterio que la
+		# cláusula de BLOCK_DESTROY de arriba, pero para el patrón de
+		# keyword_regex más abajo (que exige 'tienen', no matchea 'ganan...
+		# Furia' en lista separada por comas).
+		if "furia" in text:
+			register_modifier({
+				"source": card,
+				"target": "ALLIES",
+				"type": ModifierType.KEYWORDS,
+				"stat": "",
+				"value": 0,
+				"operation": "add",
+				"duration": ModifierDuration.PERMANENT,
+				"layer": ModifierLayer.LAYER_6_ABILITIES,
+				"filter": qualified_filter,
+				"keywords_add": [Constants.Keyword.FURIA],
+				"description": "Otorga Furia a aliados"
+			})
+
+		# Cláusula adicional: "...no pueden ser afectados por Talismanes"
+		# (2026-09-02, Espíritu Kotaix) — protección otorgada a OTRAS cartas
+		# (a diferencia de Constants.gd/TargetedEffectExecutor._target_text_denies(),
+		# que solo detecta cuando una carta se protege a SÍ MISMA con su
+		# propio texto impreso). ContinuousEffectManager.has_protection(card,
+		# "TALISMAN") es la consulta; TargetedEffectExecutor._select_ally_target()
+		# la respeta cuando source_card es un Talismán.
+		if "no pueden ser afectados por talismanes" in text or "no puede ser afectado por talismanes" in text:
+			register_modifier({
+				"source": card,
+				"target": "ALLIES",
+				"type": ModifierType.PROTECTION,
+				"stat": "",
+				"value": 0,
+				"operation": "add",
+				"duration": ModifierDuration.PERMANENT,
+				"layer": ModifierLayer.LAYER_6_ABILITIES,
+				"filter": qualified_filter,
+				"protection_type": "TALISMAN",
+				"description": "Inmune a Talismanes"
+			})
 
 	# Detectar debuffs a enemigos: "Los enemigos obtienen -X"
 	var enemy_debuff_regex = RegEx.new()
@@ -1072,6 +1017,46 @@ func _parse_and_register_continuous_effects(card: Node, ability_text: String) ->
 				"keywords_add": [keyword_enum],
 				"description": "Otorga %s a aliados" % keyword_name
 			})
+
+	# "Gana N de Fuerza por cada Arma que controles" (2026-08-30, p.ej.
+	# Manuel Bulnes) — buff a SÍ MISMA (no 'tus Aliados'), con valor
+	# DINÁMICO que se recalcula solo (value como Callable, ya soportado por
+	# _calculate_modifier_value()). Cuenta Armas equipadas en cualquier
+	# Aliado del mismo controlador — las Armas son hijas de su portador,
+	# no children directos del campo, así que no alcanza con
+	# _get_all_cards_in_play() + filtro de tipo.
+	var self_scaling_weapon_regex = RegEx.new()
+	self_scaling_weapon_regex.compile("gana\\s+(\\d+)\\s+de\\s+fuerza\\s+por\\s+cada\\s+arma\\s+que\\s+controles")
+	var self_scaling_match = self_scaling_weapon_regex.search(text)
+	if self_scaling_match:
+		var per_unit_value := int(self_scaling_match.get_string(1))
+		var value_callable := func(c: Node, _current: int, _mod: Dictionary) -> int:
+			var card_owner := _get_card_owner(c)
+			var weapon_count := 0
+			for other in _get_all_cards_in_play():
+				if _get_card_owner(other) != card_owner:
+					continue
+				var w = other.get("equipped_weapons")
+				if w is Array:
+					weapon_count += w.size()
+			return per_unit_value * weapon_count
+		register_modifier({
+			"source": card,
+			"target": "SELF",
+			"type": ModifierType.STRENGTH,
+			"stat": "strength",
+			"value": value_callable,
+			"operation": "add",
+			"duration": ModifierDuration.PERMANENT,
+			"layer": ModifierLayer.LAYER_7B_CHAR_MODIFY,
+			"description": "Gana %d de Fuerza por cada Arma que controle" % per_unit_value
+		})
+
+	# "Tus Aliados que porten Arma no pueden perder su habilidad" (2026-08-30,
+	# Manuel Bulnes) — protección contra KeywordManager.silence_card(),
+	# consultada directo desde ahí (choke point único).
+	if "aliados que porten arma" in text and "no pueden perder su habilidad" in text:
+		KeywordManager.register_weapon_wielder_silence_immunity(card)
 
 
 # =============================================================================
@@ -1178,6 +1163,40 @@ func _get_card_faction(card: Node) -> String:
 	return ""
 
 
+func _get_card_owner(card: Node) -> int:
+	"""Obtiene el jugador que controla la carta (2026-08-24) — usado para
+	targeting ALLIES/ENEMIES real (por dueño, no por mitología). owner_id es
+	el campo que de verdad se asigna en todo el juego (ver HandManager.
+	_setup_card); controller_id existe pero nunca se popula salvo en algún
+	efecto puntual de robo de control."""
+	if card == null:
+		return -1
+	if card.get("owner_id") != null:
+		return card.owner_id
+	if card.get("controller_id") != null:
+		return card.controller_id
+	return -1
+
+
+func _get_all_cards_in_play() -> Array:
+	"""Todas las cartas de ambos jugadores en las 3 líneas del campo
+	(2026-08-25) — usado para refrescar el badge visual de TODOS los
+	afectados cuando se registra/quita un aura de target dinámico (ALL/
+	ALLIES/ENEMIES/OTHER), ya que _resolve_targets() no las enumera (se
+	resuelven carta por carta en _get_applicable_modifiers(), no acá)."""
+	var main = get_node_or_null("/root/Main")
+	if not main:
+		return []
+	var result: Array = []
+	for field in [main.get("player_field"), main.get("player_linea_ataque"), main.get("player_linea_apoyo"),
+				  main.get("opponent_field"), main.get("opponent_linea_ataque"), main.get("opponent_linea_apoyo")]:
+		if not field:
+			continue
+		for card in field.get_children():
+			result.append(card)
+	return result
+
+
 func _get_card_zone(card: Node) -> int:
 	"""Obtiene la zona actual de una carta"""
 	if card == null:
@@ -1213,7 +1232,7 @@ func _is_card_in_play(card: Node) -> bool:
 		return false
 
 	var zone = _get_card_zone(card)
-	return zone in [Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_APOYO]
+	return zone in Constants.ZONES_IN_PLAY
 
 
 func _resolve_targets(modifier: Dictionary) -> Array:
@@ -1242,206 +1261,29 @@ func _string_to_keyword(keyword_str: String) -> int:
 		"INDESTERRABLE": return Constants.Keyword.INDESTERRABLE
 		"EXHUMAR": return Constants.Keyword.EXHUMAR
 		"UNICA", "ÚNICA": return Constants.Keyword.UNICA
-		"FIRST_STRIKE", "PRIMER_GOLPE", "GOLPE_PRIMERO": return Constants.Keyword.GOLPE_PRIMERO
+		"ERRANTE": return Constants.Keyword.ERRANTE
+		"RETADOR": return Constants.Keyword.RETADOR
 		_: return -1
 
 
 # =============================================================================
-# ACTUALIZACIÓN VISUAL DE CARTAS AFECTADAS
+# ACTUALIZACION VISUAL, DESGLOSES Y DEBUG (implementacion en ContinuousVisualSync.gd)
 # =============================================================================
-func _update_affected_cards_visuals(targets: Array, stat: String) -> void:
-	"""Actualiza los visuales de todas las cartas afectadas por un cambio de modificador
-
-	Args:
-		targets: Array de cartas a actualizar
-		stat: El stat que cambió ("strength", "cost", etc.)
-	"""
-	for target in targets:
-		if target == null or not is_instance_valid(target):
-			continue
-
-		if not (target is Node):
-			continue
-
-		# Forzar recálculo (el método emitirá señales si hay cambios)
-		if stat == "strength" or stat == "":
-			get_modified_strength(target)
-		if stat == "cost" or stat == "":
-			get_modified_cost(target)
-
-
 func update_all_card_visuals() -> void:
-	"""Fuerza actualización visual de todas las cartas en juego
-
-	Útil después de cambios masivos o al reconectar.
-	"""
-	var all_cards: Array = []
-
-	# Recolectar todas las cartas en zonas de juego
-	if _game_board:
-		for zone in [Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_APOYO]:
-			for player_id in [0, 1]:
-				if _game_board.has_method("get_cards_in_zone"):
-					var cards = _game_board.get_cards_in_zone(zone, player_id)
-					all_cards.append_array(cards)
-
-	# También actualizar cartas con modificadores directos
-	for card_id in _modifiers_by_target:
-		# Intentar obtener la carta por su ID
-		for mod_id in _modifiers_by_target[card_id]:
-			if _modifiers.has(mod_id):
-				var mod = _modifiers[mod_id]
-				var target = mod.target
-				if target is Node and is_instance_valid(target):
-					if target not in all_cards:
-						all_cards.append(target)
-
-	# Actualizar cada carta
-	for card in all_cards:
-		_update_single_card_visual(card)
-
-	print("[ContinuousEffectManager] Visuales actualizados: %d cartas" % all_cards.size())
-
-
-func _update_single_card_visual(card: Node) -> void:
-	"""Actualiza el visual de una carta individual"""
-	if card == null or not is_instance_valid(card):
-		return
-
-	var base_strength = _get_base_stat(card, "strength")
-	var mod_strength = get_modified_strength(card)
-	var base_cost = _get_base_stat(card, "cost")
-	var mod_cost = get_modified_cost(card)
-
-	# Llamar método de actualización si existe
-	if card.has_method("update_modified_stats"):
-		card.update_modified_stats(mod_strength, mod_cost)
-	else:
-		# Intentar métodos individuales
-		if card.has_method("set_display_strength"):
-			card.set_display_strength(mod_strength, base_strength)
-		if card.has_method("set_display_cost"):
-			card.set_display_cost(mod_cost, base_cost)
-
-	# Emitir señal para UI externa
-	emit_signal("card_visual_update_required", card, "all", base_strength, mod_strength)
+	_visual_sync.update_all_card_visuals()
 
 
 func get_strength_breakdown(card: Node) -> Dictionary:
-	"""Obtiene el desglose de fuerza de una carta
-
-	Útil para mostrar tooltips detallados.
-
-	Returns: {base, modifiers: [{source, value, description}], total}
-	"""
-	var breakdown = {
-		"base": _get_base_stat(card, "strength"),
-		"modifiers": [],
-		"total": 0
-	}
-
-	var applicable = _get_applicable_modifiers(card, "strength")
-	applicable.sort_custom(_compare_modifiers)
-
-	var current = breakdown.base
-
-	for mod in applicable:
-		if not _is_modifier_active(mod):
-			continue
-
-		var mod_value = _calculate_modifier_value(mod, card, current)
-		if mod_value == 0:
-			continue
-
-		var old_current = current
-		current = _apply_operation(current, mod_value, mod.operation)
-
-		breakdown.modifiers.append({
-			"source": mod.description,
-			"source_id": mod.source_id,
-			"value": current - old_current,
-			"operation": mod.operation,
-			"is_negative": _is_negative_modifier(mod)
-		})
-
-	breakdown.total = max(0, current)
-	return breakdown
+	return _visual_sync.get_strength_breakdown(card)
 
 
 func get_cost_breakdown(card: Node) -> Dictionary:
-	"""Obtiene el desglose de coste de una carta"""
-	var breakdown = {
-		"base": _get_base_stat(card, "cost"),
-		"modifiers": [],
-		"total": 0
-	}
-
-	var applicable = _get_applicable_modifiers(card, "cost")
-	applicable.sort_custom(_compare_modifiers)
-
-	var current = breakdown.base
-
-	for mod in applicable:
-		if not _is_modifier_active(mod):
-			continue
-
-		var mod_value = _calculate_modifier_value(mod, card, current)
-		if mod_value == 0:
-			continue
-
-		var old_current = current
-		current = _apply_operation(current, mod_value, mod.operation)
-
-		breakdown.modifiers.append({
-			"source": mod.description,
-			"source_id": mod.source_id,
-			"value": current - old_current,
-			"operation": mod.operation,
-			"is_negative": _is_negative_modifier(mod)
-		})
-
-	breakdown.total = max(0, current)
-	return breakdown
+	return _visual_sync.get_cost_breakdown(card)
 
 
-# =============================================================================
-# DEBUG
-# =============================================================================
 func debug_print_modifiers() -> void:
-	"""Imprime todos los modificadores activos"""
-	print("=" .repeat(60))
-	print("MODIFICADORES ACTIVOS: %d" % _modifiers.size())
-	print("-" .repeat(60))
-
-	for mod_id in _modifiers:
-		var mod = _modifiers[mod_id]
-		var active = "✓" if _is_modifier_active(mod) else "✗"
-		print("[%s] %s: %s (%s %s%d a %s)" % [
-			active,
-			mod_id,
-			mod.description,
-			mod.stat,
-			"+" if mod.value >= 0 else "",
-			mod.value,
-			str(mod.target)
-		])
-
-	print("=" .repeat(60))
+	_visual_sync.debug_print_modifiers()
 
 
 func debug_print_card_stats(card: Node) -> void:
-	"""Imprime los stats de una carta con modificadores"""
-	var card_name = _get_card_name(card)
-	var base_str = _get_base_stat(card, "strength")
-	var mod_str = get_modified_strength(card)
-	var base_cost = _get_base_stat(card, "cost")
-	var mod_cost = get_modified_cost(card)
-	var keywords = get_active_keywords(card)
-
-	print("=" .repeat(40))
-	print("CARTA: %s" % card_name)
-	print("-" .repeat(40))
-	print("Fuerza: %d → %d" % [base_str, mod_str])
-	print("Coste:  %d → %d" % [base_cost, mod_cost])
-	print("Keywords: %s" % str(keywords))
-	print("=" .repeat(40))
+	_visual_sync.debug_print_card_stats(card)

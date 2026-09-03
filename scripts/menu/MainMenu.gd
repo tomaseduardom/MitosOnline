@@ -1,5 +1,6 @@
 extends Control
-## MainMenu - Pantalla de inicio del juego
+## MainMenu - Pantalla de inicio del juego con temática de fantasía medieval
+## Mitos y Leyendas: Arena de Leyendas
 
 # =============================================================================
 # REFERENCIAS UI
@@ -12,7 +13,13 @@ extends Control
 
 
 func _ready() -> void:
-	# Conectar botones
+	# Conectar botones y aplicar estilos interactivos
+	var buttons = [play_button, decks_button, backs_button, test_button, exit_button]
+	for btn in buttons:
+		if btn:
+			btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+			_setup_button_hover(btn)
+
 	play_button.pressed.connect(_on_play_pressed)
 	decks_button.pressed.connect(_on_decks_pressed)
 	backs_button.pressed.connect(_on_backs_pressed)
@@ -21,6 +28,17 @@ func _ready() -> void:
 
 	# Focus inicial en Play
 	play_button.grab_focus()
+
+
+func _setup_button_hover(btn: Button) -> void:
+	btn.mouse_entered.connect(func():
+		var tw = btn.create_tween()
+		tw.tween_property(btn, "modulate", Color(1.15, 1.15, 1.15, 1.0), 0.12)
+	)
+	btn.mouse_exited.connect(func():
+		var tw = btn.create_tween()
+		tw.tween_property(btn, "modulate", Color(1.0, 1.0, 1.0, 1.0), 0.12)
+	)
 
 
 func _on_play_pressed() -> void:

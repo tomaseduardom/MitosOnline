@@ -3,8 +3,8 @@ class_name SceneSetupModule
 ## SceneSetupModule — Setup inicial de escena: estilos, menú de pausa, zonas de drop, etc.
 ## Se instancia como hijo de Main en _ready().
 
-const DropZoneScript = preload("res://scripts/ui/DropZone.gd")
-const OpponentFanScript = preload("res://scripts/ui/OpponentFan.gd")
+const DropZoneScript = preload("res://scripts/ui/zones/DropZone.gd")
+const OpponentFanScript = preload("res://scripts/ui/hand/OpponentFan.gd")
 
 var _main: Node = null
 var pause_menu: CanvasLayer = null
@@ -24,54 +24,75 @@ func setup(main: Node) -> void:
 # ESTILOS
 # =============================================================================
 func _setup_styles() -> void:
+	var font_medieval = preload("res://assets/fonts/Marcellus-Regular.ttf")
+	var font_bold = preload("res://assets/fonts/Cinzel-Bold.ttf")
+
 	var topbar_style = StyleBoxFlat.new()
-	topbar_style.bg_color = Color(0.12, 0.14, 0.18, 0.9)
-	topbar_style.border_color = Color(0.3, 0.35, 0.4)
+	topbar_style.bg_color = Color(0.06, 0.05, 0.08, 0.92)
+	topbar_style.border_color = Color(0.72, 0.60, 0.30, 0.85)
 	topbar_style.border_width_bottom = 2
 	_main.get_node("TopBar").add_theme_stylebox_override("panel", topbar_style)
+
+	var topbar_title = _main.get_node_or_null("TopBar/TurnLabel")
+	if topbar_title:
+		topbar_title.add_theme_font_override("font", font_medieval)
+		topbar_title.add_theme_font_size_override("font_size", 16)
+		topbar_title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.70, 1.0))
 
 	var debug_style = StyleBoxFlat.new()
 	debug_style.bg_color = Color(0, 0, 0, 0.7)
 	debug_style.set_corner_radius_all(8)
-	_main.get_node("UI/DebugPanel").add_theme_stylebox_override("panel", debug_style)
+	var debug_panel = _main.get_node_or_null("UI/DebugPanel")
+	if debug_panel:
+		debug_panel.add_theme_stylebox_override("panel", debug_style)
+		debug_panel.visible = false
 
 	var mulligan_keep_style = StyleBoxFlat.new()
-	mulligan_keep_style.bg_color = Color(0.2, 0.5, 0.3, 1)
+	mulligan_keep_style.bg_color = Color(0.10, 0.28, 0.16, 0.95)
+	mulligan_keep_style.border_color = Color(0.4, 0.8, 0.5, 1.0)
+	mulligan_keep_style.set_border_width_all(2)
 	mulligan_keep_style.set_corner_radius_all(8)
 	_main.keep_hand_button.add_theme_stylebox_override("normal", mulligan_keep_style)
+	_main.keep_hand_button.add_theme_font_override("font", font_medieval)
+	_main.keep_hand_button.add_theme_font_size_override("font_size", 18)
 
 	var mulligan_keep_hover = StyleBoxFlat.new()
-	mulligan_keep_hover.bg_color = Color(0.25, 0.6, 0.35, 1)
+	mulligan_keep_hover.bg_color = Color(0.14, 0.36, 0.20, 1.0)
+	mulligan_keep_hover.border_color = Color(0.6, 1.0, 0.7, 1.0)
+	mulligan_keep_hover.set_border_width_all(2)
 	mulligan_keep_hover.set_corner_radius_all(8)
 	_main.keep_hand_button.add_theme_stylebox_override("hover", mulligan_keep_hover)
 
 	var mulligan_btn_style = StyleBoxFlat.new()
-	mulligan_btn_style.bg_color = Color(0.5, 0.35, 0.2, 1)
+	mulligan_btn_style.bg_color = Color(0.32, 0.18, 0.10, 0.95)
+	mulligan_btn_style.border_color = Color(0.9, 0.6, 0.3, 1.0)
+	mulligan_btn_style.set_border_width_all(2)
 	mulligan_btn_style.set_corner_radius_all(8)
 	_main.mulligan_button.add_theme_stylebox_override("normal", mulligan_btn_style)
+	_main.mulligan_button.add_theme_font_override("font", font_medieval)
+	_main.mulligan_button.add_theme_font_size_override("font_size", 18)
 
 	var mulligan_btn_hover = StyleBoxFlat.new()
-	mulligan_btn_hover.bg_color = Color(0.6, 0.4, 0.25, 1)
+	mulligan_btn_hover.bg_color = Color(0.42, 0.24, 0.14, 1.0)
+	mulligan_btn_hover.border_color = Color(1.0, 0.75, 0.4, 1.0)
+	mulligan_btn_hover.set_border_width_all(2)
 	mulligan_btn_hover.set_corner_radius_all(8)
 	_main.mulligan_button.add_theme_stylebox_override("hover", mulligan_btn_hover)
 
 
 func _setup_card_backs() -> void:
-	var game_settings = get_node_or_null("/root/GameSettings")
-	if not game_settings:
-		return
 	var player_dorso = _main.get_node_or_null("GameBoard/PlayerArea/PlayerCastillo/DorsoImage")
 	if player_dorso:
-		var tex = game_settings.get_card_back_texture(0)
+		var tex = GameSettings.get_card_back_texture(0)
 		if tex:
 			player_dorso.texture = tex
 	var opponent_dorso = _main.get_node_or_null("GameBoard/OpponentArea/OpponentCastillo/DorsoImage")
 	if opponent_dorso:
-		var tex = game_settings.get_card_back_texture(1)
+		var tex = GameSettings.get_card_back_texture(1)
 		if tex:
 			opponent_dorso.texture = tex
-	if not game_settings.card_back_changed.is_connected(_on_card_back_changed):
-		game_settings.card_back_changed.connect(_on_card_back_changed)
+	if not GameSettings.card_back_changed.is_connected(_on_card_back_changed):
+		GameSettings.card_back_changed.connect(_on_card_back_changed)
 
 
 func _on_card_back_changed(_back_id: String) -> void:
@@ -176,13 +197,12 @@ func _on_pause_exit() -> void:
 # ABANICO DEL OPONENTE Y ZONAS DE DROP
 # =============================================================================
 func _setup_opponent_fan() -> void:
-	var opponent_area = _main.get_node("GameBoard/OpponentArea")
 	_main._opponent_fan = OpponentFanScript.new()
 	_main._opponent_fan.name = "OpponentFan"
-	opponent_area.add_child(_main._opponent_fan)
+	_main.game_board.add_child(_main._opponent_fan)
 	_main._opponent_fan.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	_main._opponent_fan.offset_bottom = 148
-	print("[SceneSetup] OpponentFan creado (size: %s)" % _main._opponent_fan.size)
+	_main._opponent_fan.offset_bottom = 120
+	print("[SceneSetup] OpponentFan creado pegado al borde superior (size: %s)" % _main._opponent_fan.size)
 
 
 func _setup_drop_zones() -> void:
@@ -197,8 +217,8 @@ func _setup_drop_zones() -> void:
 		Constants.CardType.TALISMAN, Constants.CardType.TOTEM
 	])
 	field_drop.set_anchors_preset(Control.PRESET_CENTER)
-	field_drop.offset_left = -400; field_drop.offset_top = -120
-	field_drop.offset_right = 400; field_drop.offset_bottom = 120
+	field_drop.offset_left = -540; field_drop.offset_top = -120
+	field_drop.offset_right = 540; field_drop.offset_bottom = 120
 	_main.game_board.add_child(field_drop)
 
 	var gold_drop = DropZoneScript.new()
@@ -222,8 +242,8 @@ func _setup_drop_zones() -> void:
 	battle_drop.runic_glow_color = Color(1.0, 0.55, 0.1, 0.8)
 	battle_drop.set_accepts_types([Constants.CardType.ALIADO])
 	battle_drop.set_anchors_preset(Control.PRESET_CENTER)
-	battle_drop.offset_left = -350; battle_drop.offset_top = -48
-	battle_drop.offset_right = 350; battle_drop.offset_bottom = 48
+	battle_drop.offset_left = -540; battle_drop.offset_top = -48
+	battle_drop.offset_right = 540; battle_drop.offset_bottom = 48
 	_main.game_board.add_child(battle_drop)
 
 	print("[SceneSetup] Zonas de drop configuradas")

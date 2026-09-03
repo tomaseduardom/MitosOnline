@@ -128,15 +128,11 @@ func _connect_combat_log() -> void:
 	"""Conecta al singleton CombatLog"""
 	await get_tree().process_frame
 
-	var combat_log = get_node_or_null("/root/CombatLog")
-	if combat_log:
-		combat_log.log_entry_added.connect(_on_log_entry_added)
-		combat_log.log_cleared.connect(_on_log_cleared)
+	CombatLog.log_entry_added.connect(_on_log_entry_added)
+	CombatLog.log_cleared.connect(_on_log_cleared)
 
-		# Cargar entradas existentes
-		_load_existing_entries(combat_log)
-	else:
-		push_warning("[CombatLogUI] CombatLog no encontrado")
+	# Cargar entradas existentes
+	_load_existing_entries(CombatLog)
 
 
 func _load_existing_entries(combat_log: Node) -> void:
@@ -180,9 +176,7 @@ func _append_entry(entry: Dictionary) -> void:
 
 func _on_clear_pressed() -> void:
 	"""Limpia el log"""
-	var combat_log = get_node_or_null("/root/CombatLog")
-	if combat_log:
-		combat_log.clear()
+	CombatLog.clear()
 
 	if _rich_text:
 		_rich_text.clear()
@@ -228,11 +222,9 @@ func _refresh_log() -> void:
 
 	_rich_text.clear()
 
-	var combat_log = get_node_or_null("/root/CombatLog")
-	if combat_log:
-		var entries = combat_log.get_entries(max_visible_lines, _current_filter)
-		for entry in entries:
-			_append_entry(entry)
+	var entries = CombatLog.get_entries(max_visible_lines, _current_filter)
+	for entry in entries:
+		_append_entry(entry)
 
 
 # =============================================================================

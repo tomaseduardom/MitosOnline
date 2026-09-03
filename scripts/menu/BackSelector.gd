@@ -46,9 +46,7 @@ func _ready() -> void:
 
 func _load_config() -> void:
 	"""Carga la configuración guardada desde GameSettings"""
-	var game_settings = get_node_or_null("/root/GameSettings")
-	if game_settings:
-		current_selected_id = game_settings.get_card_back_id(0)  # Player 0
+	current_selected_id = GameSettings.get_card_back_id(0)  # Player 0
 	print("[BackSelector] Current back: ", current_selected_id)
 
 
@@ -176,12 +174,8 @@ func _select_back(back_id: String) -> void:
 	_show_preview(back_id)
 
 	# Notificar al juego del cambio (player_id = 0 para jugador local)
-	var game_settings = get_node_or_null("/root/GameSettings")
-	if game_settings:
-		game_settings.set_card_back(current_selected_id, 0)
-		print("[BackSelector] GameSettings actualizado correctamente")
-	else:
-		print("[BackSelector] ERROR: GameSettings no encontrado!")
+	GameSettings.set_card_back(current_selected_id, 0)
+	print("[BackSelector] GameSettings actualizado correctamente")
 
 	print("[BackSelector] Selected: ", current_selected_id)
 

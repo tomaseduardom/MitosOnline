@@ -19,6 +19,9 @@ const STARTING_HAND_SIZE: int = 8
 const MAX_HAND_SIZE: int = 8
 const CARDS_DRAWN_PER_TURN: int = 1
 
+## Escala de las cartas de Oro en Reserva y Oro Pagado (1.0 = tamaño completo estándar)
+const GOLD_CARD_SCALE: Vector2 = Vector2(1.0, 1.0)
+
 # =============================================================================
 # TIPOS DE CARTA
 # =============================================================================
@@ -126,55 +129,30 @@ const BattleStep = Phase
 # HABILIDADES KEYWORD (DAR Sección 7-8)
 # =============================================================================
 enum Keyword {
-	# Combate básico
+	# Confirmadas como reales en Mitos y Leyendas (2026-08-20, corrección del
+	# usuario — el set anterior mezclaba keywords de otros CCG que no existen
+	# en este juego; ver docs/audit-2026-08-13.html para el historial).
 	FURIA,              # Puede atacar sin esperar Agrupación
-	IMBLOQUEABLE,       # No puede ser bloqueado
+	IMBLOQUEABLE,       # No puede ser bloqueado (sin excepción por keyword —
+	                    # si algo puede bloquearlo, lo dice su propio texto)
 	INDESTRUCTIBLE,     # No puede ser destruido
 	INDESTERRABLE,      # No puede ser desterrado
-	GOLPE_PRIMERO,      # Asigna daño antes (First Strike)
-	DOBLE_GOLPE,        # Daño en ambas fases de combate
-	ARROLLAR,           # Daño excedente pasa al Castillo (Trample)
-	# Combate defensivo
-	VIGILANCIA,         # Permanece en Defensa al atacar
-	ALCANCE,            # Puede bloquear Imbloqueables
-	EVASION,            # Evita el primer daño
-	ESCUDO,             # Reduce daño recibido
-	# Construcción y especiales
 	UNICA,              # Solo 1 copia en el mazo
 	EXHUMAR,            # Puede jugarse desde Cementerio
-	REGENERAR,          # Puede volver del Cementerio
-	VELOZ,              # Se resuelve sin ventana de respuesta
-	ANULAR,             # Puede anular talismanes
-	# Inmunidades
-	INMUNE_TALISMANES,  # No puede ser objetivo de Talismanes
-	INMUNE_HABILIDADES, # No puede ser objetivo de habilidades
-	# Armas
-	PORTAR_MULTIPLE,    # Aliado puede portar múltiples Armas
+	ERRANTE,            # Solo puede haber 1 copia de esta carta EN JUEGO a
+	                    # la vez (a diferencia de Única, que limita el mazo)
+	RETADOR,            # El atacante elige qué Aliado enemigo debe bloquearlo
 }
-
-# Alias para compatibilidad con código existente
-const FIRST_STRIKE = Keyword.GOLPE_PRIMERO
 
 const KEYWORD_NAMES: Dictionary = {
 	Keyword.FURIA: "Furia",
 	Keyword.IMBLOQUEABLE: "Imbloqueable",
 	Keyword.INDESTRUCTIBLE: "Indestructible",
 	Keyword.INDESTERRABLE: "Indesterrable",
-	Keyword.GOLPE_PRIMERO: "Golpe Primero",
-	Keyword.DOBLE_GOLPE: "Doble Golpe",
-	Keyword.ARROLLAR: "Arrollar",
-	Keyword.VIGILANCIA: "Vigilancia",
-	Keyword.ALCANCE: "Alcance",
-	Keyword.EVASION: "Evasión",
-	Keyword.ESCUDO: "Escudo",
 	Keyword.UNICA: "Única",
 	Keyword.EXHUMAR: "Exhumar",
-	Keyword.REGENERAR: "Regenerar",
-	Keyword.VELOZ: "Veloz",
-	Keyword.ANULAR: "Anular",
-	Keyword.INMUNE_TALISMANES: "Inmune a Talismanes",
-	Keyword.INMUNE_HABILIDADES: "Inmune a Habilidades",
-	Keyword.PORTAR_MULTIPLE: "Portar Múltiples Armas",
+	Keyword.ERRANTE: "Errante",
+	Keyword.RETADOR: "Retador",
 }
 
 const KEYWORD_DESCRIPTIONS: Dictionary = {
@@ -182,22 +160,17 @@ const KEYWORD_DESCRIPTIONS: Dictionary = {
 	Keyword.IMBLOQUEABLE: "Este Aliado no puede ser bloqueado.",
 	Keyword.INDESTRUCTIBLE: "Esta carta no puede ser Destruida.",
 	Keyword.INDESTERRABLE: "Esta carta no puede ser Desterrada.",
-	Keyword.GOLPE_PRIMERO: "Este Aliado asigna su daño de combate antes que los Aliados sin Golpe Primero.",
-	Keyword.DOBLE_GOLPE: "Este Aliado asigna daño en ambas fases de combate.",
-	Keyword.ARROLLAR: "El daño que excede la Fuerza del bloqueador pasa al Castillo.",
-	Keyword.VIGILANCIA: "Este Aliado permanece en Línea de Defensa al atacar.",
-	Keyword.ALCANCE: "Este Aliado puede bloquear a atacantes Imbloqueables.",
-	Keyword.EVASION: "Evita el primer daño que recibiría este Aliado.",
-	Keyword.ESCUDO: "Reduce el daño recibido por este Aliado.",
 	Keyword.UNICA: "Solo puedes tener una copia de esta carta en tu mazo.",
 	Keyword.EXHUMAR: "Puedes jugar esta carta desde tu Cementerio pagando su coste.",
-	Keyword.REGENERAR: "Esta carta puede volver del Cementerio bajo ciertas condiciones.",
-	Keyword.VELOZ: "Este efecto se resuelve inmediatamente sin ventana de respuesta.",
-	Keyword.ANULAR: "Anula un Talismán. La carta anulada va al Cementerio sin resolver.",
-	Keyword.INMUNE_TALISMANES: "Esta carta no puede ser objetivo de Talismanes.",
-	Keyword.INMUNE_HABILIDADES: "Esta carta no puede ser objetivo de habilidades.",
-	Keyword.PORTAR_MULTIPLE: "Este Aliado puede portar más de un Arma.",
+	Keyword.ERRANTE: "Solo puede haber una copia de esta carta en juego al mismo tiempo.",
+	Keyword.RETADOR: "El controlador de este Aliado elige qué Aliado enemigo debe bloquearlo.",
 }
+
+# NOTA (2026-08-20): "Inmune a X" y "portar múltiples armas" NO son keywords
+# fijas en Mitos y Leyendas — son texto libre de cada carta ("no puede ser
+# afectada por talismanes", "tus aliados pueden portar un arma adicional").
+# Se detectan por texto donde hace falta (ver TriggerSystem._target_text_denies
+# y GoldManager._player_has_ally_in_play/lógica de Armas), no como Keyword.
 
 # =============================================================================
 # TIPOS DE HABILIDAD

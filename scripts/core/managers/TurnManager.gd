@@ -35,24 +35,44 @@ func _ready() -> void:
 	print("[TurnManager] Inicializado")
 
 
-func can_place_oro(phase_override: int = -1) -> bool:
+func can_place_oro(phase_override: int = -1, card: Node = null) -> bool:
 	"""Verifica si el jugador puede poner un Oro desde la mano (DAR 5.B)
 	Condiciones:
 	- Estar en Fase de Vigilia
 	- No haber puesto oro este turno
-	- No haber jugado ninguna otra carta antes (oro debe ser la primera acción)
+	- No haber jugado ninguna otra carta antes (oro debe ser la primera acción),
+	  SALVO que la propia carta traiga una excepción explícita a esa regla
+	  (ver ignores_oro_chance_lost()).
 
 	Args:
 		phase_override: Si es >= 0, usa esta fase en lugar de GameManager.current_phase
+		card: la carta que se está por colocar como Oro (opcional) — solo se
+			usa para chequear si tiene la excepción de texto propia.
 	"""
 	var phase = phase_override if phase_override >= 0 else GameManager.current_phase
 	if phase != Constants.Phase.VIGILIA:
 		return false
 	if oro_placed_this_turn:
 		return false
-	if oro_chance_lost:
+	if oro_chance_lost and not ignores_oro_chance_lost(card):
 		return false
 	return true
+
+
+func ignores_oro_chance_lost(card: Node) -> bool:
+	"""'En tu Vigilia, si no pusiste Oros en juego este turno, ponlo de tu
+	mano en tu Reserva' (2026-08-30, p.ej. Infernum Vox) — a diferencia de
+	la regla general (DAR 5.B: el Oro debe ser la PRIMERA carta jugada; si
+	juegas cualquier otra cosa antes, se pierde la oportunidad para el resto
+	del turno), esta carta se puede colocar como Oro en cualquier momento
+	de tu Vigilia mientras tú mismo no hayas puesto un Oro todavía este
+	turno — no le importa si ya jugaste otra carta antes. Es una EXCEPCIÓN
+	puntual de ESTA carta, no el comportamiento general, así que se detecta
+	por texto en vez de agregar un flag nuevo al motor."""
+	if not card or card.get("card_data") == null:
+		return false
+	var habilidad: String = str(card.card_data.get("habilidad", "")).to_lower()
+	return "si no pusiste oros en juego este turno" in habilidad
 
 
 func on_card_played(card: Node) -> void:
@@ -92,39 +112,14 @@ func can_attack(ally: Node) -> Dictionary:
 
 	if entered_this_turn:
 		# Verificar si tiene Furia
-		var keyword_mgr = get_node_or_null("/root/KeywordManager")
-
-		if keyword_mgr:
-			result.has_furia = keyword_mgr.can_attack_immediately(ally)
-		else:
-			# Fallback: verificar directamente
-			result.has_furia = _has_furia_fallback(ally)
+		result.has_furia = KeywordManager.can_attack_immediately(ally)
 
 		if not result.has_furia:
 			result.can_attack = false
-			result.reason = "Entró este turno (necesita Furia para atacar)"
+			result.reason = "no puede atacar aún — no ha pasado por tu Agrupación (sin Furia)"
 
 	return result
 
 
-func _has_furia_fallback(ally: Node) -> bool:
-	"""Verificación directa de Furia (fallback si KeywordManager no está)"""
-	# Flag directo
-	if ally.get("has_furia") == true:
-		return true
-
-	# Verificar keywords array
-	if ally.get("card_keywords") != null:
-		var keywords = ally.card_keywords
-		if keywords is Array:
-			for kw in keywords:
-				if kw is String and kw.to_lower() == "furia":
-					return true
-
-	# Verificar texto de habilidad
-	if ally.get("card_ability") != null:
-		var ability_lower = ally.card_ability.to_lower()
-		if "furia" in ability_lower or "puede atacar el turno que entra" in ability_lower:
-			return true
-
-	return false
+# _has_furia_fallback() se eliminó acá (2026-08-28, "módulos gordos" punto
+# 1): KeywordManager es autoload — siempre existe, esta rama nunca corría.

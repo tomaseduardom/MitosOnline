@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://stack_visualizer"]
 
-[ext_resource type="Script" path="res://scripts/ui/StackVisualizer.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/ui/inspection/StackVisualizer.gd" id="1_script"]
 
 [node name="StackVisualizer" type="Control"]
 anchors_preset = 2

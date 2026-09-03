@@ -57,6 +57,16 @@ func agregar_oro_reserva(player_id: int, cantidad: int = 1) -> void:
 	print("[GameState] J%d: +%d oro reserva (total: %d)" % [player_id, cantidad, oro_reserva[player_id]])
 
 
+func agregar_oro_pagado(player_id: int, cantidad: int = 1) -> void:
+	"""Agrega oro YA a Oro Pagado directo, sin pasar por Reserva (p.ej.
+	Perder la Razón: 'poner un Oro de ahí en tu Oro Pagado' — a diferencia
+	de agregar_oro_reserva(), esta carta nunca estuvo disponible para pagar
+	nada, entra directo como ya-gastada)."""
+	oro_pagado[player_id] = oro_pagado.get(player_id, 0) + cantidad
+	_emit_oro_signals(player_id)
+	print("[GameState] J%d: +%d oro pagado directo (total pagado: %d)" % [player_id, cantidad, oro_pagado[player_id]])
+
+
 func pagar_oro(player_id: int, cantidad: int) -> bool:
 	"""Paga oro moviendo de reserva a pagado. Returns: true si se pudo pagar"""
 	if not puede_pagar(player_id, cantidad):

@@ -9,15 +9,30 @@ const CARD_SCENE_PATH = "res://scenes/cards/Card.tscn"
 
 ## Palabras clave que indican triggers
 const TRIGGER_PATTERNS: Dictionary = {
-	"on_enter_play": ["cuando entre al juego", "al entrar al juego", "cuando entra al juego", "al ser jugado"],
-	"on_leave_play": ["cuando deje el juego", "al dejar el juego", "cuando abandona el juego"],
-	"on_destroyed": ["cuando sea destruido", "cuando muera", "al ser destruido", "al morir"],
+	# (2026-08-28, corrección de terminología real de Mitos y Leyendas, a
+	# pedido del usuario): "cuando deje/dejar/abandona el juego" no existe
+	# como frase real — es "al salir del juego"/"cuando salga del
+	# juego"/"cuando sale del juego". Algunas cartas mezclan ambos conceptos
+	# en una sola oración ("cuando entra o salga del juego") — se agrega esa
+	# frase completa a los dos, pero OJO: esto solo la CLASIFICA en el
+	# primer tipo que la detecte, no dispara ambos triggers a la vez (eso
+	# necesitaría lógica aparte, no implementada todavía).
+	"on_enter_play": ["cuando entre al juego", "al entrar al juego", "cuando entra al juego", "al ser jugado", "cuando entra o salga del juego"],
+	"on_leave_play": ["al salir del juego", "cuando salga del juego", "cuando sale del juego", "cuando entra o salga del juego"],
+	# "cuando muera"/"al morir" no existen como concepto real en el juego —
+	# se eliminaron (2026-08-28, a pedido del usuario).
+	"on_destroyed": ["cuando sea destruido", "al ser destruido"],
 	"on_discard": ["cuando descartes", "al descartar", "cuando sea descartado"],
 	"on_draw": ["cuando robes", "al robar", "cada vez que robes"],
 	"on_attack": ["cuando ataque", "al atacar", "cada vez que ataque"],
 	"on_block": ["cuando bloquee", "al bloquear"],
-	"on_damage_dealt": ["cuando inflija daño", "al infligir daño", "si hizo daño", "cuando haga daño", "si inflige daño"],
-	"on_damage_received": ["cuando reciba daño", "al recibir daño"],
+	# "infligir"/"inflija"/"inflige" no es terminología real (2026-08-28) —
+	# se reemplazó por "cuando haga daño de combate", la forma más común en
+	# el texto real de las cartas junto a "cuando haga daño" a secas.
+	"on_damage_dealt": ["cuando haga daño de combate", "cuando haga daño", "si hizo daño"],
+	# "cuando reciba daño"/"al recibir daño" no son la frase real — es
+	# "cuando fueras a recibir daño" (2026-08-28, a pedido del usuario).
+	"on_damage_received": ["cuando fueras a recibir daño"],
 	"on_turn_start": ["al comienzo del turno", "al inicio del turno", "al comenzar tu turno"],
 	"on_turn_end": ["al final del turno", "al terminar el turno", "al finalizar tu turno"],
 	"on_ally_enters": ["cuando otro aliado entre", "cuando un aliado entre"],
@@ -115,41 +130,10 @@ func _scan_and_apply_keywords(card: Node) -> void:
 
 	Usa KeywordManager si está disponible, sino aplica directamente
 	"""
-	var keyword_mgr = get_node_or_null("/root/KeywordManager")
-
-	if keyword_mgr:
-		# Usar KeywordManager para escaneo completo
-		keyword_mgr.scan_and_apply_keywords(card)
-	else:
-		# Fallback: aplicar flags básicos directamente
-		var keywords = card.get("card_keywords")
-		if keywords is Array:
-			for kw in keywords:
-				_apply_keyword_flag_fallback(card, kw)
-
-
-func _apply_keyword_flag_fallback(card: Node, keyword) -> void:
-	"""Aplica flags directamente sin KeywordManager (fallback)"""
-	var kw_val: int = keyword if keyword is int else -1
-
-	# Si es string, mapear a Constants.Keyword
-	if keyword is String:
-		var kw_lower = keyword.to_lower()
-		match kw_lower:
-			"furia":
-				kw_val = Constants.Keyword.FURIA
-			"imbloqueable":
-				kw_val = Constants.Keyword.IMBLOQUEABLE
-			"indestructible":
-				kw_val = Constants.Keyword.INDESTRUCTIBLE
-
-	# Aplicar flag según keyword
-	if kw_val == Constants.Keyword.FURIA:
-		card.set_meta("has_furia", true)
-	elif kw_val == Constants.Keyword.IMBLOQUEABLE:
-		card.set_meta("is_unblockable", true)
-	elif kw_val == Constants.Keyword.INDESTRUCTIBLE:
-		card.set_meta("is_indestructible", true)
+	# KeywordManager es autoload — siempre existe (2026-08-28, "módulos
+	# gordos" punto 1: el fallback manual de abajo, _apply_keyword_flag_
+	# fallback(), era inalcanzable siempre; se sacó).
+	KeywordManager.scan_and_apply_keywords(card)
 
 
 func create_card_resource(json_data: Dictionary) -> Dictionary:
@@ -264,8 +248,10 @@ func _parse_keywords(json_data: Dictionary) -> Array:
 		keywords.append(Constants.Keyword.EXHUMAR)
 	if ability.contains("única") or ability.contains("solo 1 copia"):
 		keywords.append(Constants.Keyword.UNICA)
-	if ability.contains("primer golpe") or ability.contains("first strike") or ability.contains("golpe primero"):
-		keywords.append(Constants.Keyword.GOLPE_PRIMERO)
+	if ability.contains("errante"):
+		keywords.append(Constants.Keyword.ERRANTE)
+	if ability.contains("retador"):
+		keywords.append(Constants.Keyword.RETADOR)
 
 	return keywords
 
@@ -581,14 +567,12 @@ func on_card_enters_play(card: Node) -> void:
 	_scan_and_apply_keywords(card)
 
 	# Emitir señal para que otros sistemas reaccionen
-	var keyword_mgr = get_node_or_null("/root/KeywordManager")
-	if keyword_mgr:
-		var keywords = keyword_mgr.get_cached_keywords(card)
-		if not keywords.is_empty():
-			print("[CardFactory] %s entró en juego con keywords: %s" % [
-				card.card_name if card.get("card_name") else "Carta",
-				keywords.map(func(k): return keyword_mgr.Keyword.keys()[k])
-			])
+	var keywords = KeywordManager.get_cached_keywords(card)
+	if not keywords.is_empty():
+		print("[CardFactory] %s entró en juego con keywords: %s" % [
+			card.card_name if card.get("card_name") else "Carta",
+			keywords.map(func(k): return KeywordManager.Keyword.keys()[k])
+		])
 
 
 func on_turn_start_clear_summon_sickness(player_id: int) -> void:
@@ -601,15 +585,16 @@ func on_turn_start_clear_summon_sickness(player_id: int) -> void:
 	var main = get_node_or_null("/root/Main")
 	if not main:
 		return
-	var field = main.player_field if player_id == 0 else main.opponent_field
-	if not field:
-		return
-	for card in field.get_children():
-		if card.get("entered_this_turn") == true:
-			card.entered_this_turn = false
-			print("[CardFactory] %s ya puede atacar sin Furia (pasó por Agrupación)" % (
-				card.card_name if card.get("card_name") else "Aliado"
-			))
+	var fields = [main.player_field, main.player_linea_ataque] if player_id == 0 else [main.opponent_field, main.opponent_linea_ataque]
+	for field in fields:
+		if not field:
+			continue
+		for card in field.get_children():
+			if card.get("entered_this_turn") == true:
+				card.entered_this_turn = false
+				print("[CardFactory] %s ya puede atacar sin Furia (pasó por Agrupación)" % (
+					card.card_name if card.get("card_name") else "Aliado"
+				))
 
 
 # =============================================================================

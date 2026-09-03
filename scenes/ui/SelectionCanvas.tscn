@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://selection_canvas"]
 
-[ext_resource type="Script" path="res://scripts/ui/SelectionCanvas.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/ui/selection/SelectionCanvas.gd" id="1_script"]
 
 [node name="SelectionCanvas" type="CanvasLayer"]
 layer = 10

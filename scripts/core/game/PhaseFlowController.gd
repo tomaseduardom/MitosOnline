@@ -19,22 +19,18 @@ func setup(main: Node) -> void:
 		BattleManager.combat_finished.connect(_on_battle_combat_finished)
 
 	# PriorityManager
-	var pm = get_node_or_null("/root/PriorityManager")
-	if pm:
-		if not pm.both_players_passed.is_connected(_on_priority_both_passed_main):
-			pm.both_players_passed.connect(_on_priority_both_passed_main)
-		if not pm.priority_changed.is_connected(_on_priority_changed_bot_autopass):
-			pm.priority_changed.connect(_on_priority_changed_bot_autopass)
-		if not pm.priority_changed.is_connected(_on_priority_changed_glow):
-			pm.priority_changed.connect(_on_priority_changed_glow)
-		if not pm.priority_window_closed.is_connected(_on_priority_window_closed_glow):
-			pm.priority_window_closed.connect(_on_priority_window_closed_glow)
+	if not PriorityManager.both_players_passed.is_connected(_on_priority_both_passed_main):
+		PriorityManager.both_players_passed.connect(_on_priority_both_passed_main)
+	if not PriorityManager.priority_changed.is_connected(_on_priority_changed_bot_autopass):
+		PriorityManager.priority_changed.connect(_on_priority_changed_bot_autopass)
+	if not PriorityManager.priority_changed.is_connected(_on_priority_changed_glow):
+		PriorityManager.priority_changed.connect(_on_priority_changed_glow)
+	if not PriorityManager.priority_window_closed.is_connected(_on_priority_window_closed_glow):
+		PriorityManager.priority_window_closed.connect(_on_priority_window_closed_glow)
 
 	# ActionPipeline
-	var ap = get_node_or_null("/root/ActionPipeline")
-	if ap and ap.has_signal("stack_empty"):
-		if not ap.stack_empty.is_connected(_on_stack_resolved):
-			ap.stack_empty.connect(_on_stack_resolved)
+	if not ActionPipeline.stack_empty.is_connected(_on_stack_resolved):
+		ActionPipeline.stack_empty.connect(_on_stack_resolved)
 
 	# GameManager — fase y turno
 	if not GameManager.phase_changed.is_connected(_on_phase_changed_relay):
@@ -73,37 +69,48 @@ func _on_phase_state_machine(new_phase: Constants.Phase) -> void:
 	GameManager.current_phase = new_phase
 	UIManager.announce_phase(new_phase)
 	_main._update_buttons_for_phase(new_phase)
-	_main._update_paso_button_state()
+	_main._game_hud.update_paso_button_state()
 
 	print("[PhaseFlow] === FASE: %s ===" % Constants.PHASE_NAMES[new_phase])
 
 	match new_phase:
 
 		Constants.Phase.AGRUPACION:
-			_main._show_phase_title("AGRUPACIÓN")
+			_main._game_hud.show_phase_announcement("AGRUPACIÓN")
+			# Línea de Ataque → Línea de Defensa (DAR): un Aliado que atacó en
+			# el turno anterior de este jugador se queda "comprometido" en
+			# Ataque hasta esta Agrupación — igual que el Oro Pagado. Se lee
+			# directo de los hijos del contenedor (no de GameManager.attackers,
+			# que _start_batalla() ya vació al llegar el Ataque del rival).
+			var atk_line: HBoxContainer = _main.player_linea_ataque if GameManager.active_player_id == 0 else _main.opponent_linea_ataque
+			if _main._card_interaction and atk_line:
+				await _main._card_interaction.unmark_attackers(atk_line.get_children().duplicate())
 			if GameManager.active_player_id == 0:
-				await _main._reset_gold()
+				await _main._gold_manager._reset_gold()
+			# "En tu Agrupación" (2026-08-30, p.ej. Espada del Juicio) —
+			# mismo patrón que resolve_turn_end_triggers() para Fase Final.
+			await TriggerSystem.resolve_agrupacion_triggers(GameManager.active_player_id)
 
 		Constants.Phase.VIGILIA:
-			_main._show_phase_title("VIGILIA")
+			_main._game_hud.show_phase_announcement("VIGILIA")
 			TurnManager._reset_oro_tracking()
 			if _main._card_inspector:
 				_main._card_inspector.refresh_activatable_glows()
 
 		Constants.Phase.ATAQUE:
-			_main._show_phase_title("BATALLA MITOLÓGICA")
+			_main._game_hud.show_phase_announcement("BATALLA MITOLÓGICA")
 
 		Constants.Phase.BLOQUEO:
-			_main._show_phase_title("BLOQUEO")
+			_main._game_hud.show_phase_announcement("BLOQUEO")
 
 		Constants.Phase.GUERRA_TALISMANES:
-			_main._show_phase_title("GUERRA DE TALISMANES")
+			_main._game_hud.show_phase_announcement("GUERRA DE TALISMANES")
 
 		Constants.Phase.ASIGNACION_DANIO:
-			_main._show_phase_title("ASIGNACIÓN DE DAÑO")
+			_main._game_hud.show_phase_announcement("ASIGNACIÓN DE DAÑO")
 
 		Constants.Phase.FINAL:
-			_main._show_phase_title("FASE FINAL")
+			_main._game_hud.show_phase_announcement("FASE FINAL")
 
 
 func _on_turn_started(player_id: int, turn_number: int) -> void:
@@ -122,12 +129,13 @@ func _on_priority_changed_bot_autopass(player_id: int) -> void:
 	se reemplaza por su lógica de decisión."""
 	if player_id != 1:
 		return
-	var pm = get_node_or_null("/root/PriorityManager")
-	if not pm or not pm.priority_window_active:
+	if not PriorityManager.priority_window_active:
 		return
 	await get_tree().create_timer(0.6).timeout
-	if pm.priority_window_active and pm.current_priority_player == 1:
-		pm.pass_priority()
+	if PriorityManager.priority_window_active and PriorityManager.current_priority_player == 1:
+		PriorityManager.pass_priority()
+	else:
+		print("[DIAG] bot_autopass: tras esperar, ya no aplica — priority_window_active=%s current_priority_player=%d" % [PriorityManager.priority_window_active, PriorityManager.current_priority_player])
 
 
 func _on_priority_changed_glow(player_id: int) -> void:
@@ -143,14 +151,14 @@ func _on_priority_changed_glow(player_id: int) -> void:
 	de la misma ventana, el brillo se apaga hasta que vuelva a ser el turno
 	del humano de actuar."""
 	if player_id == 0:
-		_main._start_paso_glow()
+		_main._game_hud.start_paso_glow()
 	else:
-		_main._stop_paso_glow()
+		_main._game_hud.stop_paso_glow()
 
 
 func _on_priority_window_closed_glow() -> void:
 	"""Apaga el brillo del botón ¿Paso? al cerrarse la ventana de prioridad."""
-	_main._stop_paso_glow()
+	_main._game_hud.stop_paso_glow()
 
 
 func _opponent_auto_pass() -> void:
@@ -174,7 +182,7 @@ func _on_battle_damage_to_castle(player_id: int, total_damage: int, _sources: Ar
 	"""BattleManager calculó y aplicó daño al Castillo — solo feedback visual."""
 	var target = "tu Castillo" if player_id == 0 else "Castillo oponente"
 	_main._update_debug("%d daño hacia %s" % [total_damage, target])
-	_main._update_castillo_counts()
+	_main._zone_manager._update_castillo_counts()
 
 
 func _on_battle_player_defeated(player_id: int) -> void:
@@ -185,14 +193,12 @@ func _on_battle_combat_finished(result: Dictionary) -> void:
 	if result.get("game_ended", false):
 		return
 
-	# Revertir el aspecto visual de 'atacando' (rotación -90°, tinte
-	# naranja) de _mark_card_as_attacker() — antes nada lo hacía, así que
-	# un Aliado que atacaba quedaba rotado y con tinte naranja para
-	# siempre (el reporte de 'mi aliado desaparece al atacar').
-	if _main._card_interaction:
-		_main._card_interaction.unmark_attackers(GameManager.attackers)
-
-	_main._update_castillo_counts()
+	# NO se desmarca a los atacantes acá (2026-08-21): DAR — un Aliado que
+	# atacó se queda en Línea de Ataque (tinte naranja incluido) hasta la
+	# Agrupación del próximo turno de su controlador, igual que el Oro
+	# Pagado no vuelve a la Reserva hasta entonces. Ver el caso AGRUPACION
+	# en _on_phase_state_machine(), que ahora hace ese trabajo.
+	_main._zone_manager._update_castillo_counts()
 
 	# DAR: tras Asignación de Daño, las habilidades 'cuando inflija daño'/
 	# 'si hizo daño' pueden resolverse antes de pasar a Fase Final. Antes
@@ -207,15 +213,12 @@ func _on_battle_combat_finished(result: Dictionary) -> void:
 func _fire_damage_dealt_triggers(damage_sources: Array) -> void:
 	"""Dispara 'on_damage_dealt' para cada carta que infligió daño al
 	Castillo este combate (DAR — 'cuando inflija daño'/'si hizo daño')."""
-	var trigger_sys = get_node_or_null("/root/TriggerSystem")
-	if not trigger_sys:
-		return
 	for source_info in damage_sources:
 		var card = source_info.get("source")
 		if not is_instance_valid(card):
 			continue
 		var controller_id = card.controller_id if card.get("controller_id") != null else 0
-		await trigger_sys._collect_triggers_for_event("on_damage_dealt", {
+		await TriggerSystem._collect_triggers_for_event("on_damage_dealt", {
 			"player_id": controller_id, "card": card, "amount": source_info.get("damage", 0)
 		})
 
@@ -239,16 +242,18 @@ func _on_priority_both_passed_main() -> void:
 	llegó a declarar su ataque. Si TriggerSystem sigue esperando una
 	respuesta, esta ventana es suya, no una señal de fin de fase — no tocar
 	nada acá."""
-	var trigger_sys = get_node_or_null("/root/TriggerSystem")
-	if trigger_sys and trigger_sys.awaiting_response:
+	if TriggerSystem.awaiting_response:
+		print("[DIAG] _on_priority_both_passed_main: BLOQUEADO por awaiting_response=true (fase=%s, is_collecting=%s, is_resolving=%s)" % [
+			Constants.PHASE_NAMES.get(GameManager.current_phase, "?"), TriggerSystem.is_collecting, TriggerSystem.is_resolving
+		])
 		return
 
 	var phase = GameManager.current_phase
 	match phase:
 		Constants.Phase.ATAQUE:
-			_main._stop_paso_glow()
+			_main._game_hud.stop_paso_glow()
 			_main._update_debug("Paso D confirmado — pasando a Bloqueo")
-			GameManager.confirm_attackers()
+			await GameManager.confirm_attackers()
 
 		Constants.Phase.GUERRA_TALISMANES:
 			_main._update_debug("Paso D completado — calculando daño de combate")
@@ -266,9 +271,8 @@ func _on_priority_both_passed_main() -> void:
 
 		# Constants.Phase.VIGILIA (eliminado 2026-08-17): este caso era
 		# redundante con _on_paso_pressed()'s propio manejo de VIGILIA (que
-		# ya llama a GameManager.skip_battle() cuando el jugador presiona
-		# ¿Paso? SIN ninguna ventana de prioridad activa — la forma correcta
-		# de expresar 'me salto la batalla'). Este handler, en cambio,
+		# hoy es el botón "Atacar" — GameManager.proceed_to_battle() —, ver
+		# 2026-08-28 más arriba). Este handler, en cambio,
 		# reacciona a CUALQUIER ventana que se cierre con ambos pasados
 		# mientras la fase siga siendo VIGILIA — incluida una ventana de
 		# respuesta anidada de un trigger 'cuando entra en juego' (o la que
@@ -281,13 +285,11 @@ func _on_priority_both_passed_main() -> void:
 
 func _on_stack_resolved() -> void:
 	"""La pila LIFO (ActionPipeline) quedó vacía — abrir ventana de prioridad si no hay una activa."""
-	var pm = get_node_or_null("/root/PriorityManager")
-	if pm and pm.has_method("start_priority_window"):
-		if not pm.priority_window_active:
-			pm.start_priority_window(
-				PriorityManager.PriorityContext.RESPONSE_WINDOW,
-				GameManager.active_player_id
-			)
+	if not PriorityManager.priority_window_active:
+		PriorityManager.start_priority_window(
+			PriorityManager.PriorityContext.RESPONSE_WINDOW,
+			GameManager.active_player_id
+		)
 
 
 # =============================================================================
@@ -296,21 +298,27 @@ func _on_stack_resolved() -> void:
 func _on_paso_pressed() -> void:
 	"""El jugador presiona ¿Paso? — pasa prioridad o avanza fase."""
 	var phase = GameManager.current_phase
-	var pm = get_node_or_null("/root/PriorityManager")
 
-	if pm and pm.priority_window_active:
+	if PriorityManager.priority_window_active:
 		_main._update_debug("Paso: pasando prioridad en %s" % Constants.PHASE_NAMES.get(phase, "?"))
-		pm.pass_priority()
+		PriorityManager.pass_priority()
 		return
 
 	match phase:
 		Constants.Phase.VIGILIA:
-			_main._update_debug("Paso: omitiendo batalla → Fase Final")
-			GameManager.skip_battle()
+			# El botón en Vigilia dice "Atacar" (2026-08-28, reemplaza el
+			# diseño de 2026-08-23 a pedido del usuario): ya no se declaran
+			# atacantes apartados DURANTE Vigilia — este botón solo termina
+			# Vigilia y empieza la Batalla Mitológica. Declarar (o no) queda
+			# para la fase de Ataque; si nadie ataca, un segundo ¿Paso? ahí
+			# la salta igual (confirm_attackers() con la lista vacía llama a
+			# _end_batalla() directo a Fase Final).
+			_main._update_debug("Atacar: empieza la Batalla Mitológica")
+			GameManager.proceed_to_battle()
 
 		Constants.Phase.ATAQUE:
 			_main._update_debug("Paso: confirmando atacantes")
-			GameManager.confirm_attackers()
+			await GameManager.confirm_attackers()
 
 		Constants.Phase.FINAL:
 			_do_fase_final()
@@ -333,17 +341,22 @@ func _resolve_fase_final(player_id: int) -> void:
 	"""Robo de fin de turno + límite de mano (DAR 5.D.3/5.D.4) + fin de turno.
 	Camino único compartido por jugador humano (vía _do_fase_final) y oponente
 	(vía _opponent_auto_pass), para que ambos apliquen exactamente las mismas reglas."""
+	# 'En tu Fase Final' (2026-08-30, p.ej. Espada de O'Higgins) — se
+	# dispara al ENTRAR a la fase, antes del robo/límite de mano normales
+	# (mismo orden que cualquier trigger de entrada de fase en el DAR).
+	await TriggerSystem.resolve_turn_end_triggers(player_id)
+
 	if GameManager.is_first_turn:
 		_main._update_debug("Fase Final: primer turno — sin robo")
 	else:
 		_main._update_debug("Fase Final: jugador %d roba %d carta(s)" % [player_id + 1, Constants.CARDS_DRAWN_PER_TURN])
 		for i in range(Constants.CARDS_DRAWN_PER_TURN):
-			if not await _main.draw_card(player_id):
+			if not await _main._zone_manager.draw_card(player_id):
 				break
 
 	await _enforce_hand_limit(player_id)
 
-	_main._show_phase_title("FIN DEL TURNO")
+	_main._game_hud.show_phase_announcement("FIN DEL TURNO")
 	await get_tree().create_timer(1.2).timeout
 
 	_main._update_debug("Fin del turno %d" % GameManager.current_turn)
@@ -380,14 +393,9 @@ func _opponent_auto_discard(amount: int) -> void:
 	var hand_cards: Array = fan.get_cards().duplicate()
 	hand_cards.sort_custom(func(a, b): return a.card_cost > b.card_cost)
 	var to_discard: Array = hand_cards.slice(0, mini(amount, hand_cards.size()))
-	var card_manager = get_node_or_null("/root/CardManager")
 	for card in to_discard:
 		var data: Dictionary = card.card_data.duplicate() if card.get("card_data") else {}
 		data["esta_oculta"] = false
-		if card_manager:
-			card_manager.add_to_cemetery(1, data)
-		else:
-			_main.opponent_cemetery.append(data)
-			UIManager.update_cementerio_count(1, _main.opponent_cemetery.size())
+		CardManager.add_to_cemetery(1, data)
 		fan.remove_card(card, true)
 	_main._update_debug("Oponente descarta %d carta(s) por límite de mano" % to_discard.size())

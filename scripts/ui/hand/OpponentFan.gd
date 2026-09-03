@@ -1,22 +1,21 @@
 extends Control
 class_name OpponentFan
-## OpponentFan — Mano del oponente en abanico simétrico hacia abajo.
+## OpponentFan — Mano del oponente en fila horizontal limpia (Opción 3).
 ##
-## Las cartas se colocan con pivot_offset = (CARD_W/2, 0) (centro-superior).
-## Todas las cartas parten de Y=0 y rotan desde ese pivote, creando un arco
-## natural hacia abajo. El contenedor ocupa el ancho completo del padre y se
-## ancla al borde superior (PRESET_TOP_WIDE).
+## Cartas centradas horizontalmente con rotación recta (0°), solapadas
+## de manera uniforme y elegante en el borde superior de la pantalla.
 
 signal hand_changed(count: int)
 
-@export var card_scale:   float = 0.55
-@export var max_angle:    float = 20.0   ## Ángulo máximo en los extremos (grados)
-@export var card_spacing: float = 85.0   ## Separación horizontal entre pivotes
-@export var anim_duration: float = 0.18
+@export var card_scale:    float = 0.50
+@export var card_overlap:  float = -40.0   ## Solapamiento base entre cartas
+@export var anim_duration: float = 0.20
 
 const CARD_W: float = 150.0  # Ancho base de carta (sin escalar)
+const CARD_H: float = 210.0  # Alto base de carta (sin escalar)
 
 var _cards: Array[Node] = []
+
 
 # =============================================================================
 # INICIALIZACIÓN
@@ -74,44 +73,47 @@ func _init_card(card: Node) -> void:
 	card.can_interact  = false
 	card.scale         = Vector2(card_scale, card_scale)
 	card.base_scale    = Vector2(card_scale, card_scale)
-	# Pivot en el centro-superior de la carta (coordenadas locales sin escalar).
-	# Al rotar, la carta "cuelga" hacia abajo desde ese punto → arco natural.
-	card.pivot_offset  = Vector2(CARD_W / 2.0, 0.0)
+	card.pivot_offset  = Vector2(CARD_W / 2.0, CARD_H / 2.0)
 
 
 # =============================================================================
-# DISPOSICIÓN EN ABANICO
+# DISPOSICIÓN HORIZONTAL RECTA (OPCIÓN 3)
 # =============================================================================
 func _arrange() -> void:
 	var n := _cards.size()
 	if n == 0:
 		return
 
-	# Centro horizontal (usa el ancho real del contenedor, o el viewport si
-	# aún no se calculó — evita el fallback de 800px hardcodeado)
+	# Centro horizontal de la pantalla
 	var cx := size.x / 2.0
 	if cx < 50.0:
 		var vp := get_viewport()
-		cx = vp.get_visible_rect().size.x / 2.0 if vp else 640.0
+		cx = vp.get_visible_rect().size.x / 2.0 if vp else 960.0
 
-	var total_w  := float(n - 1) * card_spacing
-	var start_x  := cx - total_w / 2.0
-	var angle_step := (max_angle * 2.0) / maxf(float(n - 1), 1.0)
+	var effective_width := CARD_W * card_scale  # 75px
+	
+	# Solapamiento dinámico: si hay muchas cartas se comprime suavemente
+	var overlap := card_overlap
+	var max_available_width := 420.0
+	if n > 1:
+		var natural_total := effective_width + float(n - 1) * (effective_width + overlap)
+		if natural_total > max_available_width:
+			var max_step := (max_available_width - effective_width) / float(n - 1)
+			overlap = max_step - effective_width
+
+	var step := effective_width + overlap
+	var total_w := effective_width + float(n - 1) * step if n > 1 else effective_width
+	var start_x := cx - total_w / 2.0
 
 	for i in range(n):
 		var card := _cards[i]
-		var ai   := float(i) - float(n - 1) / 2.0   # centrado: -k … 0 … +k
-		var angle := -(ai * angle_step)
-
-		# La posición X coloca el PIVOTE (centro-superior) en start_x + i*spacing.
-		# Como position es la esquina superior-izquierda y el pivote está
-		# en (CARD_W/2, 0), restamos (CARD_W * scale / 2) para alinearlo.
-		var px := start_x + float(i) * card_spacing - (CARD_W * card_scale) / 2.0
+		var px := start_x + float(i) * step
+		var py := 0.0  # Pegada directamente al borde superior del mapa (Y = 0)
 
 		card.z_index = i
 
 		var tw := create_tween()
 		tw.set_parallel(true)
-		tw.tween_property(card, "position",         Vector2(px, 0.0), anim_duration).set_ease(Tween.EASE_OUT)
-		tw.tween_property(card, "rotation_degrees", angle,             anim_duration).set_ease(Tween.EASE_OUT)
-		tw.tween_property(card, "modulate:a",       1.0,               anim_duration * 0.6)
+		tw.tween_property(card, "position",         Vector2(px, py), anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+		tw.tween_property(card, "rotation_degrees", 0.0,             anim_duration).set_ease(Tween.EASE_OUT)
+		tw.tween_property(card, "modulate:a",       1.0,             anim_duration * 0.6)

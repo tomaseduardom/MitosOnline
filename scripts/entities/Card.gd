@@ -23,7 +23,7 @@ signal trigger_activated(card: Card, trigger_type: String, event_data: Dictionar
 # =============================================================================
 @export var card_id: String = ""
 @export var card_scale_normal: float = 1.0
-@export var card_scale_hover: float = 1.08
+@export var card_scale_hover: float = 1.015
 @export var card_scale_selected: float = 1.05
 @export var hover_lift: float = 20.0
 @export var animation_speed: float = 0.15
@@ -57,13 +57,27 @@ var activatable_glow: Panel = null  # Indicador de "tiene una habilidad activada
 var _activatable_tween: Tween = null
 var is_activatable: bool = false
 
-# Placeholder (cuando no hay imagen)
+## Badge de Fuerza efectiva (2026-08-22) — el número impreso en el arte de
+## la carta es una imagen estática, no se puede editar; este Label se
+## superpone en la esquina para mostrar la Fuerza REAL (base + Armas/buffs),
+## p.ej. un Aliado de Fuerza 4 portando un Arma que da +2 debe mostrar "6".
+var strength_badge: Control = null
+## Badge de Coste efectivo (2026-08-30, mismo motivo que strength_badge:
+## el coste impreso es parte del arte, no se puede editar) — se superpone
+## en la esquina opuesta cuando un descuento/recargo lo cambia, p.ej.
+## Miguel (-1) o Tesoro de los Césares (+1 el turno siguiente).
+var cost_badge: Control = null
+
 var placeholder: VBoxContainer
 var placeholder_icon: Label
 var placeholder_name: Label
 var placeholder_cost: Label
 
 var _is_ready: bool = false
+
+## Módulos extraídos (Fase 4 de reestructuración)
+var _interaction: CardInteraction
+var _animations: CardAnimations
 
 # =============================================================================
 # DATOS DE LA CARTA
@@ -104,6 +118,15 @@ var card_ability: String:
 var card_type: int = Constants.CardType.ALIADO
 var card_raza: String = ""
 var card_keywords: Array = []
+
+# =============================================================================
+# ARMAS (DAR — un Arma solo puede jugarse portada por un Aliado, no suelta)
+# =============================================================================
+## Solo poblado en un Aliado: las Armas que porta (nodos Card, hijos directos
+## de este nodo — así lo siguen automáticamente al reparentarse/destruirse).
+var equipped_weapons: Array = []
+## Solo poblado en un Arma: el Aliado que la porta.
+var wielder: Node = null
 
 # =============================================================================
 # ESTADO DE LA CARTA
@@ -149,12 +172,102 @@ var target_scale: Vector2 = Vector2.ONE
 # Escala base para animaciones de hover (permite que oros a 0.5 tengan hover proporcional)
 var base_scale: Vector2 = Vector2.ONE
 
+## Quién CONTROLA la carta ahora mismo (de qué lado del tablero pelea, quién
+## puede atacar/activar sus habilidades) — por defecto sigue a owner_id
+## (ver su setter abajo), y solo diverge cuando un efecto te deja jugar o
+## controlar una carta ajena sin volverte su dueño (2026-08-29, DAR: jugar
+## una carta del rival te vuelve controlador, no dueño — p.ej. Miguel,
+## "juega una carta de tu mano o de un Cementerio", donde SÍ puede ser el
+## Cementerio rival). Antes este campo existía pero nada lo mantenía
+## sincronizado con owner_id — toda carta normal (nunca tocada por un
+## efecto así) quedaba en controller_id=0 sin importar su dueño real.
 var controller_id: int = 0
-var owner_id: int = 0
+var _owner_id: int = 0
+var owner_id: int:
+	get: return _owner_id
+	set(value):
+		_owner_id = value
+		controller_id = value
 
 ## Marca si la carta fue exhumada del cementerio (DAR - Exhumar)
 ## Las cartas exhumadas van al destierro cuando dejan el campo, no al cementerio
 var is_exhumed: bool = false
+
+## Convertida en una carta (del mismo tipo u otro) SIN habilidad (2026-08-26,
+## p.ej. Signo Amarillo convirtiéndose en un Oro sin habilidad). Distinto de
+## "perder la habilidad" (silenciada, ver KeywordManager.is_silenced()): son
+## dos efectos separados con su propio texto de protección ("no puede ser
+## convertida" vs "no puede perder su habilidad"), pero el resultado visible
+## es el mismo — pierde su caja de texto, conserva coste y Fuerza, y gira
+## 180° (_refresh_disabled_rotation()).
+var is_converted: bool = false:
+	set(value):
+		is_converted = value
+		_refresh_disabled_rotation()
+
+## Datos originales de esta carta cuando su propio efecto la transformó
+## reversiblemente en OTRO tipo/zona de verdad (2026-08-29, p.ej.
+## Jormundgander: Aliado que se convierte en Oro al hacer daño y vuelve a
+## ser Aliado si se lo paga) — {} = no aplica. Distinto de is_converted
+## (que es "perdió su habilidad" sin cambiar tipo/zona, DAR otro efecto):
+## acá card_type y la zona cambian de verdad. GoldManager._mover_oro_a_
+## pagado() lo revisa al pagar este Oro para saber si debe revertirlo en
+## vez de moverlo a Oro Pagado normalmente.
+var revert_to_data: Dictionary = {}
+
+
+func _refresh_disabled_rotation() -> void:
+	"""Gira la carta 180° desde su centro si es del oponente en juego (Oro, Aliado, Arma, Tótem),
+	o si está silenciada o convertida."""
+	var is_opp: bool = (owner_id == 1 or controller_id == 1)
+	var parent_name: String = get_parent().name if get_parent() else ""
+	var is_opp_in_play: bool = is_opp and (
+		current_zone in [
+			Constants.Zone.RESERVA_ORO,
+			Constants.Zone.ORO_PAGADO,
+			Constants.Zone.LINEA_DEFENSA,
+			Constants.Zone.LINEA_ATAQUE,
+			Constants.Zone.LINEA_APOYO
+		]
+		or parent_name in [
+			"OpponentField",
+			"OpponentReservaOro",
+			"OpponentOroPagado",
+			"OpponentLineaAtaque",
+			"OpponentLineaApoyo"
+		]
+	)
+
+	var should_rotate: bool = is_opp_in_play or is_converted
+	if not should_rotate and KeywordManager and KeywordManager.has_method("is_silenced"):
+		should_rotate = KeywordManager.is_silenced(self)
+
+	# Un Aliado sin habilidad (silenciado/convertido) propio que porta un Arma CON
+	# habilidad cuenta como si tuviera habilidad (DAR): no gira.
+	if should_rotate and not is_opp_in_play:
+		for weapon in equipped_weapons:
+			if is_instance_valid(weapon) and not str(weapon.get("card_ability")).strip_edges().is_empty():
+				should_rotate = false
+				break
+
+	var target_rot: float = 180.0 if should_rotate else target_rotation
+	var card_size: Vector2 = size if (size.x > 0 and size.y > 0) else (custom_minimum_size if (custom_minimum_size.x > 0 and custom_minimum_size.y > 0) else Vector2(150, 210))
+	pivot_offset = card_size / 2.0
+	rotation_degrees = target_rot
+
+
+func _apply_frozen_weapon_transform(_t: float, weapon: Node, frozen_pos: Vector2, frozen_rot: float, base_self_rot: float) -> void:
+	"""Callback de tween_method() para congelar la posición/rotación visual
+	de un Arma equipada mientras su portador gira (Convertir/Silenciar) —
+	extraído a método con nombre en vez de lambda inline (2026-08-30:
+	un lambda multilínea como argumento directo de tween_method(), anidado
+	dentro de if/for, le rompía el parser a GDScript — 'Expected indented
+	block after else' en un bloque totalmente ajeno del archivo)."""
+	if not is_instance_valid(weapon):
+		return
+	weapon.global_position = frozen_pos
+	weapon.rotation_degrees = frozen_rot - (rotation_degrees - base_self_rot)
+
 
 ## Enfermedad de invocación (DAR 3.1): true mientras la carta no haya pasado
 ## por una Agrupación del dueño — solo con Furia puede atacar en ese estado.
@@ -173,16 +286,29 @@ var triggers: Array[Dictionary] = []
 const TRIGGER_KEYWORDS: Dictionary = {
 	"on_draw": ["cuando robes", "al robar", "cada vez que robes"],
 	"on_card_drawn": ["cuando robes una carta", "al robar una carta"],
-	"on_enter_play": ["cuando entre al juego", "al entrar al juego", "cuando entra al juego", "cuando entre en juego", "al entrar en juego", "cuando entra en juego"],
-	"on_leave_play": ["cuando deje el juego", "al dejar el juego", "cuando abandona el juego", "cuando salga del juego", "al salir del juego"],
-	"on_destroyed": ["cuando sea destruido", "cuando muera", "al ser destruido", "al morir"],
+	# (2026-08-28, misma corrección de terminología que CardFactory.TRIGGER_PATTERNS)
+	"on_enter_play": ["cuando entre al juego", "al entrar al juego", "cuando entra al juego", "cuando entre en juego", "al entrar en juego", "cuando entra en juego", "cuando entra o salga del juego", "cuando entra en juego o ataque"],
+	"on_leave_play": ["al salir del juego", "cuando salga del juego", "cuando sale del juego", "cuando entra o salga del juego"],
+	"on_destroyed": ["cuando sea destruido", "al ser destruido"],
 	"on_discard": ["cuando descartes", "al descartar"],
-	"on_attack": ["cuando ataque", "al atacar"],
+	# "cuando entra en juego o ataque" (2026-08-29, p.ej. Sherlock Holmes) es
+	# UNA sola cláusula con dos disparadores — "cuando ataque" no aparece
+	# como substring literal ahí ("cuando entra en juego O ataque"), así que
+	# necesita su propia frase para que has_trigger("on_attack") la detecte.
+	"on_attack": ["cuando ataque", "al atacar", "cuando entra en juego o ataque"],
 	"on_block": ["cuando bloquee", "al bloquear"],
-	"on_damage_dealt": ["cuando inflija daño", "al infligir daño", "si hizo daño", "cuando haga daño", "si inflige daño"],
-	"on_damage_received": ["cuando reciba daño", "al recibir daño"],
+	"on_damage_dealt": ["cuando haga daño de combate", "cuando haga daño", "si hizo daño"],
+	"on_damage_received": ["cuando fueras a recibir daño"],
 	"on_turn_start": ["al comienzo del turno", "al inicio del turno"],
-	"on_turn_end": ["al final del turno", "al terminar el turno"],
+	# "en tu fase final" agregado (2026-08-30, p.ej. Espada de O'Higgins) —
+	# antes SOLO estaban las frases genéricas de "al final del turno", que
+	# ninguna carta real usa; "en tu Fase Final" es la frase real del DAR
+	# para este disparador y no matcheaba nada.
+	"on_turn_end": ["al final del turno", "al terminar el turno", "en tu fase final"],
+	# "en tu Agrupación" (2026-08-30, p.ej. Espada del Juicio: "Cuando entra
+	# en juego y en tu Agrupación, Destierra..."). Sin/con tilde por las
+	# dudas — la API a veces trae mojibake en palabras acentuadas.
+	"on_agrupacion": ["en tu agrupación", "en tu agrupacion"],
 	"on_ally_enters": ["cuando otro aliado entre", "cuando un aliado entre"],
 	"on_ally_dies": ["cuando otro aliado muera", "cuando un aliado sea destruido"],
 	"on_oro_placed": ["cuando pongas un oro", "al poner un oro"],
@@ -196,6 +322,12 @@ var _triggers_connected: bool = false
 # INICIALIZACIÓN
 # =============================================================================
 func _ready() -> void:
+	# Inicializar módulos extraídos
+	_interaction = CardInteraction.new()
+	_interaction.setup(self)
+	_animations = CardAnimations.new()
+	_animations.setup(self)
+
 	# Agregar al grupo de cartas para detección de drag
 	add_to_group("cards")
 
@@ -214,18 +346,26 @@ func _ready() -> void:
 	anim_player = get_node_or_null("AnimationPlayer")
 
 	_create_activatable_glow()
+	_create_strength_badge()
+	_create_cost_badge()
+	if not ContinuousEffectManager.card_visual_update_required.is_connected(_on_strength_visual_update_required):
+		ContinuousEffectManager.card_visual_update_required.connect(_on_strength_visual_update_required)
 
 	_is_ready = true
 
 	# Configurar mouse
-	mouse_entered.connect(_on_mouse_entered)
-	mouse_exited.connect(_on_mouse_exited)
-	gui_input.connect(_on_gui_input)
+	# NO conectar mouse_entered/mouse_exited nativos (2026-08-28, arregla el
+	# salto infinito reportado por el usuario): el rect que Godot usa para
+	# esas señales no tiene en cuenta 'scale', así que quedaban desfasadas
+	# cerca de un borde apenas el hover escalaba la carta y competían con
+	# CardInteraction.process() (que sí calcula bien la posición con
+	# get_local_mouse_position()) — las dos fuentes de hover se peleaban y
+	# producían el loop entra/sale. process() es ahora la única fuente de
+	# verdad para is_hovered.
+	gui_input.connect(_interaction.on_gui_input)
 
 	# Escuchar cambios de dorso
-	var game_settings = get_node_or_null("/root/GameSettings")
-	if game_settings:
-		game_settings.card_back_changed.connect(_on_card_back_changed)
+	GameSettings.card_back_changed.connect(_on_card_back_changed)
 
 	# Conectar listeners de triggers y parsear si ya tiene habilidad
 	_connect_trigger_listeners()
@@ -243,6 +383,8 @@ func _ready() -> void:
 
 	# Aplicar aspecto según estado
 	actualizar_aspecto()
+	refresh_strength_badge()
+	_refresh_disabled_rotation()
 
 	# === VALIDACIÓN DE TEXTURA (safety net contra bloques negros) ===
 	if not card_art:
@@ -250,14 +392,12 @@ func _ready() -> void:
 	elif not card_art.texture:
 		printerr("[Card] NEGRO — card_art sin textura tras actualizar_aspecto. id='%s' path='%s' oculta=%s" % [card_id, card_image_path, str(esta_oculta)])
 		# Forzar dorso para evitar el bloque negro
-		var _gs = get_node_or_null("/root/GameSettings")
-		if _gs:
-			var _back = _gs.get_card_back_texture(owner_id)
-			if _back:
-				card_art.texture = _back
-				card_art.visible = true
-				if placeholder:
-					placeholder.visible = false
+		var _back = GameSettings.get_card_back_texture(owner_id)
+		if _back:
+			card_art.texture = _back
+			card_art.visible = true
+			if placeholder:
+				placeholder.visible = false
 
 
 func _apply_pending_data() -> void:
@@ -280,13 +420,11 @@ func _show_loading_dorso() -> void:
 	"""Muestra el dorso de la carta mientras se descarga el arte frontal."""
 	_show_placeholder(false)
 	if card_art:
-		var game_settings = get_node_or_null("/root/GameSettings")
-		if game_settings:
-			var back_tex = game_settings.get_card_back_texture(owner_id)
-			if back_tex:
-				card_art.texture = back_tex
-				card_art.visible = true
-				return
+		var back_tex = GameSettings.get_card_back_texture(owner_id)
+		if back_tex:
+			card_art.texture = back_tex
+			card_art.visible = true
+			return
 	# Fallback: placeholder si no hay dorso configurado
 	_show_placeholder(true)
 
@@ -403,6 +541,15 @@ func load_from_data(data: Dictionary, is_hidden: bool = false) -> void:
 	# Si ya está ready, aplicar aspecto inmediatamente
 	if _is_ready:
 		actualizar_aspecto()
+		refresh_strength_badge()
+		refresh_cost_badge()
+
+	# Una copia recién creada de un nombre ya bloqueado por
+	# KeywordManager.lock_ability_by_name() (2026-08-29, p.ej. Alicia en
+	# Wonderland) debe nacer ya girada 180° — sin esto, una carta robada
+	# DESPUÉS de que el nombre quedó bloqueado no mostraba el indicador
+	# hasta que algo más disparara _refresh_disabled_rotation().
+	_refresh_disabled_rotation()
 
 
 func actualizar_aspecto() -> void:
@@ -414,12 +561,10 @@ func actualizar_aspecto() -> void:
 	if esta_oculta:
 		# Mostrar reverso (dorso de la carta) usando GameSettings según el dueño
 		if card_art:
-			var game_settings = get_node_or_null("/root/GameSettings")
-			if game_settings:
-				# Usar el dorso del dueño de la carta
-				var back_texture = game_settings.get_card_back_texture(owner_id)
-				if back_texture:
-					card_art.texture = back_texture
+			# Usar el dorso del dueño de la carta
+			var back_texture = GameSettings.get_card_back_texture(owner_id)
+			if back_texture:
+				card_art.texture = back_texture
 			card_art.visible = true
 			card_art.modulate.a = 1.0
 		if placeholder:
@@ -461,12 +606,10 @@ func _show_card_back() -> void:
 func _on_card_back_changed(_back_id: String) -> void:
 	"""Actualiza el dorso cuando cambia en GameSettings"""
 	if esta_oculta and card_art:
-		var game_settings = get_node_or_null("/root/GameSettings")
-		if game_settings:
-			# Usar el dorso según el dueño de la carta
-			var back_texture = game_settings.get_card_back_texture(owner_id)
-			if back_texture:
-				card_art.texture = back_texture
+		# Usar el dorso según el dueño de la carta
+		var back_texture = GameSettings.get_card_back_texture(owner_id)
+		if back_texture:
+			card_art.texture = back_texture
 
 
 func load_from_id(id: String) -> void:
@@ -510,7 +653,12 @@ func _on_card_image_loaded(loaded_card_id: String, texture: Texture2D) -> void:
 		if texture:
 			_set_card_texture(texture)
 		else:
-			# CDN falló: mantener dorso visible y señalizar listo igual
+			# CDN falló: mostrar placeholder legible (nombre/coste) en vez del
+			# dorso, porque el dorso no deja identificar qué carta es la que
+			# no cargó — solo aplica si la carta está boca arriba.
+			if not esta_oculta:
+				_update_placeholder()
+				_show_placeholder(true)
 			if not _image_ready:
 				_image_ready = true
 				image_ready.emit()
@@ -535,254 +683,74 @@ func _disconnect_image_signal() -> void:
 		_image_signal_connected = false
 
 
+func _on_strength_visual_update_required(card: Node, stat: String, _base_value: int, _modified_value: int) -> void:
+	"""Refresca el badge correspondiente cuando ContinuousEffectManager
+	avisa que un modificador cambió el valor calculado de ESTA carta —
+	conectado en _ready() (2026-08-30: la función existía referenciada acá
+	en _exit_tree() para desconectarse, pero nunca estuvo declarada ni
+	conectada — 'Identifier not declared', corrupción histórica ajena a
+	esta sesión)."""
+	if card != self:
+		return
+	match stat:
+		"strength":
+			refresh_strength_badge()
+		"cost":
+			refresh_cost_badge()
+
+
 func _exit_tree() -> void:
 	"""Limpieza cuando la carta se elimina"""
 	_disconnect_image_signal()
+	if ContinuousEffectManager.card_visual_update_required.is_connected(_on_strength_visual_update_required):
+		ContinuousEffectManager.card_visual_update_required.disconnect(_on_strength_visual_update_required)
+	# Si esta carta era FUENTE de algún modificador continuo (p.ej. un Arma
+	# dándole Fuerza a su portador), se limpia cuando REALMENTE sale de
+	# juego — is_queued_for_deletion() es la guarda clave (2026-08-22):
+	# _exit_tree() también se dispara en un reparenting normal y temporal
+	# (remove_child + add_child), como cuando un Aliado ataca y se mueve a
+	# Línea de Ataque — el Arma equipada es su HIJA, así que también salía
+	# y volvía a entrar al árbol, y sin esta guarda el bono de Fuerza se
+	# borraba justo al declarar el ataque (el combate usaba la Fuerza base,
+	# aunque la carta siguiera mostrando el badge ya calculado en verde).
+	if is_queued_for_deletion() and ContinuousEffectManager.has_method("remove_modifiers_from_source"):
+		ContinuousEffectManager.remove_modifiers_from_source(self)
+	# Misma idea para modificadores de COSTE registrados por esta carta
+	# mientras estuvo en juego (p.ej. el impuesto de Bernardo O'Higgins a
+	# Talismanes/Tótems, 2026-08-26) — PaymentManager.cost_modifiers no se
+	# limpiaba solo al salir de juego, solo al empezar un turno nuevo.
+	if is_queued_for_deletion() and PaymentManager.has_method("remover_modificador_coste"):
+		PaymentManager.remover_modificador_coste(self)
 
 
 # =============================================================================
-# INTERACCIÓN
+# INTERACCIÓN (implementación en CardInteraction.gd)
 # =============================================================================
-func _on_mouse_entered() -> void:
-	if not can_interact or is_dragging:
-		return
-
-	is_hovered = true
-	if hover_effect:
-		hover_effect.visible = true
-
-	# Guardar z_index original y ponerlo encima de las demás
-	original_z_index = z_index
-	z_index = 100
-
-	emit_signal("card_hovered", self)
-
-	# Animación de hover (proporcional a base_scale)
-	var tween = create_tween()
-	tween.tween_property(self, "scale", base_scale * card_scale_hover, animation_speed)
-
-
-func _on_mouse_exited() -> void:
-	if is_dragging:
-		return
-
-	# Si no puede interactuar, no hacer nada (evita resetear escala en inspección)
-	if not can_interact:
-		return
-
-	is_hovered = false
-	if hover_effect:
-		hover_effect.visible = false
-
-	# Restaurar z_index original
-	z_index = original_z_index
-
-	emit_signal("card_unhovered", self)
-
-	# Volver a escala normal (proporcional a base_scale)
-	var tween = create_tween()
-	var target_scale_val = base_scale * (card_scale_selected if is_selected else card_scale_normal)
-	tween.tween_property(self, "scale", target_scale_val, animation_speed)
-
-
-func _on_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		# Right-click siempre funciona para inspección
-		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			emit_signal("card_right_clicked", self)
-			return
-
-		# Otras interacciones requieren can_interact
-		if not can_interact:
-			return
-
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				if event.double_click:
-					emit_signal("card_double_clicked", self)
-				else:
-					# NO llamar _start_drag() inmediatamente — esperar movimiento
-					_drag_pending = true
-					_drag_start_pos = event.position
-					emit_signal("card_clicked", self)
-			else:
-				if _drag_pending:
-					# El usuario soltó sin arrastrar — solo fue un click
-					_drag_pending = false
-				elif is_dragging:
-					_end_drag()
-
-	elif event is InputEventMouseMotion:
-		if not can_interact:
-			return
-		if _drag_pending:
-			var distance = event.position.distance_to(_drag_start_pos)
-			if distance >= DRAG_THRESHOLD:
-				_drag_pending = false
-				_start_drag(_drag_start_pos)
-		elif is_dragging:
-			_update_drag(event.position)
+func _process(delta: float) -> void:
+	_interaction.process(delta)
 
 
 func _can_declare_attack_drag() -> bool:
-	"""Verifica si un Aliado en el campo puede arrastrarse para declarar
-	ataque. Cubre dos casos DAR: ataque anticipado con Furia durante
-	Vigilia, o declaración normal durante el propio paso de Ataque.
-
-	Antes solo permitía el caso de Furia en Vigilia — como declarar el
-	primer atacante ya cambia la fase a Ataque (GameManager.proceed_to_
-	battle()), CUALQUIER intento de arrastrar un segundo Aliado (con o sin
-	Furia) quedaba bloqueado acá mismo, antes de llegar siquiera a
-	DropZone/GameManager.declare_attacker() — de ahí que nunca se pudiera
-	atacar con más de un Aliado. La validación completa (enfermedad de
-	invocación, etc.) la sigue haciendo TurnManager.can_attack() más
-	adelante; acá solo se decide si tiene sentido iniciar el arrastre."""
-	if card_type != Constants.CardType.ALIADO:
-		return false
-	if current_zone != Constants.Zone.LINEA_DEFENSA:
-		return false
-	var gm = get_node_or_null("/root/GameManager")
-	if not gm:
-		return false
-	if gm.current_phase == Constants.Phase.ATAQUE:
-		return true
-	if gm.current_phase == Constants.Phase.VIGILIA:
-		return has_keyword(Constants.Keyword.FURIA)
-	return false
-
-
-func _start_drag(mouse_pos: Vector2) -> void:
-	"""Inicia el arrastre de la carta"""
-	if not drag_enabled:
-		return
-	if current_state != CardState.IN_HAND:
-		if not _can_declare_attack_drag():
-			return
-
-	is_dragging = true
-	current_state = CardState.DRAGGING
-	drag_offset = mouse_pos
-	original_position = global_position  # Guardar posición global antes de top_level
-	original_z_index = z_index
-	z_index = 100
-	# Desacoplar del Container para que global_position no sea sobreescrita por el layout
-	top_level = true
-	# Godot NO preserva la posición visual al activar top_level: 'position'
-	# pasaba a interpretarse como absoluta de pantalla sin ningún ajuste, así
-	# que la carta saltaba de inmediato a donde sea que ese valor apuntara
-	# (por eso 'se iba a la esquina inferior derecha' apenas se la tomaba).
-	# Hay que reaplicar la posición global recién guardada para que el
-	# arrastre empiece exactamente donde la carta ya estaba.
-	global_position = original_position
-
-	var tween = create_tween()
-	tween.tween_property(self, "scale", Vector2.ONE * card_scale_selected, animation_speed)
-
-
-func _update_drag(mouse_pos: Vector2) -> void:
-	"""Actualiza la posición durante el arrastre"""
-	if not is_dragging:
-		return
-
-	global_position = get_global_mouse_position() - drag_offset
-	emit_signal("card_dragged", self, global_position)
-
-
-func _end_drag() -> void:
-	"""Finaliza el arrastre"""
-	if not is_dragging:
-		return
-
-	is_dragging = false
-	emit_signal("card_dropped", self, global_position)
-
-	# Verificar si hay zona de drop válida debajo
-	var drop_zone = _get_drop_zone_under_mouse()
-	if drop_zone and drop_zone.has_method("on_card_dropped"):
-		# La zona de drop maneja la carta
-		drop_zone.on_card_dropped(self)
-	else:
-		# Regresar a la posición original con animación
-		return_to_hand()
+	"""Wrapper público — llamado externamente por CardInteractionModule."""
+	return _interaction.can_declare_attack_drag()
 
 
 func return_to_hand() -> void:
-	"""Regresa la carta a su posición original (mano o campo) con animación"""
-	if current_zone in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
-		# Carta del campo: reintegrar al Container (top_level=false) y dejar que gestione posición
-		current_state = CardState.IN_PLAY
-		top_level = false
-		# Mientras se arrastraba (top_level=true), la posición LOCAL quedó con
-		# el último valor usado para alcanzar la posición global del mouse.
-		# Al volver a top_level=false esa posición local pasa a sumarse a la
-		# del contenedor padre — el HBoxContainer recién la corrige en su
-		# próximo reordenamiento (diferido), así que por uno o dos fotogramas
-		# la carta se dibuja en un lugar completamente incorrecto antes de
-		# 'aparecer' en su sitio. Forzar el reordenamiento ahora evita ese
-		# fotograma con posición basura (causa real de que pareciera
-		# desaparecer justo al soltar la carta en la Línea de Ataque).
-		position = Vector2.ZERO
-		var parent_container = get_parent()
-		if parent_container:
-			parent_container.queue_sort()
-		var tween = create_tween()
-		tween.set_parallel(true)
-		tween.tween_property(self, "rotation_degrees", target_rotation, 0.2).set_ease(Tween.EASE_OUT)
-		tween.tween_property(self, "scale", base_scale, 0.2).set_ease(Tween.EASE_OUT)
-		await tween.finished
-	else:
-		# Carta de la mano: animar de vuelta a la posición guardada
-		current_state = CardState.IN_HAND
-		top_level = false
-		var tween = create_tween()
-		tween.set_parallel(true)
-		tween.tween_property(self, "global_position", original_position, 0.25).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-		tween.tween_property(self, "rotation_degrees", target_rotation, 0.25).set_ease(Tween.EASE_OUT)
-		tween.tween_property(self, "scale", base_scale, 0.25).set_ease(Tween.EASE_OUT)
-		await tween.finished
-
-	z_index = original_z_index
-
-
-func _get_drop_zone_under_mouse() -> Node:
-	"""Detecta la zona de drop más específica bajo el mouse.
-
-	La zona de batalla (LINEA_ATAQUE, ~700x96) está geométricamente contenida
-	dentro de la zona de campo (LINEA_DEFENSA, ~800x240) — ver
-	SceneSetupModule._setup_drop_zones(). Antes se devolvía la primera zona
-	del grupo "drop_zones" que contuviera el mouse, y como field_drop se
-	registra antes que battle_drop, soltar una carta cerca del centro del
-	tablero (para declarar un atacante) siempre caía en field_drop → volvía
-	a pagarse el coste como si se jugara de nuevo. Ahora gana la zona de
-	área más chica entre todas las que contienen el punto (la más
-	específica), sin depender del orden de registro."""
-	var mouse_pos = get_global_mouse_position()
-	var best_zone: Node = null
-	var best_area := INF
-
-	for zone in get_tree().get_nodes_in_group("drop_zones"):
-		if zone is Control:
-			var rect: Rect2 = zone.get_global_rect()
-			if rect.has_point(mouse_pos):
-				var area: float = rect.size.x * rect.size.y
-				if area < best_area:
-					best_area = area
-					best_zone = zone
-
-	return best_zone
+	"""Wrapper público — llamado externamente por DropZone, GoldManager, CardInteractionModule."""
+	await _interaction.return_to_hand()
 
 
 # =============================================================================
 # SELECCIÓN
 # =============================================================================
 func select() -> void:
-	"""Selecciona la carta"""
+	"""Selecciona la carta — solo el borde, sin escala (2026-08-28, a pedido
+	del usuario: hacía un 'pop' a Vector2.ONE * card_scale_selected que
+	ignoraba base_scale — se veía mal en cartas en juego, sobre todo en
+	Tótems (base_scale 0.8) que saltaban a tamaño completo."""
 	is_selected = true
 	if selection_effect:
 		selection_effect.visible = true
-
-	var tween = create_tween()
-	tween.tween_property(self, "scale", Vector2.ONE * card_scale_selected, animation_speed)
 
 
 func deselect() -> void:
@@ -790,9 +758,6 @@ func deselect() -> void:
 	is_selected = false
 	if selection_effect:
 		selection_effect.visible = false
-
-	var tween = create_tween()
-	tween.tween_property(self, "scale", Vector2.ONE * card_scale_normal, animation_speed)
 
 
 func toggle_selection() -> void:
@@ -833,69 +798,179 @@ func _create_activatable_glow() -> void:
 	move_child(activatable_glow, 0)  # detrás del arte de la carta
 
 
-func set_activatable(active: bool) -> void:
-	"""Muestra u oculta el brillo celeste de 'tiene una habilidad activable
-	disponible ahora'. Llamado desde un escaneo externo (ver
-	CardInspectionLayer.refresh_activatable_glows()), no desde la propia
-	carta — ella no sabe si puede pagarse ni si ya se usó este turno."""
-	if active == is_activatable:
-		return
-	is_activatable = active
+func _create_strength_badge() -> void:
+	"""Crea el badge de Fuerza efectiva en la esquina superior izquierda (solo el número brillante, sin caja)."""
+	var lbl = Label.new()
+	lbl.name = "StrengthBadge"
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_override("font", preload("res://assets/fonts/Cinzel-Bold.ttf"))
+	lbl.add_theme_font_size_override("font_size", 22)
+	lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
+	lbl.add_theme_constant_override("shadow_offset_x", 2)
+	lbl.add_theme_constant_override("shadow_offset_y", 2)
+	lbl.add_theme_constant_override("shadow_outline_size", 4)
+	lbl.position = Vector2(6, 2)
+	lbl.size = Vector2(28, 28)
+	lbl.pivot_offset = Vector2(14, 14)
+	lbl.visible = false
 
+	strength_badge = lbl
+	add_child(strength_badge)
+	move_child(strength_badge, get_child_count() - 1)
+
+
+func _create_cost_badge() -> void:
+	"""Crea el badge de Coste efectivo en la esquina superior derecha (solo el número brillante, sin caja)."""
+	var lbl = Label.new()
+	lbl.name = "CostBadge"
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_override("font", preload("res://assets/fonts/Cinzel-Bold.ttf"))
+	lbl.add_theme_font_size_override("font_size", 22)
+	lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
+	lbl.add_theme_constant_override("shadow_offset_x", 2)
+	lbl.add_theme_constant_override("shadow_offset_y", 2)
+	lbl.add_theme_constant_override("shadow_outline_size", 4)
+	lbl.position = Vector2(custom_minimum_size.x - 32.0, 2)
+	lbl.size = Vector2(28, 28)
+	lbl.pivot_offset = Vector2(14, 14)
+	lbl.visible = false
+
+	cost_badge = lbl
+	add_child(cost_badge)
+	move_child(cost_badge, get_child_count() - 1)
+
+
+func refresh_strength_badge(source_override: Node = null) -> void:
+	"""Recalcula y muestra la Fuerza efectiva AHORA (no espera al próximo
+	cambio de modificador) — llamar justo después de equipar/quitar un Arma
+	o cualquier acción que pueda afectar la Fuerza de esta carta."""
+	var effective := _card_strength
+	if ContinuousEffectManager.has_method("get_modified_strength"):
+		effective = ContinuousEffectManager.get_modified_strength(source_override if source_override else self)
+	_apply_strength_badge_text(effective)
+
+
+func _apply_strength_badge_text(value: int) -> void:
+	if not strength_badge:
+		return
+	if card_type != Constants.CardType.ALIADO or esta_oculta:
+		strength_badge.visible = false
+		return
+	if value == _card_strength:
+		strength_badge.visible = false
+		return
+
+	var is_buff := value > _card_strength
+	var lbl: Label = strength_badge as Label
+	if not lbl:
+		return
+
+	var prev_text := lbl.text
+	var new_text := str(value)
+	lbl.text = new_text
+
+	if is_buff:
+		lbl.add_theme_color_override("font_color", Color(0.25, 1.0, 0.40, 1.0))
+		lbl.add_theme_color_override("font_shadow_color", Color(0.02, 0.20, 0.05, 0.95))
+	else:
+		lbl.add_theme_color_override("font_color", Color(1.0, 0.35, 0.35, 1.0))
+		lbl.add_theme_color_override("font_shadow_color", Color(0.25, 0.02, 0.02, 0.95))
+
+	if not strength_badge.visible or prev_text != new_text:
+		strength_badge.visible = true
+		strength_badge.scale = Vector2(1.35, 1.35)
+		var tw = create_tween()
+		tw.tween_property(strength_badge, "scale", Vector2.ONE, 0.20).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	else:
+		strength_badge.visible = true
+
+
+func refresh_cost_badge(source_override: Node = null) -> void:
+	"""Recalcula y muestra el Coste efectivo AHORA (PaymentManager.
+	calcular_coste_real, que ya suma cost_modifiers/oros_mas_modifiers/
+	recargos por nombre) — llamar después de cualquier acción que pueda
+	cambiarlo: aplicar/quitar un modificador de coste, o al empezar un
+	turno nuevo (los recargos diferidos tipo Tesoro de los Césares recién
+	arrancan/expiran ahí)."""
+	var effective := _card_cost
+	if PaymentManager.has_method("calcular_coste_real"):
+		effective = PaymentManager.calcular_coste_real(source_override if source_override else self)
+	_apply_cost_badge_text(effective)
+
+
+func _apply_cost_badge_text(value: int) -> void:
+	if not cost_badge:
+		return
+	if esta_oculta:
+		cost_badge.visible = false
+		return
+	if value == _card_cost:
+		cost_badge.visible = false
+		return
+
+	var is_discount := value < _card_cost
+	var lbl: Label = cost_badge as Label
+	if not lbl:
+		return
+
+	var prev_text := lbl.text
+	var new_text := str(value)
+	lbl.text = new_text
+
+	if is_discount:
+		lbl.add_theme_color_override("font_color", Color(0.25, 1.0, 0.40, 1.0))
+		lbl.add_theme_color_override("font_shadow_color", Color(0.02, 0.20, 0.05, 0.95))
+	else:
+		lbl.add_theme_color_override("font_color", Color(1.0, 0.35, 0.35, 1.0))
+		lbl.add_theme_color_override("font_shadow_color", Color(0.25, 0.02, 0.02, 0.95))
+
+	if not cost_badge.visible or prev_text != new_text:
+		cost_badge.visible = true
+		cost_badge.scale = Vector2(1.35, 1.35)
+		var tw = create_tween()
+		tw.tween_property(cost_badge, "scale", Vector2.ONE, 0.20).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	else:
+		cost_badge.visible = true
+
+
+func set_activatable(value: bool) -> void:
+	"""Muestra u oculta el brillo celeste que indica 'tenés una habilidad
+	activable disponible ahora mismo' (distinto del brillo amarillo de
+	CardInspectionLayer, que indica 'resolviéndose en la pila') — llamado
+	desde CardInspectionLayer.refresh_activatable_glows()."""
+	if is_activatable == value:
+		return
+	is_activatable = value
 	if not activatable_glow:
 		return
-
 	if _activatable_tween and _activatable_tween.is_valid():
 		_activatable_tween.kill()
-
-	if active:
+	if value:
 		activatable_glow.visible = true
-		activatable_glow.modulate.a = 1.0
-		_activatable_tween = create_tween().set_loops()
-		_activatable_tween.tween_property(activatable_glow, "modulate:a", 0.35, 0.6).set_ease(Tween.EASE_IN_OUT)
+		activatable_glow.modulate.a = 0.3
+		_activatable_tween = create_tween()
+		_activatable_tween.set_loops()
 		_activatable_tween.tween_property(activatable_glow, "modulate:a", 1.0, 0.6).set_ease(Tween.EASE_IN_OUT)
+		_activatable_tween.tween_property(activatable_glow, "modulate:a", 0.3, 0.6).set_ease(Tween.EASE_IN_OUT)
 	else:
 		activatable_glow.visible = false
 
 
-# =============================================================================
-# ANIMACIONES
-# =============================================================================
+# ANIMACIONES (implementación en CardAnimations.gd)
 func move_to(target_pos: Vector2, duration: float = 0.3) -> void:
-	"""Mueve la carta a una posición con animación"""
-	var tween = create_tween()
-	tween.tween_property(self, "position", target_pos, duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-
-
-func flip_card(face_up: bool, duration: float = 0.2) -> void:
-	"""Voltea la carta"""
-	is_face_up = face_up
-
-	var tween = create_tween()
-	tween.tween_property(self, "scale:x", 0, duration / 2)
-	tween.tween_callback(func():
-		if card_base:
-			card_base.visible = face_up
-	)
-	tween.tween_property(self, "scale:x", card_scale_normal, duration / 2)
+	_animations.move_to(target_pos, duration)
 
 
 func play_destroy_animation() -> void:
-	"""Animación cuando la carta es destruida"""
-	var tween = create_tween()
-	tween.tween_property(self, "modulate:a", 0, 0.3)
-	tween.parallel().tween_property(self, "scale", Vector2.ONE * 0.5, 0.3)
-	tween.tween_callback(queue_free)
+	_animations.play_destroy_animation()
 
 
 func play_enter_animation() -> void:
-	"""Animación cuando la carta entra en juego"""
-	scale = Vector2.ZERO
-	modulate.a = 0
-
-	var tween = create_tween()
-	tween.tween_property(self, "scale", Vector2.ONE, 0.3).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-	tween.parallel().tween_property(self, "modulate:a", 1, 0.2)
+	_animations.play_enter_animation()
 
 
 # =============================================================================
@@ -907,8 +982,29 @@ func get_strength() -> int:
 
 
 func has_keyword(keyword: int) -> bool:
-	"""Verifica si la carta tiene una keyword"""
-	return keyword in card_keywords
+	"""Verifica si la carta tiene una keyword — incluye las que le transmiten
+	sus Armas equipadas (2026-08-24, DAR): un Arma con Furia/Imbloqueable/
+	etc. se la da a su portador mientras esté equipada. Se lee
+	weapon.card_keywords directo (no weapon.has_keyword()) porque un Arma
+	nunca porta otras Armas — no hace falta ni tiene sentido recursar.
+
+	También consulta ContinuousEffectManager (2026-09-02, bug reportado por
+	el usuario con Espíritu Kotaix: 'Tus Aliados ganan... Furia' registraba
+	el modificador de keyword bien, pero esta función — la que de verdad
+	usa la declaración de ataque, CardInteractionModule.gd — solo miraba
+	card_keywords/equipped_weapons, sin ningún cruce con las keywords
+	OTORGADAS por auras de otras cartas. Hay un tercer sistema paralelo
+	(KeywordManager._temporary_keywords) que tampoco se cruza con ninguno
+	de los otros dos — quedó fuera de este fix a propósito, alcance
+	acotado al caso reportado."""
+	if keyword in card_keywords:
+		return true
+	for weapon in equipped_weapons:
+		if is_instance_valid(weapon) and keyword in weapon.card_keywords:
+			return true
+	if ContinuousEffectManager and ContinuousEffectManager.has_method("has_keyword") and ContinuousEffectManager.has_keyword(self, keyword):
+		return true
+	return false
 
 
 func can_attack() -> bool:
@@ -944,6 +1040,7 @@ func set_zone(zone: int) -> void:
 			current_state = CardState.IN_EXILE
 		Constants.Zone.CASTILLO:
 			current_state = CardState.IN_DECK
+	_refresh_disabled_rotation()
 
 
 # =============================================================================
@@ -977,6 +1074,10 @@ func parse_triggers_from_ability() -> void:
 				})
 				# Solo un trigger por tipo
 				break
+	# Nota (2026-08-27): los Talismanes NO se resuelven por acá — no
+	# "disparan" nada (DAR Sección 7.4 es para habilidades disparadas de
+	# permanentes). Su texto se resuelve directo al jugarlos, ver
+	# TriggerSystem.resolve_talisman() / GoldManager._trigger_enter_play().
 
 
 func is_in_play() -> bool:
@@ -1009,9 +1110,7 @@ func _check_and_activate_trigger(trigger_type: String, event_data: Dictionary) -
 	print("[Card] Trigger detectado: %s en %s" % [trigger_type, _card_name])
 
 	# Registrar con TriggerSystem para gestión de cola (DAR 7.4)
-	var trigger_system = get_node_or_null("/root/TriggerSystem")
-	if trigger_system:
-		trigger_system.register_trigger(self, trigger_type, event_data)
+	TriggerSystem.register_trigger(self, trigger_type, event_data)
 
 	# También emitir señal local para conexiones directas
 	emit_signal("trigger_activated", self, trigger_type, event_data)
@@ -1077,90 +1176,20 @@ func _on_trigger_event(trigger_type: String, event_data: Dictionary) -> Dictiona
 				result.merge(handler_result, true)
 			return result
 
-	# Si no hay handler específico, intentar resolver por tipo de trigger
-	result = await _resolve_default_effect(trigger_type, event_data)
-
+	# Sin handler específico registrado (2026-08-22): NO usar
+	# _resolve_default_effect() acá — es un escaneo de palabras clave sobre
+	# el texto COMPLETO de la carta (sin aislar por oración), así que una
+	# carta con VARIAS habilidades en el mismo bloque (p.ej. Tyet: 'Cuando
+	# entra en juego, busca un Arma o un Oro...' + más adelante 'Robar dos
+	# cartas' de una habilidad de Oro completamente distinta) disparaba la
+	# frase equivocada — Tyet buscaba nada y robaba una carta en su lugar.
+	# TriggerSystem._execute_trigger_effect() ya tiene el parser bueno
+	# (aísla la oración correcta, reconoce SEARCH/DESTROY/BUFF/etc., no solo
+	# 'roba') y lo corre él mismo cuando este resultado no aplicó nada.
+	result["no_handler"] = true
 	return result
 
 
-func _resolve_default_effect(trigger_type: String, event_data: Dictionary) -> Dictionary:
-	"""Resuelve efectos por defecto basados en el texto de habilidad
-	'En medida de lo posible': intenta ejecutar lo que pueda
-	"""
-	var result = {
-		"success": true,
-		"partial": false,
-		"effects_applied": []
-	}
-
-	var ability_lower = _card_ability.to_lower()
-
-	# Detectar y ejecutar efectos comunes del texto
-	var effect_ctrl = get_node_or_null("/root/EffectController")
-	var game_mgr = get_node_or_null("/root/GameManager")
-
-	# Robar cartas
-	if ability_lower.contains("roba") and ability_lower.contains("carta"):
-		var amount = _extract_number_from_text(ability_lower, "roba", 1)
-		if effect_ctrl:
-			var draw_result = await effect_ctrl.draw_cards(controller_id, amount)
-			result.effects_applied.append({
-				"type": "draw",
-				"requested": amount,
-				"actual": draw_result.actual
-			})
-			if draw_result.actual < amount:
-				result.partial = true
-
-	# Descartar cartas
-	if ability_lower.contains("descarta") and ability_lower.contains("carta"):
-		# TODO: Implementar selección de cartas a descartar
-		result.effects_applied.append({"type": "discard", "pending": true})
-
-	# Infligir daño
-	if ability_lower.contains("inflige") and ability_lower.contains("daño"):
-		var damage = _extract_number_from_text(ability_lower, "inflige", 1)
-		# TODO: Implementar sistema de daño
-		result.effects_applied.append({"type": "damage", "amount": damage})
-
-	# Destruir carta
-	if ability_lower.contains("destruye"):
-		# TODO: Implementar selección de objetivo
-		result.effects_applied.append({"type": "destroy", "pending": true})
-
-	# Generar oros virtuales
-	if ability_lower.contains("genera") and ability_lower.contains("oro"):
-		var amount = _extract_number_from_text(ability_lower, "genera", 1)
-		if game_mgr and game_mgr.has_method("generar_oros_virtuales"):
-			game_mgr.generar_oros_virtuales(amount)
-			result.effects_applied.append({"type": "virtual_gold", "amount": amount})
-
-	return result
-
-
-func _extract_number_from_text(text: String, after_word: String, default: int) -> int:
-	"""Extrae un número del texto después de una palabra clave"""
-	var pos = text.find(after_word)
-	if pos == -1:
-		return default
-
-	# Buscar número después de la palabra
-	var remaining = text.substr(pos + after_word.length()).strip_edges()
-
-	# Mapeo de palabras a números
-	var word_numbers = {
-		"una": 1, "un": 1, "1": 1,
-		"dos": 2, "2": 2,
-		"tres": 3, "3": 3,
-		"cuatro": 4, "4": 4,
-		"cinco": 5, "5": 5
-	}
-
-	for word in word_numbers:
-		if remaining.begins_with(word):
-			return word_numbers[word]
-
-	return default
 
 
 func on_entered_play() -> void:
@@ -1171,9 +1200,7 @@ func on_entered_play() -> void:
 	parse_triggers_from_ability()
 
 	# Registrar con TriggerSystem
-	var trigger_system = get_node_or_null("/root/TriggerSystem")
-	if trigger_system:
-		trigger_system.bind_card_to_triggers(self)
+	TriggerSystem.bind_card_to_triggers(self)
 
 	print("[Card] %s entró al juego con %d triggers" % [_card_name, triggers.size()])
 
@@ -1183,11 +1210,7 @@ func on_left_play() -> void:
 	Limpia efectos continuos y handlers
 	"""
 	# Desregistrar efectos continuos
-	var trigger_system = get_node_or_null("/root/TriggerSystem")
-	if trigger_system:
-		trigger_system.unregister_continuous_effect(self)
+	TriggerSystem.unregister_continuous_effect(self)
 
 	effect_handlers.clear()
 	print("[Card] %s dejó el juego" % _card_name)
-
-

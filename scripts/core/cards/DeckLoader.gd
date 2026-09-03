@@ -25,18 +25,14 @@ var _pending_requests: Dictionary = {}  # player_id -> HTTPRequest
 # Almacén de mazos cargados (datos de cartas, no instancias)
 var loaded_decks: Dictionary = {}  # player_id -> Array[Dictionary] (card data)
 
-# Referencias a singletons (se obtienen en _ready)
-var _card_database: Node = null
-var _card_factory: Node = null
-var _game_manager: Node = null
-
 # =============================================================================
 # INICIALIZACIÓN
 # =============================================================================
 func _ready() -> void:
-	_card_database = get_node_or_null("/root/CardDatabase")
-	_card_factory = get_node_or_null("/root/CardFactory")
-	_game_manager = get_node_or_null("/root/GameManager")
+	# (2026-08-28, "módulos gordos" punto 1): CardDatabase/CardFactory/
+	# GameManager son autoloads garantizados — se saca el cacheo redundante
+	# vía get_node_or_null() (CardFactory y GameManager tampoco se usaban
+	# en este archivo más allá de la asignación).
 	print("[DeckLoader] Inicializado")
 
 
@@ -103,29 +99,23 @@ func are_all_decks_ready() -> bool:
 # =============================================================================
 func _ensure_card_database_loaded() -> void:
 	"""Asegura que CardDatabase esté cargado antes de continuar"""
-	_card_database = get_node_or_null("/root/CardDatabase")
-
-	if not _card_database:
-		push_error("[DeckLoader] CardDatabase no disponible")
-		return
-
 	# Si ya está cargado, continuar
-	if _card_database.is_loaded:
-		print("[DeckLoader] CardDatabase ya tiene %d cartas" % _card_database.cards.size())
+	if CardDatabase.is_loaded:
+		print("[DeckLoader] CardDatabase ya tiene %d cartas" % CardDatabase.cards.size())
 		return
 
 	# Si está cargando, esperar
-	if _card_database.is_loading:
+	if CardDatabase.is_loading:
 		print("[DeckLoader] Esperando a que CardDatabase termine de cargar...")
-		await _card_database.cards_loaded
-		print("[DeckLoader] CardDatabase cargado: %d cartas" % _card_database.cards.size())
+		await CardDatabase.cards_loaded
+		print("[DeckLoader] CardDatabase cargado: %d cartas" % CardDatabase.cards.size())
 		return
 
 	# Si no está cargado ni cargando, iniciar carga
 	print("[DeckLoader] Iniciando carga de CardDatabase...")
-	_card_database.load_cards_from_api("all")
-	await _card_database.cards_loaded
-	print("[DeckLoader] CardDatabase cargado: %d cartas" % _card_database.cards.size())
+	CardDatabase.load_cards_from_api("all")
+	await CardDatabase.cards_loaded
+	print("[DeckLoader] CardDatabase cargado: %d cartas" % CardDatabase.cards.size())
 
 
 # =============================================================================
@@ -210,6 +200,25 @@ func _process_deck_data(player_id: int, deck_data: Dictionary) -> void:
 	var main_deck: Dictionary = datos_json.get("main", {})
 	var side_deck: Dictionary = datos_json.get("side", {})
 
+	# Alternativa: {"entries": [{"myl_id"/"card_id"/"id", "quantity"}, ...]}
+	# (2026-08-24, mazos preset descargados de /decks/public/{id}/ — ver
+	# DeckSelector._get_preset_decks()). Mismo fallback que ya tenía
+	# _process_external_deck_data() para /external/my-decks/, pero acá
+	# faltaba: los mazos locales solo miraban datos_json.main y fallaban con
+	# 'El mazo no tiene cartas en el main deck' aunque el archivo sí tuviera
+	# cartas, solo que en forma de entries en vez de datos_json.main.
+	if main_deck.is_empty() and deck_data.get("entries") is Array:
+		var main_dict := {}
+		for entry in deck_data.entries:
+			if not entry is Dictionary:
+				continue
+			var cid = str(entry.get("myl_id", entry.get("card_id", entry.get("id", ""))))
+			if cid.is_empty():
+				continue
+			var qty = int(entry.get("quantity", entry.get("qty", 1)))
+			main_dict[cid] = main_dict.get(cid, 0) + qty
+		main_deck = main_dict
+
 	if main_deck.is_empty():
 		emit_signal("deck_load_failed", player_id, "El mazo no tiene cartas en el main deck")
 		return
@@ -225,7 +234,7 @@ func _process_deck_data(player_id: int, deck_data: Dictionary) -> void:
 	var deck_card_data = await _collect_deck_card_data(player_id, main_deck, total_cards)
 
 	if deck_card_data.is_empty():
-		emit_signal("deck_load_failed", player_id, "No se pudieron encontrar cartas (CardDatabase tiene %d cartas)" % (_card_database.cards.size() if _card_database else 0))
+		emit_signal("deck_load_failed", player_id, "No se pudieron encontrar cartas (CardDatabase tiene %d cartas)" % CardDatabase.cards.size())
 		return
 
 	# Guardar datos del mazo (se instanciarán cuando Main.gd lo solicite)
@@ -269,6 +278,19 @@ func _process_external_deck_data(player_id: int, deck_data: Dictionary) -> void:
 	if not main_deck is Dictionary:
 		main_deck = {}
 
+	# Forma real confirmada de /external/my-decks/: {"entries": [{"myl_id","card_id","quantity",...}], "sideboard": [...]}
+	if main_deck.is_empty() and deck_data.get("entries") is Array:
+		var main_dict := {}
+		for entry in deck_data.entries:
+			if not entry is Dictionary:
+				continue
+			var cid = str(entry.get("myl_id", entry.get("card_id", entry.get("id", ""))))
+			if cid.is_empty():
+				continue
+			var qty = int(entry.get("quantity", entry.get("qty", 1)))
+			main_dict[cid] = main_dict.get(cid, 0) + qty
+		main_deck = main_dict
+
 	# Alternativa: lista plana de {myl_id/card_id/id, quantity, is_side}
 	if main_deck.is_empty() and datos_json.get("cards") is Array:
 		var main_dict := {}
@@ -299,7 +321,7 @@ func _process_external_deck_data(player_id: int, deck_data: Dictionary) -> void:
 
 	if deck_card_data.is_empty():
 		emit_signal("deck_load_failed", player_id, "No se encontraron cartas del mazo '%s' en CardDatabase (%d cartas cargadas)" % [
-			deck_name, _card_database.cards.size() if _card_database else 0
+			deck_name, CardDatabase.cards.size()
 		])
 		return
 
@@ -351,11 +373,11 @@ func _collect_deck_card_data(player_id: int, deck_list: Dictionary, total: int) 
 
 func _get_card_data(uuid: String) -> Dictionary:
 	"""Obtiene los datos de una carta por su UUID o ID"""
-	if not _card_database or not _card_database.is_loaded:
+	if not CardDatabase.is_loaded:
 		return {}
 
 	# CardDatabase.get_card() ahora busca por ID y UUID
-	return _card_database.get_card(uuid)
+	return CardDatabase.get_card(uuid)
 
 
 func _create_card_instance(card_data: Dictionary, player_id: int) -> Node:
@@ -367,13 +389,7 @@ func _create_card_instance(card_data: Dictionary, player_id: int) -> Node:
 
 	Returns: Nodo Card o null si falla
 	"""
-	if not _card_factory:
-		_card_factory = get_node_or_null("/root/CardFactory")
-		if not _card_factory:
-			push_error("[DeckLoader] CardFactory no disponible")
-			return null
-
-	var card = _card_factory.create_card_from_json(card_data)
+	var card = CardFactory.create_card_from_json(card_data)
 	if card:
 		# Asignar dueño
 		card.set_meta("owner_id", player_id)
@@ -428,6 +444,7 @@ func get_bundled_decks() -> Array:
 						"arquetipo": data.get("arquetipo", ""),
 						"formato":   data.get("formato", ""),
 						"datos_json": data.get("datos_json", {}),
+						"entries":   data.get("entries", []),
 					})
 		fname = dir.get_next()
 	print("[DeckLoader] %d mazos bundled encontrados" % result.size())
@@ -498,6 +515,7 @@ func get_local_decks() -> Array:
 						"arquetipo": data.get("arquetipo", ""),
 						"formato":  data.get("formato", ""),
 						"datos_json": data.get("datos_json", {}),
+						"entries":   data.get("entries", []),
 					})
 		fname = dir.get_next()
 	print("[DeckLoader] %d mazos locales encontrados" % result.size())
@@ -562,13 +580,13 @@ func load_random_deck(player_id: int, count: int = 40) -> void:
 	"""
 	await _ensure_card_database_loaded()
 
-	if not _card_database or not _card_database.is_loaded:
+	if not CardDatabase.is_loaded:
 		emit_signal("deck_load_failed", player_id, "CardDatabase no está cargado")
 		return
 
 	print("[DeckLoader] Generando mazo aleatorio de %d cartas para jugador %d..." % [count, player_id])
 
-	var all_cards = _card_database.get_all_cards()
+	var all_cards = CardDatabase.get_all_cards()
 	if all_cards.is_empty():
 		emit_signal("deck_load_failed", player_id, "No hay cartas disponibles")
 		return

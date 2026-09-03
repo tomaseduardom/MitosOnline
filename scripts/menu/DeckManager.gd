@@ -241,6 +241,13 @@ func _create_deck_card(deck: Dictionary) -> Control:
 	separator.modulate = Color(1, 1, 1, 0.2)
 	footer_vbox.add_child(separator)
 
+	# Curva de coste (2026-08-28, a pedido del usuario — mostrar el mazo más
+	# visual): mini histograma de cuántas cartas hay por coste, para juzgar
+	# de un vistazo si el mazo es agresivo (curva baja) o de control (alta).
+	var curve_costs := _compute_cost_curve(deck)
+	if not curve_costs.is_empty():
+		footer_vbox.add_child(_build_mana_curve_row(curve_costs))
+
 	# Stats row
 	var stats_hbox = HBoxContainer.new()
 	stats_hbox.add_theme_constant_override("separation", 24)
@@ -301,6 +308,133 @@ func _create_deck_card(deck: Dictionary) -> Control:
 	)
 
 	return card
+
+
+func _ensure_card_database_ready() -> bool:
+	"""Carga CardDatabase desde disco (bundled o caché local) SIN red — esta
+	pantalla es un menú, no queremos que armar la curva de coste dependa de
+	golpear una API (y menos la local en localhost:3000, que hoy no corre).
+	Devuelve false si no hay ningún catálogo disponible; en ese caso la
+	curva simplemente no se muestra."""
+	if CardDatabase.is_loaded and not CardDatabase.cards.is_empty():
+		return true
+	if CardDatabase.load_cards_from_bundled():
+		return true
+	if CardDatabase.load_cards_from_cache():
+		return true
+	return false
+
+
+func _compute_cost_curve(deck: Dictionary) -> Array:
+	"""Cuenta cuántas cartas del mazo hay por coste (0,1,2,3,4,5,'6+'),
+	excluyendo Oros (no forman parte de la curva de mazo). Resuelve el mismo
+	abanico de formas que ya prueba DeckLoader.gd para un mazo (datos_json.
+	main como {id: cantidad}, o 'entries'/'cards' como Array de
+	{myl_id/card_id/id, quantity}) — mismo motivo: no se pudo confirmar la
+	forma exacta de /api/mazos/publicos sin el backend corriendo. Devuelve
+	[] si no se pudo resolver nada (mazo vacío o CardDatabase sin catálogo),
+	así el llamador sabe que no hay nada que dibujar."""
+	if not _ensure_card_database_ready():
+		return []
+
+	var datos_json = deck.get("datos_json", deck.get("data", {}))
+	if datos_json is String:
+		datos_json = JSON.parse_string(datos_json)
+	if not datos_json is Dictionary:
+		datos_json = {}
+
+	var main_deck: Dictionary = datos_json.get("main", datos_json.get("main_deck", datos_json.get("maindeck", {})))
+	if not main_deck is Dictionary:
+		main_deck = {}
+
+	if main_deck.is_empty() and deck.get("entries") is Array:
+		for entry in deck.entries:
+			if not entry is Dictionary:
+				continue
+			var cid = str(entry.get("myl_id", entry.get("card_id", entry.get("id", ""))))
+			if cid.is_empty():
+				continue
+			var qty = int(entry.get("quantity", entry.get("qty", 1)))
+			main_deck[cid] = main_deck.get(cid, 0) + qty
+
+	if main_deck.is_empty() and datos_json.get("cards") is Array:
+		for entry in datos_json.cards:
+			if not entry is Dictionary or entry.get("is_side", false):
+				continue
+			var cid = str(entry.get("myl_id", entry.get("card_id", entry.get("id", ""))))
+			if cid.is_empty():
+				continue
+			var qty = int(entry.get("quantity", entry.get("qty", 1)))
+			main_deck[cid] = main_deck.get(cid, 0) + qty
+
+	if main_deck.is_empty():
+		return []
+
+	# Buckets 0..5 y "6+"
+	var buckets: Array = [0, 0, 0, 0, 0, 0, 0]
+	var any_resolved := false
+	for cid in main_deck:
+		var card_data: Dictionary = CardDatabase.get_card(str(cid))
+		if card_data.is_empty():
+			continue
+		if card_data.get("tipo", -1) == Constants.CardType.ORO:
+			continue
+		any_resolved = true
+		var coste: int = int(card_data.get("coste", 0))
+		var idx: int = clampi(coste, 0, 6)
+		buckets[idx] += int(main_deck[cid])
+
+	return buckets if any_resolved else []
+
+
+func _build_mana_curve_row(costs: Array) -> Control:
+	"""Mini histograma de barras — una sola serie (cantidad de cartas), un
+	solo tono (el dorado ya usado en todo el resto de la carta) porque la
+	magnitud ya la codifica la altura de la barra; no hace falta que el
+	color también varíe. Sin ejes ni tooltip: es un sparkline de un vistazo,
+	no un gráfico para analizar en detalle."""
+	const BAR_MAX_HEIGHT := 32.0
+	const BAR_WIDTH := 14.0
+	const GOLD := Color(0.83, 0.69, 0.22, 1.0)
+
+	var row = HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 6)
+
+	var max_count: int = 1
+	for c in costs:
+		max_count = maxi(max_count, int(c))
+
+	var cost_labels := ["0", "1", "2", "3", "4", "5", "6+"]
+	for i in range(costs.size()):
+		var col = VBoxContainer.new()
+		col.add_theme_constant_override("separation", 2)
+		col.alignment = BoxContainer.ALIGNMENT_END
+		col.custom_minimum_size = Vector2(BAR_WIDTH, BAR_MAX_HEIGHT + 16)
+
+		var count: int = int(costs[i])
+		var bar_height: float = 3.0 if count == 0 else max(3.0, BAR_MAX_HEIGHT * (float(count) / float(max_count)))
+
+		var spacer = Control.new()
+		spacer.custom_minimum_size = Vector2(BAR_WIDTH, BAR_MAX_HEIGHT - bar_height)
+		col.add_child(spacer)
+
+		var bar = ColorRect.new()
+		bar.custom_minimum_size = Vector2(BAR_WIDTH, bar_height)
+		bar.color = GOLD if count > 0 else Color(1, 1, 1, 0.12)
+		bar.tooltip_text = "%d carta(s) de coste %s" % [count, cost_labels[i]]
+		col.add_child(bar)
+
+		var lbl = Label.new()
+		lbl.text = cost_labels[i]
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.add_theme_font_size_override("font_size", 9)
+		lbl.add_theme_color_override("font_color", Color(0.75, 0.75, 0.75, 0.8))
+		col.add_child(lbl)
+
+		row.add_child(col)
+
+	return row
 
 
 func _get_archetype_icon(arquetipo: String) -> String:
@@ -386,22 +520,17 @@ func _on_deck_selected(deck: Dictionary) -> void:
 		return
 
 	# Cargar el mazo usando DeckLoader
-	var deck_loader = get_node_or_null("/root/DeckLoader")
-	if deck_loader:
-		# Conectar señales para feedback
-		if not deck_loader.deck_loaded.is_connected(_on_deck_loaded):
-			deck_loader.deck_loaded.connect(_on_deck_loaded)
-		if not deck_loader.deck_load_failed.is_connected(_on_deck_load_failed):
-			deck_loader.deck_load_failed.connect(_on_deck_load_failed)
-		if not deck_loader.all_decks_ready.is_connected(_on_all_decks_ready):
-			deck_loader.all_decks_ready.connect(_on_all_decks_ready)
+	# Conectar señales para feedback
+	if not DeckLoader.deck_loaded.is_connected(_on_deck_loaded):
+		DeckLoader.deck_loaded.connect(_on_deck_loaded)
+	if not DeckLoader.deck_load_failed.is_connected(_on_deck_load_failed):
+		DeckLoader.deck_load_failed.connect(_on_deck_load_failed)
+	if not DeckLoader.all_decks_ready.is_connected(_on_all_decks_ready):
+		DeckLoader.all_decks_ready.connect(_on_all_decks_ready)
 
-		# Iniciar carga del mazo para el jugador local (ID 0)
-		_show_loading(true)
-		deck_loader.load_deck_for_player(0, deck_slug)
-	else:
-		push_error("[DeckManager] DeckLoader no disponible")
-		_show_error("Error interno: Sistema de carga no disponible")
+	# Iniciar carga del mazo para el jugador local (ID 0)
+	_show_loading(true)
+	DeckLoader.load_deck_for_player(0, deck_slug)
 
 
 func _on_deck_loaded(player_id: int, card_count: int) -> void:
@@ -413,10 +542,9 @@ func _on_deck_loaded(player_id: int, card_count: int) -> void:
 
 	# TODO: Para partidas PvP, esperar a que el oponente también cargue su mazo
 	# Por ahora, generar un mazo aleatorio para el oponente y comenzar
-	var deck_loader = get_node_or_null("/root/DeckLoader")
-	if deck_loader and not deck_loader.is_deck_loaded(1):
+	if not DeckLoader.is_deck_loaded(1):
 		# Generar mazo aleatorio para oponente (para testing)
-		deck_loader.load_random_deck(1, 50)
+		DeckLoader.load_random_deck(1, 50)
 		return  # Esperar al callback de all_decks_ready
 
 	# Ir a la escena del juego

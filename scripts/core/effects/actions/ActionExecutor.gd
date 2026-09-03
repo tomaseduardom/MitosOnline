@@ -47,9 +47,6 @@ signal post_resolution_condition(card: Node, condition: String, destination: Str
 # =============================================================================
 # REFERENCIAS
 # =============================================================================
-var _action_module: Node = null
-var _game_manager: Node = null
-var _anim_queue: Node = null
 
 # =============================================================================
 # ESTADO DE VENTANA DE RESPUESTA
@@ -74,14 +71,10 @@ var _played_via_exhumar: bool = false
 
 
 func _ready() -> void:
-	call_deferred("_get_references")
+	# (2026-08-28, "módulos gordos" punto 1): ActionModule/GameManager/
+	# AnimationQueue se cacheaban vía get_node_or_null() pero no se usaban
+	# en ningún otro punto de este archivo — cacheo muerto.
 	print("[ActionExecutor] Inicializado")
-
-
-func _get_references() -> void:
-	_action_module = get_node_or_null("/root/ActionModule")
-	_game_manager = get_node_or_null("/root/GameManager")
-	_anim_queue = get_node_or_null("/root/AnimationQueue")
 
 
 # =============================================================================
@@ -745,12 +738,11 @@ func check_annullment(response_card) -> bool:
 	if "anula" in card_name or "counter" in card_name:
 		return true
 
-	# 3. Tiene keyword ANULAR (string o enum)
+	# 3. Tiene la palabra "ANULAR" en su lista de keywords de texto — Anular
+	# no es una keyword fija en Mitos y Leyendas, es un efecto de carta.
 	if not keywords.is_empty():
 		for kw in keywords:
-			if kw is int and kw == Constants.Keyword.ANULAR:
-				return true
-			elif kw is String and kw.to_upper() == "ANULAR":
+			if kw is String and kw.to_upper() == "ANULAR":
 				return true
 
 	return false

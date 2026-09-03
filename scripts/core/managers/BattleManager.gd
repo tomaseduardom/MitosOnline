@@ -28,25 +28,17 @@ var last_combat_result: Dictionary = {}
 var combat_in_progress: bool = false
 
 
-## Referencia al KeywordManager
-var _keyword_mgr: Node = null
-
-
 func _ready() -> void:
-	# Obtener referencia a KeywordManager
-	_keyword_mgr = get_node_or_null("/root/KeywordManager")
-
-	# Conectar a TurnManager para automatizar combate
-	var turn_mgr = get_node_or_null("/root/TurnManager")
-	if turn_mgr and turn_mgr.has_signal("phase_changed"):
-		turn_mgr.phase_changed.connect(_on_phase_changed)
-
-
-func _on_phase_changed(new_phase: int) -> void:
-	"""Responde a cambios de fase"""
-	if new_phase == Constants.Phase.ASIGNACION_DANIO:
-		# Iniciar cálculo de daño automáticamente
-		await calculate_combat_damage()
+	# (2026-08-28, "módulos gordos" punto 1): acá había una conexión a
+	# 'TurnManager.phase_changed' para auto-disparar calculate_combat_damage()
+	# en ASIGNACION_DANIO — TurnManager.gd NO tiene (ni tuvo nunca) esa señal,
+	# así que el 'has_signal()' que la envolvía siempre daba falso y esto
+	# jamás se conectó. No hacía falta: PhaseFlowController.gd sí llama
+	# BattleManager.calculate_combat_damage() directo al entrar a esa fase
+	# (ver PhaseFlowController.gd línea ~273) — ese es el camino real. Se
+	# sacó la conexión rota y el handler _on_phase_changed() que quedaba
+	# huérfano sin ella.
+	pass
 
 
 # =============================================================================
@@ -111,8 +103,9 @@ func calculate_combat_damage() -> Dictionary:
 					result.blockers_destroyed.append(blocker)
 					var overflow_damage = attacker_strength - blocker_strength
 
-					# DAR Sección 8: Arrollar - daño excedente pasa al Castillo
-					# (Este es el comportamiento por defecto en DAR 5.C4)
+					# DAR 5.C4: el daño excedente siempre pasa al Castillo — no es
+					# una keyword especial ("Arrollar" no existe en Mitos y
+					# Leyendas), es el comportamiento por defecto del combate.
 					result.total_damage_to_castle += overflow_damage
 					result.damage_sources.append({
 						"source": attacker,
@@ -120,9 +113,8 @@ func calculate_combat_damage() -> Dictionary:
 						"type": "overflow"
 					})
 
-					var trample_note = " (Arrollar)" if has_trample(attacker) else ""
-					print("[BattleManager] %s (F:%d) > %s (F:%d) → Bloqueador destruido, %d daño pasa%s" % [
-						attacker_name, attacker_strength, blocker_name, blocker_strength, overflow_damage, trample_note
+					print("[BattleManager] %s (F:%d) > %s (F:%d) → Bloqueador destruido, %d daño pasa" % [
+						attacker_name, attacker_strength, blocker_name, blocker_strength, overflow_damage
 					])
 					emit_signal("blocker_destroyed", blocker, attacker)
 
@@ -184,13 +176,27 @@ func calculate_combat_damage() -> Dictionary:
 			return result
 
 	# Destruir cartas (respetando Indestructible)
-	var cards_to_destroy = result.attackers_destroyed + result.blockers_destroyed
+	#
+	# Protección "no son Destruidos cuando bloquean" (2026-08-24, p.ej.
+	# Patria Vieja): solo se filtra de blockers_destroyed, NUNCA de
+	# attackers_destroyed — la protección es específicamente por bloquear,
+	# no una Indestructible general.
+	var protected_blockers = result.blockers_destroyed.filter(
+		func(b): return ContinuousEffectManager.has_protection(b, "BLOCK_DESTROY")
+	)
+	var blockers_to_destroy = result.blockers_destroyed.filter(
+		func(b): return b not in protected_blockers
+	)
+	if not protected_blockers.is_empty():
+		for b in protected_blockers:
+			print("[BattleManager] %s no fue destruido al bloquear (protección continua)" % _get_card_name(b))
+
+	var cards_to_destroy = result.attackers_destroyed + blockers_to_destroy
 	var destroyed_cards = await _destroy_cards_with_indestructible_check(cards_to_destroy)
 	result["actually_destroyed"] = destroyed_cards
 
 	# Limpiar keywords temporales de combate
-	if _keyword_mgr:
-		_keyword_mgr.cleanup_combat_keywords()
+	KeywordManager.cleanup_combat_keywords()
 
 	last_combat_result = result
 	combat_in_progress = false
@@ -205,21 +211,21 @@ func _check_damage_to_exile_effect(player_id: int) -> bool:
 	DAR Sección 8: Algunos efectos pueden cambiar el destino del daño
 	"""
 	# Verificar efectos continuos en TriggerSystem
-	var trigger_sys = get_node_or_null("/root/TriggerSystem")
-	if trigger_sys and trigger_sys.has_method("get_active_continuous_effects"):
-		var effects = trigger_sys.get_active_continuous_effects("damage_to_exile")
-		for effect in effects:
-			# Verificar si aplica a este jugador
-			var targets = effect.get("targets", [])
-			if targets.is_empty() or player_id in targets or "all" in targets:
-				return true
+	var effects = TriggerSystem.get_active_continuous_effects("damage_to_exile")
+	for effect in effects:
+		# Verificar si aplica a este jugador
+		var targets = effect.get("targets", [])
+		if targets.is_empty() or player_id in targets or "all" in targets:
+			return true
 
 	# También verificar en cartas en juego del oponente
 	var opponent_id = 1 - player_id
 	var main = get_node_or_null("/root/Main")
 	if main:
-		var field = main.player_field if opponent_id == 0 else main.opponent_field
-		if field:
+		var fields = [main.player_field, main.player_linea_ataque] if opponent_id == 0 else [main.opponent_field, main.opponent_linea_ataque]
+		for field in fields:
+			if not field:
+				continue
 			for card in field.get_children():
 				if card.get("damage_goes_to_exile") == true:
 					return true
@@ -269,8 +275,6 @@ func _apply_castle_damage(defender_id: int, damage: int, to_exile: bool = false)
 		"milled_cards": []
 	}
 
-	var effect_ctrl = get_node_or_null("/root/EffectController")
-	var game_mgr = get_node_or_null("/root/GameManager")
 	var destination = Constants.Zone.DESTIERRO if to_exile else Constants.Zone.CEMENTERIO
 	var dest_name = "Destierro" if to_exile else "Cementerio"
 
@@ -288,21 +292,14 @@ func _apply_castle_damage(defender_id: int, damage: int, to_exile: bool = false)
 			print("[BattleManager] ¡CASTILLO VACÍO! Jugador %d PIERDE" % (defender_id + 1))
 			result.player_defeated = true
 			emit_signal("player_defeated", defender_id)
-
-			if game_mgr:
-				game_mgr.player_loses(defender_id, "castle_empty_combat")
+			GameManager.player_loses(defender_id, "castle_empty_combat")
 			break
 
 		# Botar una carta
-		if effect_ctrl:
-			var mill_result = await effect_ctrl.mill_cards(defender_id, 1, destination)
-			if mill_result.actual > 0:
-				result.cards_milled += 1
-				result.milled_cards.append_array(mill_result.milled_cards)
-		else:
-			# Fallback manual
-			await _mill_one_card_manually(defender_id, destination)
+		var mill_result = await EffectController.mill_cards(defender_id, 1, destination)
+		if mill_result.actual > 0:
 			result.cards_milled += 1
+			result.milled_cards.append_array(mill_result.milled_cards)
 
 		# Pequeña pausa para efecto visual
 		await get_tree().create_timer(0.1).timeout
@@ -312,9 +309,7 @@ func _apply_castle_damage(defender_id: int, damage: int, to_exile: bool = false)
 			print("[BattleManager] ¡CASTILLO VACÍO! Jugador %d PIERDE" % (defender_id + 1))
 			result.player_defeated = true
 			emit_signal("player_defeated", defender_id)
-
-			if game_mgr:
-				game_mgr.player_loses(defender_id, "castle_empty_combat")
+			GameManager.player_loses(defender_id, "castle_empty_combat")
 			break
 
 	print("[BattleManager] Daño aplicado: %d/%d cartas botadas" % [result.cards_milled, damage])
@@ -329,34 +324,13 @@ func _get_castle_count(player_id: int) -> int:
 	de daño a Castillo disparaba 'Castillo vacío, derrota inmediata' de
 	forma incorrecta en cualquier combate real. CardManager sí lleva la
 	cuenta real del mazo."""
-	var card_mgr = get_node_or_null("/root/CardManager")
-	if card_mgr and card_mgr.has_method("get_deck_count"):
-		return card_mgr.get_deck_count(player_id)
-	return 0
-
-
-func _mill_one_card_manually(player_id: int, destination: int) -> void:
-	"""Bota una carta manualmente (fallback — solo se usa si EffectController,
-	que es un autoload siempre presente, no estuviera disponible)."""
-	var card_mgr = get_node_or_null("/root/CardManager")
-	if not card_mgr or not card_mgr.has_method("get_deck"):
-		return
-
-	var deck = card_mgr.get_deck(player_id)
-	if deck.is_empty():
-		return
-
-	var card = deck[0]
-	var effect_ctrl = get_node_or_null("/root/EffectController")
-	if effect_ctrl and effect_ctrl.has_method("move_card"):
-		effect_ctrl.move_card(card, destination, player_id, true)
+	return CardManager.get_deck_count(player_id)
 
 
 func _destroy_cards_with_indestructible_check(cards: Array) -> Array:
 	"""Destruye las cartas indicadas, respetando Indestructible (DAR Sección 8)
 	Returns: Array de cartas que fueron efectivamente destruidas
 	"""
-	var effect_ctrl = get_node_or_null("/root/EffectController")
 	var destroyed: Array = []
 
 	for card in cards:
@@ -370,9 +344,7 @@ func _destroy_cards_with_indestructible_check(cards: Array) -> Array:
 			continue
 
 		var controller = card.controller_id if card.get("controller_id") != null else 0
-
-		if effect_ctrl:
-			await effect_ctrl.destroy_card(controller, card)
+		await EffectController.destroy_card(controller, card)
 
 		destroyed.append(card)
 		await get_tree().create_timer(0.15).timeout
@@ -382,41 +354,24 @@ func _destroy_cards_with_indestructible_check(cards: Array) -> Array:
 
 func _has_indestructible(card: Node) -> bool:
 	"""Verifica si una carta tiene Indestructible (DAR Sección 8)
-	Delegado a KeywordManager para centralización
+	Delegado a KeywordManager para centralización.
+	(2026-08-28, "módulos gordos" punto 1: esto llamaba a _keyword_mgr, una
+	referencia cacheada en _ready() ANTES de que KeywordManager (autoload
+	#22) terminara de cargar — BattleManager es autoload #11, así que
+	_keyword_mgr quedaba null para siempre y esta función corría el
+	fallback manual de abajo toda la partida, nunca la lógica real
+	centralizada de KeywordManager. Confirmado y corregido junto con
+	can_be_blocked() más abajo, mismo bug.)
 	"""
-	if _keyword_mgr:
-		return not _keyword_mgr.can_be_destroyed(card)
-
-	# Fallback si KeywordManager no está disponible
-	if card.get("is_indestructible") == true:
-		return true
-	if card.get("card_ability") != null:
-		var ability_lower = card.card_ability.to_lower()
-		if "indestructible" in ability_lower or "no puede ser destruid" in ability_lower:
-			return true
-	return false
+	return not KeywordManager.can_be_destroyed(card)
 
 
 func can_be_blocked(attacker: Node, blocker: Node = null) -> bool:
-	"""DAR Sección 8: Verifica si un atacante puede ser bloqueado
-
-	- Imbloqueable: No puede ser bloqueado
-	- Alcance: Bloqueador con Alcance puede bloquear Imbloqueables
-	"""
-	if _keyword_mgr:
-		return _keyword_mgr.can_be_blocked(attacker, blocker)
-
-	# Fallback: verificar flag directo
-	if attacker.get("is_unblockable") == true:
-		return false
-	if attacker.get("card_ability") != null:
-		if "imbloqueable" in attacker.card_ability.to_lower():
-			# Verificar si bloqueador tiene Alcance
-			if blocker and blocker.get("card_ability") != null:
-				if "alcance" in blocker.card_ability.to_lower():
-					return true
-			return false
-	return true
+	"""DAR Sección 8: Verifica si un atacante puede ser bloqueado.
+	Imbloqueable: no puede ser bloqueado, sin excepción por keyword general
+	(no existe 'Alcance' en Mitos y Leyendas) — solo si el propio texto del
+	bloqueador dice explícitamente que puede bloquear Imbloqueables."""
+	return KeywordManager.can_be_blocked(attacker, blocker)
 
 
 func is_valid_block(attacker: Node, blocker: Node) -> Dictionary:
@@ -424,26 +379,13 @@ func is_valid_block(attacker: Node, blocker: Node) -> Dictionary:
 
 	Returns: {valid: bool, reason: String}
 	"""
-	# Verificar Imbloqueable
 	if not can_be_blocked(attacker, blocker):
 		var attacker_name = _get_card_name(attacker)
 		var blocker_name = _get_card_name(blocker)
-
-		# Verificar si el bloqueador tiene Alcance
-		var has_reach = false
-		if _keyword_mgr:
-			has_reach = _keyword_mgr.has_keyword(blocker, _keyword_mgr.Keyword.ALCANCE)
-
-		if has_reach:
-			print("[BattleManager] %s bloquea a %s (Imbloqueable) gracias a ALCANCE" % [
-				blocker_name, attacker_name
-			])
-			return {"valid": true, "reason": ""}
-		else:
-			print("[BattleManager] %s no puede bloquear a %s (IMBLOQUEABLE)" % [
-				blocker_name, attacker_name
-			])
-			return {"valid": false, "reason": "El atacante es Imbloqueable"}
+		print("[BattleManager] %s no puede bloquear a %s (IMBLOQUEABLE)" % [
+			blocker_name, attacker_name
+		])
+		return {"valid": false, "reason": "El atacante es Imbloqueable"}
 
 	return {"valid": true, "reason": ""}
 
@@ -456,14 +398,7 @@ func _get_strength(card: Node) -> int:
 	(buffs/debuffs) registrados en ContinuousEffectManager — sin esto, cualquier
 	efecto de '+X/+X a un Aliado' sería invisible en combate sin importar qué
 	tan bien se parseara el texto de la carta."""
-	var cem = get_node_or_null("/root/ContinuousEffectManager")
-	if cem and cem.has_method("get_modified_strength"):
-		return cem.get_modified_strength(card)
-	if card.has_method("get_strength"):
-		return card.get_strength()
-	elif card.get("card_strength") != null:
-		return card.card_strength
-	return 0
+	return ContinuousEffectManager.get_modified_strength(card)
 
 
 func _get_card_name(card: Node) -> String:
@@ -540,33 +475,8 @@ func clear_combat_modifiers() -> void:
 	combat_strength_modifiers.clear()
 
 
-# =============================================================================
-# FIRST STRIKE / GOLPE PRIMERO (DAR Sección 8)
-# =============================================================================
-func has_first_strike(card: Node) -> bool:
-	"""Verifica si una carta tiene Golpe Primero"""
-	if _keyword_mgr:
-		return _keyword_mgr.has_first_strike(card)
-
-	# Fallback
-	if card.get("card_ability") != null:
-		return "golpe primero" in card.card_ability.to_lower()
-	return false
-
-
-func has_trample(card: Node) -> bool:
-	"""Verifica si una carta tiene Arrollar (daño excedente al Castillo)"""
-	if _keyword_mgr:
-		return _keyword_mgr.has_trample(card)
-	return false
-
-
-func calculate_first_strike_damage(attackers: Array, blockers: Dictionary) -> Dictionary:
-	"""Calcula daño de Golpe Primero por separado (fase 1)"""
-	var first_strikers = attackers.filter(func(a): return has_first_strike(a))
-
-	if first_strikers.is_empty():
-		return {"total": 0, "pairs": []}
-
-	# TODO: Implementar lógica de Golpe Primero
-	return {"total": 0, "pairs": []}
+# NOTA (2026-08-20): "Golpe Primero" y "Arrollar" no son keywords en Mitos y
+# Leyendas — se eliminó has_first_strike()/has_trample()/
+# calculate_first_strike_damage() (sin llamadores reales, siempre un TODO
+# que devolvía 0). El daño excedente al Castillo ya se aplica por defecto
+# en _resolve_combat_pair() (DAR 5.C4), sin necesidad de ninguna keyword.

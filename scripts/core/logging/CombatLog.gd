@@ -12,6 +12,12 @@ signal log_cleared()
 signal public_action_occurred(action_data: Dictionary)
 signal sync_to_opponent(action_type: String, data: Dictionary)
 
+## Señales de bloques de acción (implementados en DetailedPlayLog.gd)
+signal action_block_started(block: ActionBlock)
+signal action_block_step_added(block: ActionBlock, step: Dictionary)
+signal action_block_completed(block: ActionBlock)
+signal action_block_annulled(block: ActionBlock, annuller: String)
+
 # =============================================================================
 # CONFIGURACIÓN DE COLORES (BBCode)
 # =============================================================================
@@ -94,6 +100,10 @@ var _current_phase_name: String = ""
 var _current_turn: int = 0
 var _active_player: int = 0
 
+## Módulos extraídos (Fase 4 de reestructuración)
+var _formatters: LogFormatters
+var _detailed_play: DetailedPlayLog
+
 ## Acciones públicas (visibles para ambos jugadores)
 const PUBLIC_ACTIONS: Array[String] = [
 	"mill",      # Botar - cartas van al cementerio público
@@ -114,132 +124,103 @@ const PUBLIC_ACTIONS: Array[String] = [
 	"anular",    # Anular - público
 ]
 
-# Referencias
-var _action_executor: Node = null
-var _action_module: Node = null
-var _game_manager: Node = null
-var _turn_manager: Node = null
-var _card_parser: Node = null
-
-
 func _ready() -> void:
+	_formatters = LogFormatters.new()
+	_formatters.setup(self)
+	_detailed_play = DetailedPlayLog.new()
+	_detailed_play.setup(self)
+
 	call_deferred("_connect_signals")
 	print("[CombatLog] Inicializado")
 
 
 func _connect_signals() -> void:
-	"""Conecta a todas las señales relevantes del sistema"""
-	# ActionExecutor
-	_action_executor = get_node_or_null("/root/ActionExecutor")
-	if _action_executor:
-		_connect_executor_signals()
-
-	# ActionModule
-	_action_module = get_node_or_null("/root/ActionModule")
-	if _action_module:
-		_connect_module_signals()
-
-	# GameManager
-	_game_manager = get_node_or_null("/root/GameManager")
-	if _game_manager:
-		_connect_game_signals()
-
-	# TurnManager - Para headers de fase
-	_turn_manager = get_node_or_null("/root/TurnManager")
-	if _turn_manager:
-		_connect_turn_manager_signals()
-
-	# UniversalCardParser - Para acciones parseadas
-	_card_parser = get_node_or_null("/root/UniversalCardParser")
-	if _card_parser:
-		_connect_parser_signals()
+	"""Conecta a todas las señales relevantes del sistema
+	(2026-08-28, "módulos gordos" punto 1): ActionExecutor/ActionModule/
+	GameManager/TurnManager/UniversalCardParser son autoloads garantizados —
+	se saca el cacheo redundante vía get_node_or_null(). _safe_connect() ya
+	valida has_signal() por su cuenta, así que esto no cambia el
+	comportamiento: _connect_module_signals() y _connect_turn_manager_signals()
+	seguían (y siguen) sin conectar nada real — ActionModule.gd no tiene
+	señales 'card_drawn/discarded/destroyed/banished/milled' y TurnManager.gd
+	no emite ninguna señal propia hoy."""
+	_connect_executor_signals()
+	_connect_module_signals()
+	_connect_game_signals()
+	_connect_turn_manager_signals()
+	_connect_parser_signals()
 
 	print("[CombatLog] Señales conectadas")
 
 
 func _connect_executor_signals() -> void:
 	"""Conecta señales del ActionExecutor"""
-	if not _action_executor:
-		return
-
 	# Habilidades
-	_safe_connect(_action_executor, "ability_execution_started", _on_ability_started)
-	_safe_connect(_action_executor, "ability_execution_completed", _on_ability_completed)
+	_safe_connect(ActionExecutor, "ability_execution_started", _on_ability_started)
+	_safe_connect(ActionExecutor, "ability_execution_completed", _on_ability_completed)
 
 	# Acciones
-	_safe_connect(_action_executor, "action_executed", _on_action_executed)
-	_safe_connect(_action_executor, "action_draw_completed", _on_draw)
-	_safe_connect(_action_executor, "action_discard_completed", _on_discard)
-	_safe_connect(_action_executor, "action_destroy_completed", _on_destroy)
-	_safe_connect(_action_executor, "action_banish_completed", _on_banish)
-	_safe_connect(_action_executor, "action_mill_completed", _on_mill)
-	_safe_connect(_action_executor, "action_search_completed", _on_search)
-	_safe_connect(_action_executor, "action_damage_completed", _on_damage)
-	_safe_connect(_action_executor, "action_buff_completed", _on_buff)
-	_safe_connect(_action_executor, "action_heal_completed", _on_heal)
+	_safe_connect(ActionExecutor, "action_executed", _on_action_executed)
+	_safe_connect(ActionExecutor, "action_draw_completed", _on_draw)
+	_safe_connect(ActionExecutor, "action_discard_completed", _on_discard)
+	_safe_connect(ActionExecutor, "action_destroy_completed", _on_destroy)
+	_safe_connect(ActionExecutor, "action_banish_completed", _on_banish)
+	_safe_connect(ActionExecutor, "action_mill_completed", _on_mill)
+	_safe_connect(ActionExecutor, "action_search_completed", _on_search)
+	_safe_connect(ActionExecutor, "action_damage_completed", _on_damage)
+	_safe_connect(ActionExecutor, "action_buff_completed", _on_buff)
+	_safe_connect(ActionExecutor, "action_heal_completed", _on_heal)
 
 	# Costes
-	_safe_connect(_action_executor, "cost_paid", _on_cost_paid)
-	_safe_connect(_action_executor, "execution_failed", _on_execution_failed)
+	_safe_connect(ActionExecutor, "cost_paid", _on_cost_paid)
+	_safe_connect(ActionExecutor, "execution_failed", _on_execution_failed)
 
 	# Respuesta
-	_safe_connect(_action_executor, "waiting_for_opponent_response", _on_response_window)
-	_safe_connect(_action_executor, "opponent_passed", _on_opponent_passed)
-	_safe_connect(_action_executor, "opponent_responded", _on_opponent_responded)
+	_safe_connect(ActionExecutor, "waiting_for_opponent_response", _on_response_window)
+	_safe_connect(ActionExecutor, "opponent_passed", _on_opponent_passed)
+	_safe_connect(ActionExecutor, "opponent_responded", _on_opponent_responded)
 
 	# Anulación
-	_safe_connect(_action_executor, "spell_annulled", _on_spell_annulled)
+	_safe_connect(ActionExecutor, "spell_annulled", _on_spell_annulled)
 
 	# Resolución
-	_safe_connect(_action_executor, "resolution_started", _on_resolution_started)
-	_safe_connect(_action_executor, "resolution_completed", _on_resolution_completed)
-	_safe_connect(_action_executor, "post_resolution_condition", _on_post_resolution)
+	_safe_connect(ActionExecutor, "resolution_started", _on_resolution_started)
+	_safe_connect(ActionExecutor, "resolution_completed", _on_resolution_completed)
+	_safe_connect(ActionExecutor, "post_resolution_condition", _on_post_resolution)
 
 
 func _connect_module_signals() -> void:
 	"""Conecta señales del ActionModule"""
-	if not _action_module:
-		return
-
-	_safe_connect(_action_module, "card_drawn", _on_module_draw)
-	_safe_connect(_action_module, "card_discarded", _on_module_discard)
-	_safe_connect(_action_module, "card_destroyed", _on_module_destroy)
-	_safe_connect(_action_module, "card_banished", _on_module_banish)
-	_safe_connect(_action_module, "card_milled", _on_module_mill)
+	_safe_connect(ActionModule, "card_drawn", _on_module_draw)
+	_safe_connect(ActionModule, "card_discarded", _on_module_discard)
+	_safe_connect(ActionModule, "card_destroyed", _on_module_destroy)
+	_safe_connect(ActionModule, "card_banished", _on_module_banish)
+	_safe_connect(ActionModule, "card_milled", _on_module_mill)
 
 
 func _connect_game_signals() -> void:
 	"""Conecta señales del GameManager"""
-	if not _game_manager:
-		return
-
-	_safe_connect(_game_manager, "phase_changed", _on_phase_changed)
-	_safe_connect(_game_manager, "turn_started", _on_turn_started)
-	_safe_connect(_game_manager, "turn_ended", _on_turn_ended)
+	_safe_connect(GameManager, "phase_changed", _on_phase_changed)
+	_safe_connect(GameManager, "turn_started", _on_turn_started)
+	_safe_connect(GameManager, "turn_ended", _on_turn_ended)
 
 
 func _connect_turn_manager_signals() -> void:
 	"""Conecta señales del TurnManager para tracking de fases"""
-	if not _turn_manager:
-		return
-
-	_safe_connect(_turn_manager, "phase_changed", _on_turn_phase_changed)
-	_safe_connect(_turn_manager, "turn_started", _on_turn_manager_turn_started)
-	_safe_connect(_turn_manager, "turn_ended", _on_turn_manager_turn_ended)
-	_safe_connect(_turn_manager, "priority_window_opened", _on_priority_opened)
-	_safe_connect(_turn_manager, "priority_window_closed", _on_priority_closed)
+	_safe_connect(TurnManager, "phase_changed", _on_turn_phase_changed)
+	_safe_connect(TurnManager, "turn_started", _on_turn_manager_turn_started)
+	_safe_connect(TurnManager, "turn_ended", _on_turn_manager_turn_ended)
+	_safe_connect(TurnManager, "priority_window_opened", _on_priority_opened)
+	_safe_connect(TurnManager, "priority_window_closed", _on_priority_closed)
 
 
 func _connect_parser_signals() -> void:
 	"""Conecta señales del UniversalCardParser"""
-	if not _card_parser:
-		return
-
-	_safe_connect(_card_parser, "parsing_completed", _on_parsing_completed)
-	_safe_connect(_card_parser, "chain_resolution_started", _on_chain_started)
-	_safe_connect(_card_parser, "chain_resolution_completed", _on_chain_completed)
-	_safe_connect(_card_parser, "action_resolved", _on_parser_action_resolved)
-	_safe_connect(_card_parser, "response_window_requested", _on_parser_response_window)
+	_safe_connect(UniversalCardParser, "parsing_completed", _on_parsing_completed)
+	_safe_connect(UniversalCardParser, "chain_resolution_started", _on_chain_started)
+	_safe_connect(UniversalCardParser, "chain_resolution_completed", _on_chain_completed)
+	_safe_connect(UniversalCardParser, "action_resolved", _on_parser_action_resolved)
+	_safe_connect(UniversalCardParser, "response_window_requested", _on_parser_response_window)
 
 
 func _safe_connect(source: Node, signal_name: String, callback: Callable) -> void:
@@ -252,21 +233,21 @@ func _safe_connect(source: Node, signal_name: String, callback: Callable) -> voi
 # HANDLERS DE SEÑALES - ActionExecutor
 # =============================================================================
 func _on_ability_started(card: Node, ability_block: Dictionary) -> void:
-	var card_name = _get_card_name(card)
-	add_entry("ability", "Activando habilidad de %s" % [format_card(card_name)], {
+	var card_name = _formatters.get_card_name(card)
+	add_entry("ability", "Activando habilidad de %s" % [_formatters.format_card(card_name)], {
 		"card": card_name,
 		"trigger": ability_block.get("trigger", {})
 	})
 
 
 func _on_ability_completed(card: Node, result: Dictionary) -> void:
-	var card_name = _get_card_name(card)
+	var card_name = _formatters.get_card_name(card)
 	var status = "success" if result.success else "failure"
 	var effects_count = result.get("effects_resolved", []).size()
 
 	add_entry("ability", "Habilidad de %s %s (%d efectos)" % [
-		format_card(card_name),
-		format_status(status),
+		_formatters.format_card(card_name),
+		_formatters.format_status(status),
 		effects_count
 	], result)
 
@@ -276,126 +257,126 @@ func _on_action_executed(action: Dictionary, result: Dictionary) -> void:
 	var status = "success" if result.success else "failure"
 
 	add_entry("action", "Acción %s: %s" % [
-		format_effect(action_type),
-		format_status(status)
+		_formatters.format_effect(action_type),
+		_formatters.format_status(status)
 	], {"action": action, "result": result})
 
 
 func _on_draw(player_id: int, cards: Array, amount: int) -> void:
-	var player = format_player(player_id)
-	var card_names = _get_card_names(cards)
+	var player = _formatters.format_player(player_id)
+	var card_names = _formatters.get_card_names(cards)
 
 	add_entry("draw", "%s %s %d carta(s): %s" % [
 		player,
-		format_effect("robó", "draw"),
+		_formatters.format_effect("robó", "draw"),
 		amount,
-		_format_card_list(card_names)
+		_formatters.format_card_list(card_names)
 	], {"player": player_id, "cards": card_names})
 
 
 func _on_discard(player_id: int, cards: Array) -> void:
-	var player = format_player(player_id)
-	var card_names = _get_card_names(cards)
+	var player = _formatters.format_player(player_id)
+	var card_names = _formatters.get_card_names(cards)
 
 	add_entry("discard", "%s %s: %s" % [
 		player,
-		format_effect("descartó", "discard"),
-		_format_card_list(card_names)
+		_formatters.format_effect("descartó", "discard"),
+		_formatters.format_card_list(card_names)
 	], {"player": player_id, "cards": card_names})
 
 
 func _on_destroy(destroyed: Array, source: Node) -> void:
-	var source_name = _get_card_name(source) if source else "efecto"
-	var card_names = _get_card_names(destroyed)
+	var source_name = _formatters.get_card_name(source) if source else "efecto"
+	var card_names = _formatters.get_card_names(destroyed)
 
 	add_entry("destroy", "%s %s: %s" % [
-		format_card(source_name),
-		format_effect("destruyó", "destroy"),
-		_format_card_list(card_names)
+		_formatters.format_card(source_name),
+		_formatters.format_effect("destruyó", "destroy"),
+		_formatters.format_card_list(card_names)
 	], {"source": source_name, "destroyed": card_names})
 
 
 func _on_banish(banished: Array, source: Node) -> void:
-	var source_name = _get_card_name(source) if source else "efecto"
-	var card_names = _get_card_names(banished)
+	var source_name = _formatters.get_card_name(source) if source else "efecto"
+	var card_names = _formatters.get_card_names(banished)
 
 	add_entry("banish", "%s %s: %s" % [
-		format_card(source_name),
-		format_effect("desterró", "banish"),
-		_format_card_list(card_names)
+		_formatters.format_card(source_name),
+		_formatters.format_effect("desterró", "banish"),
+		_formatters.format_card_list(card_names)
 	], {"source": source_name, "banished": card_names})
 
 
 func _on_mill(player_id: int, cards: Array, to_exile: bool) -> void:
-	var player = format_player(player_id)
-	var card_names = _get_card_names(cards)
+	var player = _formatters.format_player(player_id)
+	var card_names = _formatters.get_card_names(cards)
 	var destination = "destierro" if to_exile else "cementerio"
 
 	add_entry("mill", "%s %s %d carta(s) al %s: %s" % [
 		player,
-		format_effect("botó", "mill"),
+		_formatters.format_effect("botó", "mill"),
 		cards.size(),
-		format_zone(destination),
-		_format_card_list(card_names)
+		_formatters.format_zone(destination),
+		_formatters.format_card_list(card_names)
 	], {"player": player_id, "cards": card_names, "to_exile": to_exile})
 
 
 func _on_search(player_id: int, selected: Array, zone: int) -> void:
-	var player = format_player(player_id)
-	var card_names = _get_card_names(selected)
-	var zone_name = _zone_to_string(zone)
+	var player = _formatters.format_player(player_id)
+	var card_names = _formatters.get_card_names(selected)
+	var zone_name = _formatters.zone_to_string(zone)
 
 	add_entry("search", "%s %s en %s: %s" % [
 		player,
-		format_effect("buscó", "search"),
-		format_zone(zone_name),
-		_format_card_list(card_names)
+		_formatters.format_effect("buscó", "search"),
+		_formatters.format_zone(zone_name),
+		_formatters.format_card_list(card_names)
 	], {"player": player_id, "cards": card_names, "zone": zone})
 
 
 func _on_damage(targets: Array, amount: int, source: Node) -> void:
-	var source_name = _get_card_name(source) if source else "efecto"
-	var target_names = _get_card_names(targets)
+	var source_name = _formatters.get_card_name(source) if source else "efecto"
+	var target_names = _formatters.get_card_names(targets)
 
 	add_entry("damage", "%s infligió %s de %s a: %s" % [
-		format_card(source_name),
-		format_number(amount, "damage"),
-		format_effect("daño", "damage"),
-		_format_card_list(target_names)
+		_formatters.format_card(source_name),
+		_formatters.format_number(amount, "damage"),
+		_formatters.format_effect("daño", "damage"),
+		_formatters.format_card_list(target_names)
 	], {"source": source_name, "targets": target_names, "amount": amount})
 
 
 func _on_buff(targets: Array, amount: int, is_buff: bool) -> void:
 	var effect_type = "buff" if is_buff else "debuff"
 	var effect_text = "fortaleció" if is_buff else "debilitó"
-	var target_names = _get_card_names(targets)
+	var target_names = _formatters.get_card_names(targets)
 	var sign = "+" if is_buff else ""
 
 	add_entry(effect_type, "%s a %s (%s%d)" % [
-		format_effect(effect_text, effect_type),
-		_format_card_list(target_names),
+		_formatters.format_effect(effect_text, effect_type),
+		_formatters.format_card_list(target_names),
 		sign,
 		amount
 	], {"targets": target_names, "amount": amount, "is_buff": is_buff})
 
 
 func _on_heal(player_id: int, amount: int) -> void:
-	var player = format_player(player_id)
+	var player = _formatters.format_player(player_id)
 
 	add_entry("heal", "%s %s %s puntos de vida" % [
 		player,
-		format_effect("recuperó", "heal"),
-		format_number(amount, "heal")
+		_formatters.format_effect("recuperó", "heal"),
+		_formatters.format_number(amount, "heal")
 	], {"player": player_id, "amount": amount})
 
 
 func _on_cost_paid(cost: Dictionary, success: bool) -> void:
 	var cost_type = cost.get("type", "unknown")
 	var amount = cost.get("amount", 1)
-	var status = format_status("success" if success else "failure")
+	var status = _formatters.format_status("success" if success else "failure")
 
 	add_entry("cost", "Coste pagado: %s x%d %s" % [
-		format_effect(cost_type, "gold"),
+		_formatters.format_effect(cost_type, "gold"),
 		amount,
 		status
 	], {"cost": cost, "success": success}, 1)
@@ -403,70 +384,70 @@ func _on_cost_paid(cost: Dictionary, success: bool) -> void:
 
 func _on_execution_failed(reason: String, context: Dictionary) -> void:
 	add_entry("error", "%s: %s" % [
-		format_status("failure"),
+		_formatters.format_status("failure"),
 		reason
 	], context)
 
 
 func _on_response_window(card: Node, context: Dictionary) -> void:
-	var card_name = context.get("card_name", _get_card_name(card))
+	var card_name = context.get("card_name", _formatters.get_card_name(card))
 	add_entry("response", "⏳ Ventana de respuesta para %s" % [
-		format_card(card_name)
+		_formatters.format_card(card_name)
 	], context)
 
 
 func _on_opponent_passed() -> void:
 	add_entry("response", "%s %s" % [
-		format_player(1),
-		format_status("pasó", "info")
+		_formatters.format_player(1),
+		_formatters.format_status("pasó", "info")
 	])
 
 
 func _on_opponent_responded(response_card: Node) -> void:
-	var card_name = _get_card_name(response_card)
+	var card_name = _formatters.get_card_name(response_card)
 	add_entry("response", "%s respondió con %s" % [
-		format_player(1),
-		format_card(card_name)
+		_formatters.format_player(1),
+		_formatters.format_card(card_name)
 	])
 
 
 func _on_spell_annulled(annulled_card: Node, annuller_card: Node) -> void:
-	var annulled_name = _get_card_name(annulled_card)
-	var annuller_name = _get_card_name(annuller_card)
+	var annulled_name = _formatters.get_card_name(annulled_card)
+	var annuller_name = _formatters.get_card_name(annuller_card)
 
 	add_entry("annul", "🚫 %s %s a %s" % [
-		format_card(annuller_name),
-		format_effect("ANULÓ", "annul"),
-		format_card(annulled_name)
+		_formatters.format_card(annuller_name),
+		_formatters.format_effect("ANULÓ", "annul"),
+		_formatters.format_card(annulled_name)
 	], {"annulled": annulled_name, "annuller": annuller_name})
 
 
 func _on_resolution_started(card: Node, effects: Array) -> void:
-	var card_name = _get_card_name(card)
+	var card_name = _formatters.get_card_name(card)
 	add_entry("resolution", "▶ Resolviendo %s (%d efectos)" % [
-		format_card(card_name),
+		_formatters.format_card(card_name),
 		effects.size()
 	], {"card": card_name, "effects_count": effects.size()})
 
 
 func _on_resolution_completed(card: Node, success: bool, effects_resolved: int) -> void:
-	var card_name = _get_card_name(card)
-	var status = format_status("success" if success else "failure")
+	var card_name = _formatters.get_card_name(card)
+	var status = _formatters.format_status("success" if success else "failure")
 
 	add_entry("resolution", "✓ Resolución de %s %s (%d efectos)" % [
-		format_card(card_name),
+		_formatters.format_card(card_name),
 		status,
 		effects_resolved
 	], {"card": card_name, "success": success, "effects": effects_resolved})
 
 
 func _on_post_resolution(card: Node, condition: String, destination: String) -> void:
-	var card_name = _get_card_name(card)
+	var card_name = _formatters.get_card_name(card)
 
 	add_entry("resolution", "→ %s: %s va a %s" % [
-		format_phase(condition),
-		format_card(card_name),
-		format_zone(destination)
+		_formatters.format_phase(condition),
+		_formatters.format_card(card_name),
+		_formatters.format_zone(destination)
 	], {"card": card_name, "condition": condition, "destination": destination})
 
 
@@ -509,7 +490,7 @@ func _on_turn_started(player_id: int, turn_number: int) -> void:
 
 func _on_turn_ended(player_id: int) -> void:
 	add_entry("turn", "── Fin del turno de %s ──" % [
-		format_player(player_id)
+		_formatters.format_player(player_id)
 	])
 
 
@@ -532,13 +513,13 @@ func _on_turn_manager_turn_started(player_id: int, turn_number: int) -> void:
 func _on_turn_manager_turn_ended(player_id: int) -> void:
 	"""Handler para fin de turno desde TurnManager"""
 	add_entry("turn", "━━━━━━ Fin del turno de %s ━━━━━━" % [
-		format_player(player_id)
+		_formatters.format_player(player_id)
 	], {}, 1)
 
 
 func _on_priority_opened(player_id: int, phase) -> void:
 	"""Handler cuando se abre ventana de prioridad"""
-	add_entry("priority", "⏳ %s tiene prioridad" % format_player(player_id), {
+	add_entry("priority", "⏳ %s tiene prioridad" % _formatters.format_player(player_id), {
 		"player": player_id,
 		"phase": phase
 	}, 1)
@@ -558,7 +539,7 @@ func _on_parsing_completed(card_name: String, actions: Array) -> void:
 		return
 
 	add_entry("parse", "📜 %s: %d acción(es) detectadas" % [
-		format_card(card_name),
+		_formatters.format_card(card_name),
 		actions.size()
 	], {"card": card_name, "actions_count": actions.size()}, 1)
 
@@ -587,8 +568,8 @@ func _on_chain_completed(results: Array) -> void:
 	var status = "success" if fail_count == 0 else ("warning" if success_count > 0 else "failure")
 
 	add_entry("chain", "✓ Cadena completada: %s éxitos, %s fallos" % [
-		format_number(success_count, "success"),
-		format_number(fail_count, "failure")
+		_formatters.format_number(success_count, "success"),
+		_formatters.format_number(fail_count, "failure")
 	], {"success": success_count, "failed": fail_count})
 
 	# Broadcast a ambos jugadores
@@ -619,11 +600,11 @@ func _on_parser_action_resolved(action: Dictionary, result: Dictionary) -> void:
 	# Determinar estado
 	var status_str = ""
 	if success:
-		status_str = format_status("success")
+		status_str = _formatters.format_status("success")
 	elif partial:
 		status_str = "[color=#FFC107]parcial[/color]"
 	else:
-		status_str = format_status("failure")
+		status_str = _formatters.format_status("failure")
 
 	# Construir mensaje
 	var message = ""
@@ -664,7 +645,7 @@ func _on_parser_response_window(card_data: Dictionary, pending_actions: Array) -
 	var card_name = card_data.get("name", card_data.get("nombre", "???"))
 
 	add_entry("response", "⏳ %s jugada - Ventana de respuesta abierta" % [
-		format_card(card_name)
+		_formatters.format_card(card_name)
 	], {"card": card_name, "pending_actions": pending_actions.size()})
 
 	# Listar acciones pendientes
@@ -727,8 +708,8 @@ func _get_action_color(action_name: String) -> String:
 func _target_type_to_string(target_type: int) -> String:
 	"""Convierte TargetType enum a string"""
 	match target_type:
-		0: return format_player(0)  # SELF
-		1: return format_player(1)  # OPPONENT
+		0: return _formatters.format_player(0)  # SELF
+		1: return _formatters.format_player(1)  # OPPONENT
 		2: return "ambos jugadores"  # BOTH
 		3: return "esta carta"       # CARD_SELF
 		4: return "carta objetivo"   # CARD_TARGET
@@ -838,7 +819,7 @@ func _add_phase_header(phase: int) -> void:
 		return  # Evitar duplicados
 
 	_current_phase = phase
-	_current_phase_name = _phase_to_string(phase)
+	_current_phase_name = _formatters.phase_to_string(phase)
 
 	# Header visual de fase
 	var header = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -868,75 +849,42 @@ func _add_turn_header(turn_number: int, player_id: int) -> void:
 
 
 # =============================================================================
-# SISTEMA DE FORMATO BBCode
+# SISTEMA DE FORMATO BBCode (implementación en LogFormatters.gd)
 # =============================================================================
 func format_card(card_name: String) -> String:
-	"""Formatea nombre de carta con color dorado y negrita"""
-	if card_name.is_empty() or card_name == "???":
-		return "[color=#888888]carta desconocida[/color]"
-	return "[b][color=#FFD700]%s[/color][/b]" % card_name
+	return _formatters.format_card(card_name)
+
+
+func format_card_with_origin(card_name: String, via_exhumar: bool = false) -> String:
+	return _formatters.format_card_with_origin(card_name, via_exhumar)
 
 
 func format_effect(text: String, effect_type: String = "") -> String:
-	"""Formatea tipo de efecto con su color correspondiente"""
-	var color = COLORS.get(effect_type.to_lower(), "#FFFFFF")
-	return "[color=%s]%s[/color]" % [color, text]
+	return _formatters.format_effect(text, effect_type)
 
 
 func format_player(player_id: int) -> String:
-	"""Formatea nombre de jugador con color"""
-	var color = COLORS.player1 if player_id == 0 else COLORS.player2
-	var name = "Jugador 1" if player_id == 0 else "Jugador 2"
-	return "[color=%s]%s[/color]" % [color, name]
+	return _formatters.format_player(player_id)
 
 
 func format_zone(zone_name: String) -> String:
-	"""Formatea nombre de zona con color"""
-	var zone_lower = zone_name.to_lower()
-	var color = COLORS.get(zone_lower, "#AAAAAA")
-
-	var display_name = zone_name
-	match zone_lower:
-		"deck", "castillo": display_name = "Castillo"
-		"hand", "mano": display_name = "Mano"
-		"field", "campo": display_name = "Campo"
-		"graveyard", "cemetery", "cementerio": display_name = "Cementerio"
-		"exile", "destierro": display_name = "Destierro"
-
-	return "[color=%s]%s[/color]" % [color, display_name]
+	return _formatters.format_zone(zone_name)
 
 
 func format_status(status: String, override_type: String = "") -> String:
-	"""Formatea estado con color y símbolo"""
-	var type_key = override_type if not override_type.is_empty() else status
-	var color = COLORS.get(type_key, "#FFFFFF")
-
-	var symbol = ""
-	match status.to_lower():
-		"success": symbol = "✓"
-		"failure": symbol = "✗"
-		"warning": symbol = "⚠"
-		"pasó": symbol = "⏭"
-
-	var text = symbol + " " + status if not symbol.is_empty() else status
-	return "[color=%s]%s[/color]" % [color, text]
+	return _formatters.format_status(status, override_type)
 
 
 func format_phase(phase_name: String) -> String:
-	"""Formatea nombre de fase"""
-	return "[color=%s][b]%s[/b][/color]" % [COLORS.phase, phase_name.to_upper()]
+	return _formatters.format_phase(phase_name)
 
 
 func format_number(value: int, context: String = "") -> String:
-	"""Formatea número con color según contexto"""
-	var color = COLORS.get(context, "#FFFFFF")
-	return "[color=%s][b]%d[/b][/color]" % [color, value]
+	return _formatters.format_number(value, context)
 
 
 func format_timestamp() -> String:
-	"""Formatea timestamp actual"""
-	var time = Time.get_time_string_from_system()
-	return "[color=#666666][%s][/color]" % time.substr(0, 5)
+	return _formatters.format_timestamp()
 
 
 # =============================================================================
@@ -979,7 +927,7 @@ func add_entry(type: String, message: String, data: Dictionary = {}, level: int 
 		_broadcast_public_action(entry)
 
 	# Debug print
-	var plain_text = _strip_bbcode(message)
+	var plain_text = _formatters.strip_bbcode(message)
 	print("[CombatLog] %s" % plain_text)
 
 
@@ -1016,7 +964,7 @@ func _broadcast_phase_change(phase: int) -> void:
 	var sync_data = {
 		"type": "phase_change",
 		"phase": phase,
-		"phase_name": _phase_to_string(phase),
+		"phase_name": _formatters.phase_to_string(phase),
 		"turn": _current_turn
 	}
 
@@ -1119,752 +1067,58 @@ func clear() -> void:
 
 
 # =============================================================================
-# UTILIDADES
+# BLOQUES DE ACCIÓN Y LOGS ESPECIALES (implementación en DetailedPlayLog.gd)
 # =============================================================================
-func _get_card_name(card) -> String:
-	"""Obtiene el nombre de una carta (Node o Dictionary)"""
-	if card == null:
-		return "???"
-
-	if card is Dictionary:
-		return card.get("name", card.get("nombre", "???"))
-
-	if card is Node:
-		if card.get("card_name"):
-			return card.card_name
-		if card.has_method("get_card_name"):
-			return card.get_card_name()
-
-	return "???"
-
-
-func _get_card_names(cards: Array) -> Array[String]:
-	"""Obtiene nombres de múltiples cartas"""
-	var names: Array[String] = []
-	for card in cards:
-		names.append(_get_card_name(card))
-	return names
-
-
-func _format_card_list(names: Array) -> String:
-	"""Formatea lista de cartas"""
-	if names.is_empty():
-		return "[color=#888888]ninguna[/color]"
-
-	var formatted: Array[String] = []
-	for name in names:
-		formatted.append(format_card(name))
-
-	return ", ".join(formatted)
-
-
-func _zone_to_string(zone: int) -> String:
-	"""Convierte enum de zona a string"""
-	match zone:
-		Constants.Zone.CASTILLO: return "castillo"
-		Constants.Zone.MANO: return "mano"
-		Constants.Zone.CEMENTERIO: return "cementerio"
-		Constants.Zone.DESTIERRO: return "destierro"
-		Constants.Zone.LINEA_ATAQUE: return "línea de ataque"
-		Constants.Zone.LINEA_DEFENSA: return "línea de defensa"
-		Constants.Zone.LINEA_APOYO: return "línea de apoyo"
-		Constants.Zone.RESERVA_ORO: return "reserva de oro"
-		Constants.Zone.ORO_PAGADO: return "oro pagado"
-		_: return "zona desconocida"
-
-
-func _phase_to_string(phase: int) -> String:
-	"""Convierte enum de fase a string usando Constants.PHASE_NAMES"""
-	# Intentar usar Constants.PHASE_NAMES
-	if Constants and Constants.get("PHASE_NAMES"):
-		return Constants.PHASE_NAMES.get(phase, "Fase %d" % phase)
-
-	# Fallback usando Constants.Phase enum
-	match phase:
-		Constants.Phase.AGRUPACION: return "Agrupación"
-		Constants.Phase.VIGILIA: return "Vigilia"
-		Constants.Phase.ATAQUE: return "Ataque"
-		Constants.Phase.BLOQUEO: return "Bloqueo"
-		Constants.Phase.GUERRA_TALISMANES: return "Guerra de Talismanes"
-		Constants.Phase.ASIGNACION_DANIO: return "Asignación de Daño"
-		Constants.Phase.FINAL: return "Final"
-		_: return "Fase %d" % phase
-
-
-func _strip_bbcode(text: String) -> String:
-	"""Remueve tags BBCode para texto plano"""
-	var regex = RegEx.new()
-	regex.compile("\\[.*?\\]")
-	return regex.sub(text, "", true)
-
-
-# =============================================================================
-# BLOQUES DE ACCIÓN - Contenedores Colapsables (DAR Sección 18)
-# =============================================================================
-## Bloques activos: {block_id: ActionBlock}
-var _active_blocks: Dictionary = {}
-var _block_id_counter: int = 0
-
-class ActionBlock:
-	var id: int = 0
-	var card_name: String = ""
-	var display_name: String = ""     # Nombre con prefijos ([EXHUMAR], etc.)
-	var card_data: Dictionary = {}
-	var player_id: int = 0
-	var started_at: float = 0.0
-	var steps: Array[Dictionary] = []
-	var is_collapsed: bool = false
-	var cost_breakdown: Dictionary = {}
-	var has_x_cost: bool = false
-	var instance_x: int = -1
-	var total_cost: int = 0
-	var was_annulled: bool = false
-	var annuller_name: String = ""
-	# Trazabilidad de origen
-	var via_exhumar: bool = false     # Jugada desde Cementerio → Destino: Destierro
-	var source_zone: int = -1         # Zona de origen
-
-signal action_block_started(block: ActionBlock)
-signal action_block_step_added(block: ActionBlock, step: Dictionary)
-signal action_block_completed(block: ActionBlock)
-signal action_block_annulled(block: ActionBlock, annuller: String)
-
-
 func log_detailed_play(card_instance: Dictionary, player_id: int = 0) -> int:
-	"""Inicia un bloque de acción detallado para una carta
-
-	Agrupa todos los pasos de una carta en un contenedor visual colapsable.
-	Muestra el cálculo transparente de coste para verificación de anulaciones.
-
-	Args:
-		card_instance: Datos de la carta (debe incluir instance_x si aplica)
-		player_id: ID del jugador que juega la carta
-
-	Returns:
-		block_id para agregar pasos adicionales
-	"""
-	_block_id_counter += 1
-	var block_id = _block_id_counter
-
-	var block = ActionBlock.new()
-	block.id = block_id
-	block.card_name = card_instance.get("nombre", card_instance.get("name", "???"))
-	block.card_data = card_instance.duplicate(true)
-	block.player_id = player_id
-	block.started_at = Time.get_unix_time_from_system()
-
-	# ─────────────────────────────────────────────────────────────────────────
-	# CÁLCULO TRANSPARENTE DE COSTE (DAR Sección 18 - Hacer el Bien)
-	# ─────────────────────────────────────────────────────────────────────────
-	var base_cost = card_instance.get("coste", 0)
-	if base_cost is String:
-		base_cost = 0  # Será calculado con X
-
-	block.instance_x = card_instance.get("instance_x", card_instance.get("x_value", -1))
-	block.has_x_cost = block.instance_x >= 0
-
-	if block.has_x_cost:
-		var x_total = card_instance.get("x_total_cost", -1)
-		if x_total >= 0:
-			block.total_cost = x_total
-		else:
-			# Calcular desde fórmula
-			var x_base = card_instance.get("x_base_cost", 0)
-			var x_mult = card_instance.get("x_multiplier", 1)
-			block.total_cost = x_base + (block.instance_x * x_mult)
-
-		block.cost_breakdown = {
-			"formula": card_instance.get("cost_formula", "X"),
-			"base_cost": card_instance.get("x_base_cost", 0),
-			"x_value": block.instance_x,
-			"x_multiplier": card_instance.get("x_multiplier", 1),
-			"total": block.total_cost
-		}
-	else:
-		block.total_cost = base_cost if base_cost is int else 0
-		block.cost_breakdown = {
-			"base_cost": block.total_cost,
-			"total": block.total_cost
-		}
-
-	# ─────────────────────────────────────────────────────────────────────────
-	# TRAZABILIDAD DE EXHUMAR (DAR Sección 6)
-	# Si viene del Cementerio, indicar que destino final = Destierro
-	# ─────────────────────────────────────────────────────────────────────────
-	block.via_exhumar = card_instance.get("via_exhumar", false) or \
-						card_instance.get("_exhumar_flag", false)
-	block.source_zone = card_instance.get("source_zone", -1)
-
-	# Construir nombre de display con prefijos
-	block.display_name = block.card_name
-	if block.via_exhumar:
-		block.display_name = "[EXHUMAR] " + block.card_name
-
-	_active_blocks[block_id] = block
-
-	# ─────────────────────────────────────────────────────────────────────────
-	# LOG INICIAL DEL BLOQUE
-	# ─────────────────────────────────────────────────────────────────────────
-	var player_str = format_player(player_id)
-	var card_str = format_card(block.display_name)
-
-	# Header del bloque
-	add_entry("block_start", "╔══════════════════════════════════════════════╗", {
-		"block_id": block_id
-	})
-
-	# Mensaje de jugar con indicador de Exhumar
-	if block.via_exhumar:
-		add_entry("block_start", "║ %s juega %s" % [player_str, card_str], {
-			"block_id": block_id,
-			"card": block.card_name,
-			"player": player_id,
-			"via_exhumar": true
-		})
-		add_entry("block_start", "║ [color=#9C27B0]💀 Desde CEMENTERIO → Destino: DESTIERRO[/color]", {
-			"block_id": block_id,
-			"source": "cemetery",
-			"destination": "exile"
-		})
-	else:
-		add_entry("block_start", "║ %s juega %s" % [player_str, card_str], {
-			"block_id": block_id,
-			"card": block.card_name,
-			"player": player_id
-		})
-
-	# Mostrar cálculo de coste TRANSPARENTE
-	_log_cost_breakdown(block)
-
-	add_entry("block_start", "╠══════════════════════════════════════════════╣", {
-		"block_id": block_id
-	})
-
-	emit_signal("action_block_started", block)
-
-	# Broadcast para oponente
-	_broadcast_detailed_play(block)
-
-	return block_id
-
-
-func _log_cost_breakdown(block: ActionBlock) -> void:
-	"""Loguea el desglose de coste de forma transparente
-
-	CRÍTICO: El oponente debe ver el coste total para saber si
-	'Hacer el Bien' (anula coste ≤3) puede aplicarse.
-	"""
-	var breakdown = block.cost_breakdown
-	var block_id = block.id
-
-	if block.has_x_cost:
-		# Coste variable X - mostrar cálculo completo
-		var formula = breakdown.get("formula", "X")
-		var base = breakdown.get("base_cost", 0)
-		var x_val = breakdown.get("x_value", 0)
-		var mult = breakdown.get("x_multiplier", 1)
-		var total = breakdown.get("total", 0)
-
-		add_entry("block_cost", "║ [color=#FFD700]💰 COSTE VARIABLE[/color]", {
-			"block_id": block_id
-		})
-
-		# Mostrar fórmula
-		add_entry("block_cost", "║    Fórmula: [color=#FFA500]%s[/color]" % formula, {
-			"block_id": block_id
-		})
-
-		# Mostrar cálculo paso a paso
-		if mult > 1:
-			add_entry("block_cost", "║    X elegido: [color=#4CAF50]%d[/color] × %d = %d" % [
-				x_val, mult, x_val * mult
-			], {"block_id": block_id})
-		else:
-			add_entry("block_cost", "║    X elegido: [color=#4CAF50]%d[/color]" % x_val, {
-				"block_id": block_id
-			})
-
-		if base > 0:
-			add_entry("block_cost", "║    Coste base: +%d" % base, {"block_id": block_id})
-
-		# COSTE TOTAL - VISIBLE PARA AMBOS JUGADORES
-		var total_color = "#4CAF50" if total <= 3 else "#FFD700"
-		var annul_warning = ""
-		if total <= 3:
-			annul_warning = " [color=#FF5722](⚠ Anulable por 'Hacer el Bien')[/color]"
-
-		add_entry("block_cost", "║ ═══════════════════════════════════════════", {
-			"block_id": block_id
-		})
-		add_entry("block_cost", "║    [b]COSTE TOTAL: [color=%s]%d ORO[/color][/b]%s" % [
-			total_color, total, annul_warning
-		], {
-			"block_id": block_id,
-			"total_cost": total,
-			"can_hacer_el_bien": total <= 3
-		})
-	else:
-		# Coste fijo normal
-		var total = breakdown.get("total", 0)
-		var total_color = "#4CAF50" if total <= 3 else "#FFD700"
-		var annul_warning = ""
-		if total <= 3:
-			annul_warning = " [color=#FF5722](⚠ Anulable por 'Hacer el Bien')[/color]"
-
-		add_entry("block_cost", "║ [color=#FFD700]💰 COSTE:[/color] [color=%s][b]%d ORO[/b][/color]%s" % [
-			total_color, total, annul_warning
-		], {
-			"block_id": block_id,
-			"total_cost": total,
-			"can_hacer_el_bien": total <= 3
-		})
+	return _detailed_play.log_detailed_play(card_instance, player_id)
 
 
 func add_block_step(block_id: int, step_type: String, message: String, data: Dictionary = {}) -> void:
-	"""Agrega un paso al bloque de acción
-
-	Args:
-		block_id: ID del bloque
-		step_type: Tipo de paso (A, B, C, D, E, resolution, etc.)
-		message: Mensaje del paso
-		data: Datos adicionales
-	"""
-	if not _active_blocks.has(block_id):
-		# Si no hay bloque, loguear normalmente
-		add_entry(step_type, message, data)
-		return
-
-	var block = _active_blocks[block_id] as ActionBlock
-
-	var step = {
-		"type": step_type,
-		"message": message,
-		"data": data,
-		"timestamp": Time.get_unix_time_from_system()
-	}
-
-	block.steps.append(step)
-
-	# Formatear según tipo de paso
-	var step_prefix = _get_step_prefix(step_type)
-	add_entry("block_step", "║ %s %s" % [step_prefix, message], {
-		"block_id": block_id,
-		"step_type": step_type,
-		"data": data
-	})
-
-	emit_signal("action_block_step_added", block, step)
-
-
-func _get_step_prefix(step_type: String) -> String:
-	"""Obtiene prefijo visual para tipo de paso"""
-	match step_type.to_upper():
-		"A", "STEP_A", "DECLARATION":
-			return "[color=#64B5F6]A →[/color]"
-		"B", "STEP_B", "PAYMENT":
-			return "[color=#FFD700]B →[/color]"
-		"C", "STEP_C", "TRIGGERS":
-			return "[color=#BA68C8]C →[/color]"
-		"D", "STEP_D", "RESPONSE":
-			return "[color=#FF9800]D →[/color]"
-		"E", "STEP_E", "RESOLUTION":
-			return "[color=#4CAF50]E →[/color]"
-		"TARGET":
-			return "[color=#03A9F4]🎯[/color]"
-		"EFFECT":
-			return "[color=#E91E63]⚡[/color]"
-		"ANNUL":
-			return "[color=#FF5722]🚫[/color]"
-		_:
-			return "[color=#9E9E9E]•[/color]"
+	_detailed_play.add_block_step(block_id, step_type, message, data)
 
 
 func complete_block(block_id: int, success: bool = true, result: Dictionary = {}) -> void:
-	"""Completa un bloque de acción
-
-	Args:
-		block_id: ID del bloque
-		success: Si la carta se resolvió exitosamente
-		result: Resultados de la resolución
-	"""
-	if not _active_blocks.has(block_id):
-		return
-
-	var block = _active_blocks[block_id] as ActionBlock
-
-	# Footer del bloque
-	if block.was_annulled:
-		add_entry("block_end", "║ [color=#FF5722]🚫 ANULADO por %s[/color]" % format_card(block.annuller_name), {
-			"block_id": block_id
-		})
-	elif success:
-		add_entry("block_end", "║ [color=#4CAF50]✓ RESUELTO[/color]", {
-			"block_id": block_id,
-			"result": result
-		})
-		# Indicar destino final si es Exhumar
-		if block.via_exhumar:
-			add_entry("block_end", "║ [color=#9C27B0]→ Destino: DESTIERRO (vía Exhumar)[/color]", {
-				"block_id": block_id,
-				"destination": "destierro",
-				"via_exhumar": true
-			})
-	else:
-		add_entry("block_end", "║ [color=#F44336]✗ FALLÓ[/color]", {
-			"block_id": block_id,
-			"result": result
-		})
-
-	add_entry("block_end", "╚══════════════════════════════════════════════╝", {
-		"block_id": block_id
-	})
-
-	emit_signal("action_block_completed", block)
-
-	# Broadcast resultado
-	_broadcast_block_complete(block, success, result)
-
-	# Limpiar
-	_active_blocks.erase(block_id)
+	_detailed_play.complete_block(block_id, success, result)
 
 
 func annul_block(block_id: int, annuller_name: String, reason: String = "") -> void:
-	"""Marca un bloque como anulado
-
-	Args:
-		block_id: ID del bloque
-		annuller_name: Nombre de la carta que anula
-		reason: Razón de la anulación
-	"""
-	if not _active_blocks.has(block_id):
-		return
-
-	var block = _active_blocks[block_id] as ActionBlock
-	block.was_annulled = true
-	block.annuller_name = annuller_name
-
-	var reason_text = ""
-	if not reason.is_empty():
-		reason_text = " (%s)" % reason
-
-	add_block_step(block_id, "ANNUL", "[color=#FF5722]%s ANULA a %s%s[/color]" % [
-		format_card(annuller_name),
-		format_card(block.card_name),
-		reason_text
-	], {
-		"annuller": annuller_name,
-		"target": block.card_name,
-		"reason": reason
-	})
-
-	emit_signal("action_block_annulled", block, annuller_name)
-
-	# Broadcast anulación
-	_broadcast_block_annulled(block, annuller_name, reason)
+	_detailed_play.annul_block(block_id, annuller_name, reason)
 
 
 func get_active_block(block_id: int) -> ActionBlock:
-	"""Obtiene un bloque activo por ID"""
-	return _active_blocks.get(block_id)
+	return _detailed_play.get_active_block(block_id)
 
 
 func get_block_cost(block_id: int) -> int:
-	"""Obtiene el coste total de un bloque (para verificar 'Hacer el Bien')"""
-	if not _active_blocks.has(block_id):
-		return -1
-
-	var block = _active_blocks[block_id] as ActionBlock
-	return block.total_cost
+	return _detailed_play.get_block_cost(block_id)
 
 
 func can_hacer_el_bien(block_id: int) -> bool:
-	"""Verifica si 'Hacer el Bien' puede anular este bloque
-
-	Hacer el Bien anula cartas con coste ≤ 3.
-	"""
-	var cost = get_block_cost(block_id)
-	return cost >= 0 and cost <= 3
+	return _detailed_play.can_hacer_el_bien(block_id)
 
 
-# =============================================================================
-# EFECTOS PARCIALES - "En medida de lo posible" (DAR Sección 6)
-# =============================================================================
 func log_partial_effect(effect_type: String, requested: int, actual: int, target_name: String = "", context: Dictionary = {}) -> void:
-	"""Loguea un efecto que se resolvió parcialmente
-
-	Según DAR Sección 6: Los efectos se resuelven "en medida de lo posible".
-	Si el oponente tiene menos cartas que X, se botan las disponibles.
-
-	Args:
-		effect_type: Tipo de efecto (mill, draw, damage, etc.)
-		requested: Cantidad solicitada (valor de X)
-		actual: Cantidad real ejecutada
-		target_name: Nombre del objetivo (jugador, carta, etc.)
-		context: Datos adicionales
-	"""
-	if actual >= requested:
-		# Efecto completo, no es parcial
-		return
-
-	var effect_name = _effect_type_to_spanish(effect_type)
-	var target_str = target_name if not target_name.is_empty() else "objetivo"
-
-	# ─────────────────────────────────────────────────────────────────────────
-	# Formato: "Botando [Actual] de X (en medida de lo posible)"
-	# ─────────────────────────────────────────────────────────────────────────
-	var message = "[color=#FFC107]⚠ %s [%d] de %d a %s[/color] [color=#888888](en medida de lo posible)[/color]" % [
-		effect_name,
-		actual,
-		requested,
-		target_str
-	]
-
-	add_entry("partial_effect", message, {
-		"effect_type": effect_type,
-		"requested": requested,
-		"actual": actual,
-		"target": target_name,
-		"partial": true,
-		"context": context
-	})
-
-	# Broadcast a ambos jugadores
-	_broadcast_partial_effect(effect_type, requested, actual, target_name)
+	_detailed_play.log_partial_effect(effect_type, requested, actual, target_name, context)
 
 
 func log_partial_mill(requested: int, actual: int, player_id: int, cards_milled: Array = []) -> void:
-	"""Log específico para Botar/Mill parcial
-
-	Ejemplo: "Botando [3] de 5 (en medida de lo posible)"
-	"""
-	var player_str = format_player(player_id)
-	var card_names = _get_card_names(cards_milled) if not cards_milled.is_empty() else []
-
-	var message = "[color=#FFC107]⚠ Botando [%d] de %d cartas de %s[/color] [color=#888888](en medida de lo posible)[/color]" % [
-		actual, requested, player_str
-	]
-
-	if not card_names.is_empty():
-		message += "\n    → %s" % _format_card_list(card_names)
-
-	add_entry("partial_mill", message, {
-		"effect_type": "mill",
-		"requested": requested,
-		"actual": actual,
-		"player": player_id,
-		"cards": card_names,
-		"partial": true
-	})
-
-	_broadcast_partial_effect("mill", requested, actual, "Jugador %d" % (player_id + 1))
+	_detailed_play.log_partial_mill(requested, actual, player_id, cards_milled)
 
 
 func log_partial_draw(requested: int, actual: int, player_id: int) -> void:
-	"""Log específico para Robar parcial (mazo vacío)"""
-	var player_str = format_player(player_id)
-
-	var message = "[color=#FFC107]⚠ Robando [%d] de %d cartas para %s[/color] [color=#888888](mazo agotado)[/color]" % [
-		actual, requested, player_str
-	]
-
-	add_entry("partial_draw", message, {
-		"effect_type": "draw",
-		"requested": requested,
-		"actual": actual,
-		"player": player_id,
-		"partial": true
-	})
-
-	_broadcast_partial_effect("draw", requested, actual, "Jugador %d" % (player_id + 1))
+	_detailed_play.log_partial_draw(requested, actual, player_id)
 
 
 func log_partial_damage(requested: int, actual: int, target_name: String, reason: String = "") -> void:
-	"""Log específico para Daño parcial"""
-	var reason_str = ""
-	if not reason.is_empty():
-		reason_str = " [color=#888888](%s)[/color]" % reason
-
-	var message = "[color=#FFC107]⚠ Infligiendo [%d] de %d daño a %s%s[/color]" % [
-		actual, requested, format_card(target_name), reason_str
-	]
-
-	add_entry("partial_damage", message, {
-		"effect_type": "damage",
-		"requested": requested,
-		"actual": actual,
-		"target": target_name,
-		"reason": reason,
-		"partial": true
-	})
-
-	_broadcast_partial_effect("damage", requested, actual, target_name)
+	_detailed_play.log_partial_damage(requested, actual, target_name, reason)
 
 
 func log_x_effect_result(effect_type: String, x_value: int, actual: int, target_name: String, success: bool = true) -> void:
-	"""Log del resultado de un efecto con X
-
-	Muestra claramente cuánto del efecto X se resolvió.
-	"""
-	var effect_name = _effect_type_to_spanish(effect_type)
-
-	if actual >= x_value:
-		# Efecto completo
-		var message = "[color=#4CAF50]✓ %s %d a %s (X=%d)[/color]" % [
-			effect_name, actual, target_name, x_value
-		]
-		add_entry("x_effect", message, {
-			"effect_type": effect_type,
-			"x_value": x_value,
-			"actual": actual,
-			"target": target_name,
-			"complete": true
-		})
-	else:
-		# Efecto parcial
-		var message = "[color=#FFC107]⚠ %s [%d] de X=%d a %s[/color] [color=#888888](en medida de lo posible)[/color]" % [
-			effect_name, actual, x_value, target_name
-		]
-		add_entry("x_effect_partial", message, {
-			"effect_type": effect_type,
-			"x_value": x_value,
-			"actual": actual,
-			"target": target_name,
-			"complete": false,
-			"partial": true
-		})
+	_detailed_play.log_x_effect_result(effect_type, x_value, actual, target_name, success)
 
 
-func _effect_type_to_spanish(effect_type: String) -> String:
-	"""Convierte tipo de efecto a verbo en español (gerundio)"""
-	match effect_type.to_lower():
-		"mill", "botar": return "Botando"
-		"draw", "robar": return "Robando"
-		"discard", "descartar": return "Descartando"
-		"damage", "daño": return "Infligiendo"
-		"destroy", "destruir": return "Destruyendo"
-		"banish", "desterrar": return "Desterrando"
-		"heal", "curar": return "Curando"
-		"buff", "fortalecer": return "Fortaleciendo"
-		"debuff", "debilitar": return "Debilitando"
-		_: return "Aplicando"
-
-
-func _broadcast_partial_effect(effect_type: String, requested: int, actual: int, target: String) -> void:
-	"""Broadcast efecto parcial a ambos jugadores"""
-	var sync_data = {
-		"type": "partial_effect",
-		"effect_type": effect_type,
-		"requested": requested,
-		"actual": actual,
-		"target": target,
-		"turn": _current_turn,
-		"phase": _current_phase_name
-	}
-
-	emit_signal("public_action_occurred", sync_data)
-	emit_signal("sync_to_opponent", "partial_effect", sync_data)
-
-
-# =============================================================================
-# FORMATO DE CARTA CON PREFIJOS
-# =============================================================================
-func format_card_with_origin(card_name: String, via_exhumar: bool = false) -> String:
-	"""Formatea nombre de carta con prefijo de origen si aplica"""
-	var display_name = card_name
-	if via_exhumar:
-		display_name = "[EXHUMAR] " + card_name
-
-	return format_card(display_name)
-
-
-# =============================================================================
-# BROADCASTING - BLOQUES DE ACCIÓN
-# =============================================================================
-func _broadcast_detailed_play(block: ActionBlock) -> void:
-	"""Broadcast inicio de jugada detallada"""
-	var sync_data = {
-		"type": "detailed_play_start",
-		"block_id": block.id,
-		"card_name": block.card_name,
-		"display_name": block.display_name,
-		"player_id": block.player_id,
-		"has_x_cost": block.has_x_cost,
-		"instance_x": block.instance_x,
-		"total_cost": block.total_cost,
-		"cost_breakdown": block.cost_breakdown,
-		"can_hacer_el_bien": block.total_cost <= 3,
-		"via_exhumar": block.via_exhumar,
-		"destination_if_exhumar": "destierro" if block.via_exhumar else "cementerio",
-		"turn": _current_turn,
-		"phase": _current_phase_name
-	}
-
-	emit_signal("public_action_occurred", sync_data)
-	emit_signal("sync_to_opponent", "detailed_play_start", sync_data)
-
-
-func _broadcast_block_complete(block: ActionBlock, success: bool, result: Dictionary) -> void:
-	"""Broadcast finalización de bloque"""
-	var sync_data = {
-		"type": "detailed_play_complete",
-		"block_id": block.id,
-		"card_name": block.card_name,
-		"success": success,
-		"was_annulled": block.was_annulled,
-		"annuller": block.annuller_name,
-		"result": result,
-		"steps_count": block.steps.size()
-	}
-
-	emit_signal("public_action_occurred", sync_data)
-	emit_signal("sync_to_opponent", "detailed_play_complete", sync_data)
-
-
-func _broadcast_block_annulled(block: ActionBlock, annuller: String, reason: String) -> void:
-	"""Broadcast anulación de bloque"""
-	var sync_data = {
-		"type": "detailed_play_annulled",
-		"block_id": block.id,
-		"card_name": block.card_name,
-		"total_cost": block.total_cost,
-		"annuller": annuller,
-		"reason": reason
-	}
-
-	emit_signal("public_action_occurred", sync_data)
-	emit_signal("sync_to_opponent", "detailed_play_annulled", sync_data)
-
-
-# =============================================================================
-# LOG DE COSTE X SIMPLIFICADO (Para uso externo)
-# =============================================================================
 func log_x_cost_selection(card_name: String, player_id: int, x_value: int, total_cost: int, formula: String = "X") -> void:
-	"""Loguea la selección de valor X de forma transparente
-
-	Llamar desde PaymentManager cuando se confirma el valor de X.
-	"""
-	var player_str = format_player(player_id)
-	var card_str = format_card(card_name)
-
-	var annul_warning = ""
-	if total_cost <= 3:
-		annul_warning = " [color=#FF5722](⚠ Anulable)[/color]"
-
-	add_entry("cost", "%s elige [color=#4CAF50]X = %d[/color] para %s" % [
-		player_str, x_value, card_str
-	], {
-		"player": player_id,
-		"card": card_name,
-		"x_value": x_value
-	})
-
-	add_entry("cost", "   [color=#FFD700]Coste:[/color] %s → [b]%d Oro[/b]%s" % [
-		formula, total_cost, annul_warning
-	], {
-		"formula": formula,
-		"total_cost": total_cost,
-		"can_annul": total_cost <= 3
-	})
+	_detailed_play.log_x_cost_selection(card_name, player_id, x_value, total_cost, formula)
 
 
 # =============================================================================

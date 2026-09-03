@@ -17,11 +17,7 @@ func setup(main: Node) -> void:
 # EXHUMAR
 # =============================================================================
 func open_exhume_selection(player_id: int = 0) -> void:
-	var card_manager = get_node_or_null("/root/CardManager")
-	if not card_manager:
-		push_error("[SelectionModule] CardManager no disponible")
-		return
-	var cemetery = card_manager.get_cemetery(player_id)
+	var cemetery = CardManager.get_cemetery(player_id)
 	if cemetery.is_empty():
 		_main._update_debug("El cementerio está vacío")
 		return
@@ -39,30 +35,26 @@ func _on_exhume_card_selected(card_data: Dictionary) -> void:
 	var card_name = card_data.get("nombre", "?")
 	var card_cost = card_data.get("coste", 0)
 	_main._update_debug("Exhumando: %s (Coste: %d)" % [card_name, card_cost])
-	var puede = _main._game_state.puede_pagar(player_id, card_cost) if _main._game_state else _main.puede_pagar(card_cost)
+	var puede = GameState.puede_pagar(player_id, card_cost)
 	if not puede:
-		var oro_actual = _main._game_state.get_oro_reserva(player_id) if _main._game_state else _main.get_oro_disponible()
+		var oro_actual = GameState.get_oro_reserva(player_id)
 		_main._update_debug("Oro insuficiente para exhumar %s (necesitas %d, tienes %d)" % [
 			card_name, card_cost, oro_actual])
 		return
-	var card_manager = get_node_or_null("/root/CardManager")
-	if not card_manager:
-		return
-	var cemetery = card_manager.get_cemetery(player_id)
+	var cemetery = CardManager.get_cemetery(player_id)
 	var index = _find_card_in_array(cemetery, card_data)
 	if index < 0:
 		push_error("[SelectionModule] Carta no encontrada en cementerio")
 		return
 	if card_cost > 0:
 		if player_id == 0:
-			var paid = await _main.pagar_coste(card_cost)
+			var paid = await _main._gold_manager.pagar_coste(card_cost)
 			if not paid:
 				_main._update_debug("Error al pagar coste de exhumar")
 				return
 		else:
-			if _main._game_state:
-				_main._game_state.pagar_oro(player_id, card_cost)
-	var exhumed_data = card_manager.exhume_card(player_id, index)
+			GameState.pagar_oro(player_id, card_cost)
+	var exhumed_data = CardManager.exhume_card(player_id, index)
 	exhumed_data["is_exhumed"] = true
 	exhumed_data["via_exhumar"] = true
 	var ability_data = {
@@ -97,6 +89,12 @@ func _on_exhume_resolved(stack_object: Dictionary, _result: Dictionary) -> void:
 	_main.player_field.add_child(card)
 	card.set_zone(Constants.Zone.LINEA_DEFENSA)
 	_main._connect_card_signals(card)
+	# Slot fijo (2026-08-31) — ver ZoneManager.pin_card_to_field_slot() y el
+	# mismo motivo en GoldManager._play_card_to_field(): sin esto, un Aliado
+	# exhumado reordenaba (vía el HBoxContainer) a los que ya estaban en
+	# Línea de Defensa.
+	if _main.get("_zone_manager"):
+		_main._zone_manager.pin_card_to_field_slot(card, _main.player_field)
 	_main._update_debug("'%s' entra al campo (exhumado - irá al destierro si muere)" % card.card_name)
 	if ActionPipeline.is_stack_empty():
 		if ActionPipeline.stack_object_resolved.is_connected(_on_exhume_resolved):
@@ -119,10 +117,7 @@ func _disconnect_exhume_signals() -> void:
 # BUSCAR EN MAZO
 # =============================================================================
 func open_search_deck(player_id: int = 0, filter: Callable = Callable(), on_selected: Callable = Callable()) -> void:
-	var card_manager = get_node_or_null("/root/CardManager")
-	if not card_manager:
-		return
-	var deck = card_manager.get_deck(player_id)
+	var deck = CardManager.get_deck(player_id)
 	if deck.is_empty():
 		_main._update_debug("El mazo está vacío")
 		return
@@ -172,7 +167,7 @@ func open_discard_selection(player_id: int, amount: int) -> void:
 	for card in hand_cards:
 		card_data_list.append(card.card_data)
 	SelectionManager.open_selection(card_data_list, SelectionManager.SelectionMode.DISCARD, {
-		"title": "Descarta %d carta(s) — límite de mano (%d)" % [amount, Constants.MAX_HAND_SIZE],
+		"title": "Descarta %d (límite %d)" % [amount, Constants.MAX_HAND_SIZE],
 		"max_selections": amount,
 		"min_selections": amount,
 		"can_cancel": false
@@ -185,7 +180,6 @@ func open_discard_selection(player_id: int, amount: int) -> void:
 		selected_data = [await SelectionManager.card_selected]
 	else:
 		selected_data = await SelectionManager.selection_completed
-	var card_manager = get_node_or_null("/root/CardManager")
 	var hand_data_list: Array = hand_cards.map(func(c): return c.card_data)
 	for data in selected_data:
 		var index = _find_card_in_array(hand_data_list, data)
@@ -194,14 +188,10 @@ func open_discard_selection(player_id: int, amount: int) -> void:
 		var card = hand_cards[index]
 		var discard_data: Dictionary = data.duplicate()
 		discard_data["esta_oculta"] = false
-		if card_manager:
-			card_manager.add_to_cemetery(player_id, discard_data)
-		else:
-			_main.player_cemetery.append(discard_data)
-			UIManager.update_cementerio_count(player_id, _main.player_cemetery.size())
+		CardManager.add_to_cemetery(player_id, discard_data)
 		_main.player_hand.remove_card(card)
 	_main._update_debug("Descarte por límite de mano completado (%d carta(s))" % selected_data.size())
-	_main._update_castillo_counts()
+	_main._zone_manager._update_castillo_counts()
 
 
 # =============================================================================

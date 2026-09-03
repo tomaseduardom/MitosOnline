@@ -13,6 +13,10 @@ extends Control
 signal stack_item_clicked(stack_id: int)
 signal stack_item_hovered(stack_id: int, is_hovered: bool)
 signal visualizer_toggled(is_visible: bool)
+signal card_preview_requested(stack_obj: Dictionary)
+signal target_validation_requested(stack_id: int, response_card: Dictionary)
+signal annul_target_selected(stack_id: int)
+signal cancel_target_selected(stack_id: int)
 
 # =============================================================================
 # REFERENCIAS A NODOS UI
@@ -33,6 +37,11 @@ var StackItemScene: PackedScene = null
 var _stack_items: Dictionary = {}  # {stack_id: StackItemNode}
 var _action_pipeline: Node = null
 var _is_expanded: bool = true
+
+## Módulos extraídos (Fase 4 de reestructuración)
+var _animations: StackItemAnimations
+var _context_menu: StackContextMenu
+var _target_highlight: StackTargetHighlight
 
 # =============================================================================
 # CONFIGURACIÓN VISUAL
@@ -70,6 +79,14 @@ const STEP_COLORS: Dictionary = {
 
 
 func _ready() -> void:
+	# Inicializar módulos extraídos
+	_animations = StackItemAnimations.new()
+	_animations.setup(self)
+	_context_menu = StackContextMenu.new()
+	_context_menu.setup(self)
+	_target_highlight = StackTargetHighlight.new()
+	_target_highlight.setup(self)
+
 	# Ocultar label de vacío inicialmente
 	if empty_label:
 		empty_label.visible = true
@@ -92,11 +109,7 @@ func _setup_ui() -> void:
 
 func _connect_to_pipeline() -> void:
 	"""Conecta las señales del ActionPipeline"""
-	_action_pipeline = get_node_or_null("/root/ActionPipeline")
-
-	if not _action_pipeline:
-		push_warning("[StackVisualizer] ActionPipeline no encontrado")
-		return
+	_action_pipeline = ActionPipeline
 
 	# Señales de objetos en la pila
 	if _action_pipeline.has_signal("stack_object_added"):
@@ -161,7 +174,7 @@ func _on_stack_object_resolved(stack_obj: Dictionary, _result: Dictionary) -> vo
 	if _stack_items.has(stack_id):
 		_update_item_state(_stack_items[stack_id], stack_obj, "resolved")
 		# Animar salida
-		await _animate_item_out(_stack_items[stack_id])
+		await _animations.animate_item_out(_stack_items[stack_id])
 
 
 func _on_stack_object_removed(stack_obj: Dictionary, reason: String) -> void:
@@ -200,7 +213,7 @@ func _on_object_annulled(stack_obj: Dictionary, annuller: Dictionary) -> void:
 		_update_item_state(item, stack_obj, "annulled")
 		_show_annulled_effect(item, annuller)
 		# Animación de anulación (sacudida + colapso)
-		await _animate_item_annulled(item)
+		await _animations.animate_item_annulled(item)
 
 
 func _on_object_cancelled(stack_obj: Dictionary) -> void:
@@ -210,7 +223,7 @@ func _on_object_cancelled(stack_obj: Dictionary) -> void:
 		var item = _stack_items[stack_id]
 		_update_item_state(item, stack_obj, "cancelled")
 		# Usar animación de anulación (similar visual)
-		await _animate_item_annulled(item)
+		await _animations.animate_item_annulled(item)
 
 
 func _on_object_fizzled(stack_obj: Dictionary) -> void:
@@ -220,7 +233,7 @@ func _on_object_fizzled(stack_obj: Dictionary) -> void:
 		var item = _stack_items[stack_id]
 		_update_item_state(item, stack_obj, "fizzled")
 		# Usar animación de desintegración
-		await _animate_item_fizzled(item)
+		await _animations.animate_item_fizzled(item)
 
 
 func _on_stack_empty() -> void:
@@ -257,7 +270,7 @@ func _add_stack_item(stack_obj: Dictionary) -> void:
 		stack_container.move_child(item, 0)
 
 	# Animar entrada
-	_animate_item_in(item)
+	_animations.animate_item_in(item)
 
 	print("[StackVisualizer] + Añadido: %s (#%d)" % [stack_obj.get("name", "???"), stack_id])
 
@@ -416,9 +429,9 @@ func _create_stack_item_node(stack_obj: Dictionary) -> Control:
 	inner_vbox.add_child(wait_indicator)
 
 	# Conectar señales de interacción
-	item.gui_input.connect(_on_item_gui_input.bind(stack_obj.get("id", -1)))
-	item.mouse_entered.connect(_on_item_mouse_entered.bind(stack_obj.get("id", -1)))
-	item.mouse_exited.connect(_on_item_mouse_exited.bind(stack_obj.get("id", -1)))
+	item.gui_input.connect(_context_menu.on_item_gui_input.bind(stack_obj.get("id", -1)))
+	item.mouse_entered.connect(_target_highlight.on_item_mouse_entered.bind(stack_obj.get("id", -1)))
+	item.mouse_exited.connect(_target_highlight.on_item_mouse_exited.bind(stack_obj.get("id", -1)))
 
 	return item
 
@@ -589,193 +602,6 @@ func _show_annulled_effect(item: Control, annuller: Dictionary) -> void:
 
 
 # =============================================================================
-# ANIMACIONES LIFO - Efectos "caen" sobre anteriores
-# =============================================================================
-const FALL_DISTANCE: float = 100.0      # Distancia de caída
-const FALL_DURATION: float = 0.3        # Duración de caída
-const FADE_DURATION: float = 0.25       # Duración de desvanecimiento
-const PUSH_DOWN_AMOUNT: float = 5.0     # Cuánto se empujan los items inferiores
-const RESOLUTION_DELAY: float = 0.4     # Pausa antes de activar siguiente
-
-## Estado de animación
-var _is_animating: bool = false
-var _animation_queue: Array = []
-
-
-func _animate_item_in(item: Control) -> void:
-	"""Anima la entrada LIFO - El item 'cae' desde arriba sobre los demás"""
-	if not is_instance_valid(item):
-		return
-
-	_is_animating = true
-
-	# Estado inicial: arriba y transparente
-	item.modulate.a = 0.0
-	item.position.y = -FALL_DISTANCE
-	item.scale = Vector2(0.8, 0.8)
-
-	# Empujar items existentes hacia abajo (efecto de "peso")
-	await _push_existing_items_down()
-
-	# Animación de caída
-	var tween = create_tween()
-	tween.set_ease(Tween.EASE_OUT)
-	tween.set_trans(Tween.TRANS_BOUNCE)
-
-	# Fase 1: Aparecer y caer
-	tween.set_parallel(true)
-	tween.tween_property(item, "modulate:a", 1.0, FALL_DURATION * 0.5)
-	tween.tween_property(item, "position:y", 0.0, FALL_DURATION)
-	tween.tween_property(item, "scale", Vector2.ONE, FALL_DURATION * 0.7)
-
-	# Efecto de "impacto" sutil
-	tween.chain().tween_property(item, "scale", Vector2(1.02, 0.98), 0.05)
-	tween.tween_property(item, "scale", Vector2.ONE, 0.1)
-
-	await tween.finished
-	_is_animating = false
-
-	# Efecto de brillo al aterrizar
-	_flash_item(item, Color(1, 1, 1, 0.5))
-
-
-func _push_existing_items_down() -> void:
-	"""Empuja los items existentes ligeramente hacia abajo"""
-	var items_to_push = _stack_items.values()
-
-	if items_to_push.is_empty():
-		return
-
-	var tween = create_tween()
-	tween.set_parallel(true)
-	tween.set_ease(Tween.EASE_OUT)
-
-	for item in items_to_push:
-		if is_instance_valid(item):
-			# Pequeño empujón hacia abajo
-			var current_y = item.position.y
-			tween.tween_property(item, "position:y", current_y + PUSH_DOWN_AMOUNT, 0.1)
-
-	await tween.finished
-
-	# Restaurar posiciones (el VBoxContainer las maneja)
-	for item in items_to_push:
-		if is_instance_valid(item):
-			item.position.y = 0
-
-
-func _animate_item_out(item: Control) -> void:
-	"""Anima la salida - El item se desvanece hacia arriba antes del siguiente"""
-	if not is_instance_valid(item):
-		return
-
-	_is_animating = true
-
-	# Resaltar brevemente antes de salir
-	await _flash_item(item, Color(0.5, 1, 0.5, 0.5))
-
-	var tween = create_tween()
-	tween.set_ease(Tween.EASE_IN)
-	tween.set_trans(Tween.TRANS_QUAD)
-
-	# Fase 1: Elevarse y desvanecerse
-	tween.set_parallel(true)
-	tween.tween_property(item, "modulate:a", 0.0, FADE_DURATION)
-	tween.tween_property(item, "position:y", -30.0, FADE_DURATION)
-	tween.tween_property(item, "scale", Vector2(0.9, 0.9), FADE_DURATION)
-
-	await tween.finished
-
-	# Pausa antes de activar el siguiente (visual de "procesamiento")
-	await get_tree().create_timer(RESOLUTION_DELAY).timeout
-
-	_is_animating = false
-
-
-func _animate_item_annulled(item: Control) -> void:
-	"""Animación especial para anulación - efecto de 'destrucción'"""
-	if not is_instance_valid(item):
-		return
-
-	_is_animating = true
-
-	# Flash rojo
-	await _flash_item(item, Color.RED)
-
-	var tween = create_tween()
-
-	# Sacudida
-	for i in range(3):
-		tween.tween_property(item, "position:x", 10.0, 0.03)
-		tween.tween_property(item, "position:x", -10.0, 0.03)
-	tween.tween_property(item, "position:x", 0.0, 0.03)
-
-	# Colapsar y desvanecer
-	tween.set_parallel(true)
-	tween.tween_property(item, "scale:y", 0.0, 0.2)
-	tween.tween_property(item, "modulate:a", 0.0, 0.2)
-
-	await tween.finished
-	_is_animating = false
-
-
-func _animate_item_fizzled(item: Control) -> void:
-	"""Animación para fizzle - efecto de 'desintegración'"""
-	if not is_instance_valid(item):
-		return
-
-	_is_animating = true
-
-	var tween = create_tween()
-
-	# Parpadeo gris
-	tween.tween_property(item, "modulate", Color(0.5, 0.5, 0.5, 1.0), 0.1)
-	tween.tween_property(item, "modulate", Color(0.3, 0.3, 0.3, 0.8), 0.1)
-	tween.tween_property(item, "modulate", Color(0.5, 0.5, 0.5, 0.5), 0.1)
-	tween.tween_property(item, "modulate:a", 0.0, 0.2)
-
-	await tween.finished
-	_is_animating = false
-
-
-func _flash_item(item: Control, flash_color: Color) -> void:
-	"""Efecto de destello en un item"""
-	if not is_instance_valid(item):
-		return
-
-	var original_modulate = item.modulate
-
-	var tween = create_tween()
-	tween.tween_property(item, "modulate", flash_color, 0.05)
-	tween.tween_property(item, "modulate", original_modulate, 0.1)
-
-	await tween.finished
-
-
-func _animate_stack_shift_up() -> void:
-	"""Anima los items restantes subiendo cuando se remueve el tope"""
-	var items = _stack_items.values()
-
-	if items.is_empty():
-		return
-
-	var tween = create_tween()
-	tween.set_parallel(true)
-	tween.set_ease(Tween.EASE_OUT)
-	tween.set_trans(Tween.TRANS_BACK)
-
-	for item in items:
-		if is_instance_valid(item):
-			# Pequeño salto hacia arriba
-			var current_y = item.position.y
-			tween.tween_property(item, "position:y", current_y - 5.0, 0.1)
-
-	await tween.finished
-
-	# El VBoxContainer restaurará las posiciones
-
-
-# =============================================================================
 # ESTADO DE PILA VACÍA
 # =============================================================================
 func _update_empty_state() -> void:
@@ -786,106 +612,10 @@ func _update_empty_state() -> void:
 
 # =============================================================================
 # INTERACCIÓN - Click derecho para ver carta y validar objetivo (Sección 8)
+# Implementación en StackContextMenu.gd. _can_be_annulled/_can_be_cancelled
+# y los helpers de abajo quedan acá porque los usan tanto el menú contextual
+# como el tooltip de hover (StackTargetHighlight.gd).
 # =============================================================================
-signal card_preview_requested(stack_obj: Dictionary)
-signal target_validation_requested(stack_id: int, response_card: Dictionary)
-signal annul_target_selected(stack_id: int)
-signal cancel_target_selected(stack_id: int)
-
-## Popup de contexto para interacción
-var _context_popup: PopupMenu = null
-var _selected_stack_id: int = -1
-var _card_preview_window: Window = null
-
-## IDs del menú contextual
-enum ContextMenuID {
-	VIEW_CARD = 0,
-	CHECK_VALID_TARGET = 1,
-	SELECT_AS_ANNUL_TARGET = 2,
-	SELECT_AS_CANCEL_TARGET = 3
-}
-
-
-func _on_item_gui_input(event: InputEvent, stack_id: int) -> void:
-	"""Maneja input en un item - Click izquierdo y derecho"""
-	if event is InputEventMouseButton and event.pressed:
-		match event.button_index:
-			MOUSE_BUTTON_LEFT:
-				# Click izquierdo: Seleccionar/resaltar
-				emit_signal("stack_item_clicked", stack_id)
-				_highlight_selected_item(stack_id)
-
-			MOUSE_BUTTON_RIGHT:
-				# Click derecho: Menú contextual (Sección 8)
-				_selected_stack_id = stack_id
-				_show_context_menu(stack_id, event.global_position)
-
-
-func _show_context_menu(stack_id: int, position: Vector2) -> void:
-	"""Muestra menú contextual para un item de la pila"""
-	# Crear popup si no existe
-	if _context_popup == null:
-		_context_popup = PopupMenu.new()
-		_context_popup.name = "StackContextMenu"
-		add_child(_context_popup)
-		_context_popup.id_pressed.connect(_on_context_menu_selected)
-
-	_context_popup.clear()
-
-	# Obtener datos del objeto
-	var stack_obj = _get_stack_object_by_id(stack_id)
-	if stack_obj.is_empty():
-		return
-
-	var obj_name = stack_obj.get("name", "???")
-	var can_be_annulled = _can_be_annulled(stack_obj)
-	var can_be_cancelled = _can_be_cancelled(stack_obj)
-
-	# Opciones del menú
-	_context_popup.add_item("👁 Ver carta: %s" % obj_name, ContextMenuID.VIEW_CARD)
-	_context_popup.add_separator()
-	_context_popup.add_item("🎯 Verificar como objetivo", ContextMenuID.CHECK_VALID_TARGET)
-
-	# Opciones de Anular/Cancelar (Sección 8)
-	_context_popup.add_separator()
-
-	if can_be_annulled:
-		_context_popup.add_item("⛔ Seleccionar para ANULAR", ContextMenuID.SELECT_AS_ANNUL_TARGET)
-	else:
-		_context_popup.add_item("⛔ No puede ser anulado", ContextMenuID.SELECT_AS_ANNUL_TARGET)
-		_context_popup.set_item_disabled(_context_popup.item_count - 1, true)
-
-	if can_be_cancelled:
-		_context_popup.add_item("🚫 Seleccionar para CANCELAR", ContextMenuID.SELECT_AS_CANCEL_TARGET)
-	else:
-		_context_popup.add_item("🚫 No puede ser cancelado", ContextMenuID.SELECT_AS_CANCEL_TARGET)
-		_context_popup.set_item_disabled(_context_popup.item_count - 1, true)
-
-	# Mostrar popup
-	_context_popup.position = Vector2i(position)
-	_context_popup.popup()
-
-
-func _on_context_menu_selected(id: int) -> void:
-	"""Maneja selección del menú contextual"""
-	var stack_obj = _get_stack_object_by_id(_selected_stack_id)
-
-	match id:
-		ContextMenuID.VIEW_CARD:
-			_show_card_preview(stack_obj)
-
-		ContextMenuID.CHECK_VALID_TARGET:
-			_check_valid_target(stack_obj)
-
-		ContextMenuID.SELECT_AS_ANNUL_TARGET:
-			emit_signal("annul_target_selected", _selected_stack_id)
-			_show_target_selection_feedback(_selected_stack_id, "annul")
-
-		ContextMenuID.SELECT_AS_CANCEL_TARGET:
-			emit_signal("cancel_target_selected", _selected_stack_id)
-			_show_target_selection_feedback(_selected_stack_id, "cancel")
-
-
 func _can_be_annulled(stack_obj: Dictionary) -> bool:
 	"""Verifica si un objeto puede ser anulado (Sección 8)
 
@@ -935,243 +665,16 @@ func _can_be_cancelled(stack_obj: Dictionary) -> bool:
 	if stack_obj.get("was_cancelled", false):
 		return false
 
+	# Protección explícita en el propio texto de la carta (2026-08-29, p.ej.
+	# Miguel: "Cuando entra en juego... Esta habilidad no puede ser
+	# cancelada.") — antes esta función solo miraba estado estructural de
+	# la pila, nunca el texto de la carta, así que esta protección nunca se
+	# aplicaba de verdad.
+	var ability_text: String = str(stack_obj.get("card_data", {}).get("habilidad", "")).to_lower()
+	if "no puede ser cancelad" in ability_text:
+		return false
+
 	return true
-
-
-func _show_card_preview(stack_obj: Dictionary) -> void:
-	"""Muestra ventana de preview de la carta completa"""
-	emit_signal("card_preview_requested", stack_obj)
-
-	# Crear ventana de preview si no existe
-	if _card_preview_window == null:
-		_card_preview_window = Window.new()
-		_card_preview_window.name = "CardPreviewWindow"
-		_card_preview_window.title = "Vista de Carta"
-		_card_preview_window.size = Vector2i(350, 500)
-		_card_preview_window.unresizable = false
-		_card_preview_window.close_requested.connect(_close_card_preview)
-		add_child(_card_preview_window)
-
-		# Contenido de la ventana
-		var preview_content = _create_card_preview_content()
-		_card_preview_window.add_child(preview_content)
-
-	# Actualizar contenido
-	_update_card_preview_content(stack_obj)
-
-	# Mostrar ventana
-	_card_preview_window.popup_centered()
-
-
-func _create_card_preview_content() -> Control:
-	"""Crea el contenido de la ventana de preview"""
-	var panel = PanelContainer.new()
-	panel.name = "PreviewPanel"
-	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-
-	var margin = MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 15)
-	margin.add_theme_constant_override("margin_right", 15)
-	margin.add_theme_constant_override("margin_top", 15)
-	margin.add_theme_constant_override("margin_bottom", 15)
-	panel.add_child(margin)
-
-	var vbox = VBoxContainer.new()
-	vbox.name = "ContentVBox"
-	vbox.add_theme_constant_override("separation", 10)
-	margin.add_child(vbox)
-
-	# Nombre de carta
-	var name_label = Label.new()
-	name_label.name = "CardName"
-	name_label.add_theme_font_size_override("font_size", 18)
-	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(name_label)
-
-	# Tipo
-	var type_label = Label.new()
-	type_label.name = "CardType"
-	type_label.add_theme_font_size_override("font_size", 12)
-	type_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	type_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	vbox.add_child(type_label)
-
-	# Separador
-	var sep = HSeparator.new()
-	vbox.add_child(sep)
-
-	# Coste y Fuerza
-	var stats_hbox = HBoxContainer.new()
-	stats_hbox.name = "StatsBox"
-	stats_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_child(stats_hbox)
-
-	var cost_label = Label.new()
-	cost_label.name = "CostLabel"
-	cost_label.add_theme_font_size_override("font_size", 14)
-	stats_hbox.add_child(cost_label)
-
-	var spacer = Control.new()
-	spacer.custom_minimum_size.x = 30
-	stats_hbox.add_child(spacer)
-
-	var strength_label = Label.new()
-	strength_label.name = "StrengthLabel"
-	strength_label.add_theme_font_size_override("font_size", 14)
-	stats_hbox.add_child(strength_label)
-
-	# Habilidad
-	var ability_label = RichTextLabel.new()
-	ability_label.name = "AbilityText"
-	ability_label.bbcode_enabled = true
-	ability_label.fit_content = true
-	ability_label.custom_minimum_size.y = 150
-	vbox.add_child(ability_label)
-
-	# Info de pila
-	var sep2 = HSeparator.new()
-	vbox.add_child(sep2)
-
-	var stack_info = Label.new()
-	stack_info.name = "StackInfo"
-	stack_info.add_theme_font_size_override("font_size", 11)
-	stack_info.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
-	stack_info.autowrap_mode = TextServer.AUTOWRAP_WORD
-	vbox.add_child(stack_info)
-
-	# Botón cerrar
-	var close_btn = Button.new()
-	close_btn.name = "CloseButton"
-	close_btn.text = "Cerrar"
-	close_btn.pressed.connect(_close_card_preview)
-	vbox.add_child(close_btn)
-
-	return panel
-
-
-func _update_card_preview_content(stack_obj: Dictionary) -> void:
-	"""Actualiza el contenido del preview con los datos del objeto"""
-	if _card_preview_window == null:
-		return
-
-	var card_data = stack_obj.get("card_data", {})
-	var content = _card_preview_window.get_node_or_null("PreviewPanel/MarginContainer/ContentVBox")
-	if content == null:
-		return
-
-	# Nombre
-	var name_label = content.get_node_or_null("CardName")
-	if name_label:
-		name_label.text = stack_obj.get("name", "???")
-
-	# Tipo
-	var type_label = content.get_node_or_null("CardType")
-	if type_label:
-		type_label.text = stack_obj.get("type_name", "Desconocido")
-
-	# Coste
-	var cost_label = content.get_node_or_null("StatsBox/CostLabel")
-	if cost_label:
-		var cost = card_data.get("coste", 0)
-		cost_label.text = "💰 Coste: %d" % cost
-
-	# Fuerza
-	var strength_label = content.get_node_or_null("StatsBox/StrengthLabel")
-	if strength_label:
-		var strength = card_data.get("fuerza", 0)
-		if card_data.get("tipo", -1) == Constants.CardType.ALIADO:
-			strength_label.text = "⚔️ Fuerza: %d" % strength
-		else:
-			strength_label.text = ""
-
-	# Habilidad
-	var ability_text = content.get_node_or_null("AbilityText")
-	if ability_text:
-		var ability = card_data.get("habilidad", card_data.get("ability", "Sin habilidad"))
-		ability_text.text = ability
-
-	# Info de pila
-	var stack_info = content.get_node_or_null("StackInfo")
-	if stack_info:
-		var info_parts: Array = []
-		info_parts.append("ID en pila: #%d" % stack_obj.get("id", 0))
-		info_parts.append("Estado: %s" % stack_obj.get("step_name", "???"))
-
-		var targets = stack_obj.get("targets", [])
-		if not targets.is_empty():
-			info_parts.append("Objetivos: %d" % targets.size())
-
-		if _can_be_annulled(stack_obj):
-			info_parts.append("✓ Puede ser ANULADO")
-		if _can_be_cancelled(stack_obj):
-			info_parts.append("✓ Puede ser CANCELADO")
-
-		stack_info.text = "\n".join(info_parts)
-
-
-func _close_card_preview() -> void:
-	"""Cierra la ventana de preview"""
-	if _card_preview_window:
-		_card_preview_window.hide()
-
-
-func _check_valid_target(stack_obj: Dictionary) -> void:
-	"""Verifica y muestra si el objeto es un objetivo válido"""
-	var is_valid_annul = _can_be_annulled(stack_obj)
-	var is_valid_cancel = _can_be_cancelled(stack_obj)
-
-	var message = "%s:\n" % stack_obj.get("name", "???")
-
-	if is_valid_annul:
-		message += "✓ VÁLIDO para Anular\n"
-	else:
-		message += "✗ NO puede ser Anulado\n"
-
-	if is_valid_cancel:
-		message += "✓ VÁLIDO para Cancelar"
-	else:
-		message += "✗ NO puede ser Cancelado"
-
-	# Mostrar feedback visual
-	_show_validation_popup(message, stack_obj.get("id", -1))
-
-	emit_signal("target_validation_requested", stack_obj.get("id", -1), {})
-
-
-func _show_validation_popup(message: String, stack_id: int) -> void:
-	"""Muestra popup temporal con resultado de validación"""
-	var popup = AcceptDialog.new()
-	popup.dialog_text = message
-	popup.title = "Validación de Objetivo"
-	popup.confirmed.connect(popup.queue_free)
-	popup.canceled.connect(popup.queue_free)
-	add_child(popup)
-	popup.popup_centered()
-
-
-func _show_target_selection_feedback(stack_id: int, action_type: String) -> void:
-	"""Muestra feedback visual cuando se selecciona un objetivo"""
-	if not _stack_items.has(stack_id):
-		return
-
-	var item = _stack_items[stack_id]
-	if not is_instance_valid(item):
-		return
-
-	# Flash según tipo de acción
-	var flash_color = Color.RED if action_type == "annul" else Color.ORANGE
-	_flash_item(item, flash_color)
-
-	# Añadir indicador visual temporal
-	var indicator = item.find_child("WaitIndicator", true, false)
-	if indicator:
-		indicator.visible = true
-		if action_type == "annul":
-			indicator.text = "⛔ OBJETIVO DE ANULACIÓN"
-			indicator.add_theme_color_override("font_color", Color.RED)
-		else:
-			indicator.text = "🚫 OBJETIVO DE CANCELACIÓN"
-			indicator.add_theme_color_override("font_color", Color.ORANGE)
 
 
 func _highlight_selected_item(stack_id: int) -> void:
@@ -1209,205 +712,17 @@ func _get_stack_object_by_id(stack_id: int) -> Dictionary:
 	return {}
 
 
-func _on_item_mouse_entered(stack_id: int) -> void:
-	"""Cuando el mouse entra en un item - hover effect"""
-	emit_signal("stack_item_hovered", stack_id, true)
-
-	if _stack_items.has(stack_id):
-		var item = _stack_items[stack_id]
-		if is_instance_valid(item):
-			var tween = create_tween()
-			tween.set_ease(Tween.EASE_OUT)
-			tween.tween_property(item, "scale", Vector2(1.03, 1.03), 0.1)
-
-			# Mostrar tooltip breve
-			_show_hover_tooltip(item, stack_id)
-
-
-func _on_item_mouse_exited(stack_id: int) -> void:
-	"""Cuando el mouse sale de un item"""
-	emit_signal("stack_item_hovered", stack_id, false)
-
-	if _stack_items.has(stack_id):
-		var item = _stack_items[stack_id]
-		if is_instance_valid(item):
-			var tween = create_tween()
-			tween.tween_property(item, "scale", Vector2.ONE, 0.1)
-
-			_hide_hover_tooltip()
-
-
-var _hover_tooltip: Control = null
-
-func _show_hover_tooltip(item: Control, stack_id: int) -> void:
-	"""Muestra tooltip al hacer hover"""
-	var stack_obj = _get_stack_object_by_id(stack_id)
-	if stack_obj.is_empty():
-		return
-
-	# Crear tooltip si no existe
-	if _hover_tooltip == null:
-		_hover_tooltip = PanelContainer.new()
-		_hover_tooltip.name = "HoverTooltip"
-
-		var tooltip_style = StyleBoxFlat.new()
-		tooltip_style.bg_color = Color(0.1, 0.1, 0.1, 0.95)
-		tooltip_style.corner_radius_top_left = 4
-		tooltip_style.corner_radius_top_right = 4
-		tooltip_style.corner_radius_bottom_left = 4
-		tooltip_style.corner_radius_bottom_right = 4
-		_hover_tooltip.add_theme_stylebox_override("panel", tooltip_style)
-
-		var label = Label.new()
-		label.name = "TooltipLabel"
-		label.add_theme_font_size_override("font_size", 10)
-		_hover_tooltip.add_child(label)
-
-		add_child(_hover_tooltip)
-
-	# Actualizar contenido
-	var label = _hover_tooltip.get_node_or_null("TooltipLabel")
-	if label:
-		var tip = "Click derecho: Opciones\n"
-		if _can_be_annulled(stack_obj):
-			tip += "• Puede ser anulado"
-		elif _can_be_cancelled(stack_obj):
-			tip += "• Puede ser cancelado"
-		else:
-			tip += "• Sin acciones disponibles"
-		label.text = tip
-
-	# Posicionar
-	_hover_tooltip.position = item.global_position + Vector2(item.size.x + 10, 0)
-	_hover_tooltip.visible = true
-
-
-func _hide_hover_tooltip() -> void:
-	"""Oculta el tooltip de hover"""
-	if _hover_tooltip:
-		_hover_tooltip.visible = false
-
-
 # =============================================================================
-# INTEGRACIÓN CON TARGETSELECTOR - Resaltado de objetivos válidos
+# API PÚBLICA
 # =============================================================================
-var _highlight_tweens: Dictionary = {}  # {stack_id: Tween}
-var _is_target_selection_mode: bool = false
-
-
 func highlight_target(stack_id: int, color: Color, is_valid: bool) -> void:
-	"""Resalta un item como objetivo válido/inválido para selección"""
-	if not _stack_items.has(stack_id):
-		return
-
-	var item = _stack_items[stack_id]
-	if not is_instance_valid(item):
-		return
-
-	# Cancelar tween anterior si existe
-	if _highlight_tweens.has(stack_id):
-		var old_tween = _highlight_tweens[stack_id]
-		if old_tween and old_tween.is_valid():
-			old_tween.kill()
-
-	var style = item.get_theme_stylebox("panel") as StyleBoxFlat
-	if not style:
-		return
-
-	if is_valid:
-		# Objetivo válido: borde brillante + animación de pulso
-		style.border_color = color
-		style.border_width_left = 4
-		style.border_width_right = 4
-		style.border_width_top = 4
-		style.border_width_bottom = 4
-
-		# Pulso continuo
-		var tween = create_tween()
-		tween.set_loops()
-		tween.tween_property(item, "modulate", Color(1.3, 1.3, 1.1), 0.4)
-		tween.tween_property(item, "modulate", Color.WHITE, 0.4)
-		_highlight_tweens[stack_id] = tween
-
-		# Añadir indicador visual
-		_show_target_indicator(item, true)
-	else:
-		# Objetivo inválido: atenuado
-		style.border_color = Color(0.4, 0.4, 0.4, 0.5)
-		style.border_width_left = 1
-		style.border_width_right = 1
-		style.border_width_top = 1
-		style.border_width_bottom = 1
-		item.modulate = Color(0.5, 0.5, 0.5, 0.6)
-
-		_show_target_indicator(item, false)
-
-	_is_target_selection_mode = true
+	"""Wrapper público — llamado externamente por TargetSelector."""
+	_target_highlight.highlight_target(stack_id, color, is_valid)
 
 
 func clear_all_highlights() -> void:
-	"""Limpia todos los resaltados de selección de objetivo"""
-	# Detener todos los tweens
-	for stack_id in _highlight_tweens:
-		var tween = _highlight_tweens[stack_id]
-		if tween and tween.is_valid():
-			tween.kill()
-	_highlight_tweens.clear()
-
-	# Restaurar estilos de todos los items
-	for stack_id in _stack_items:
-		var item = _stack_items[stack_id]
-		if not is_instance_valid(item):
-			continue
-
-		# Restaurar modulate
-		item.modulate = Color.WHITE
-
-		# Restaurar borde
-		var style = item.get_theme_stylebox("panel") as StyleBoxFlat
-		if style:
-			style.border_color = Color(1, 1, 1, 0.3)
-			style.border_width_left = 2
-			style.border_width_right = 2
-			style.border_width_top = 2
-			style.border_width_bottom = 2
-
-		# Ocultar indicador
-		_hide_target_indicator(item)
-
-	_is_target_selection_mode = false
-
-
-func _show_target_indicator(item: Control, is_valid: bool) -> void:
-	"""Muestra indicador de que el item es un objetivo seleccionable"""
-	var indicator = item.find_child("TargetIndicator", true, false)
-
-	if not indicator:
-		# Crear indicador si no existe
-		indicator = Label.new()
-		indicator.name = "TargetIndicator"
-		indicator.add_theme_font_size_override("font_size", 14)
-		indicator.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-
-		var content = item.find_child("Content", true, false)
-		if content:
-			content.add_child(indicator)
-			content.move_child(indicator, 0)
-
-	indicator.visible = true
-	if is_valid:
-		indicator.text = "🎯"
-		indicator.add_theme_color_override("font_color", Color.GREEN)
-	else:
-		indicator.text = "⛔"
-		indicator.add_theme_color_override("font_color", Color.RED)
-
-
-func _hide_target_indicator(item: Control) -> void:
-	"""Oculta el indicador de objetivo"""
-	var indicator = item.find_child("TargetIndicator", true, false)
-	if indicator:
-		indicator.visible = false
+	"""Wrapper público — llamado externamente por TargetSelector."""
+	_target_highlight.clear_all_highlights()
 
 
 func get_all_item_ids() -> Array[int]:
@@ -1420,12 +735,9 @@ func get_all_item_ids() -> Array[int]:
 
 func is_in_target_selection_mode() -> bool:
 	"""Retorna si está en modo de selección de objetivo"""
-	return _is_target_selection_mode
+	return _target_highlight.is_target_selection_mode
 
 
-# =============================================================================
-# API PÚBLICA
-# =============================================================================
 func toggle_visibility() -> void:
 	"""Alterna visibilidad del visualizador"""
 	visible = not visible

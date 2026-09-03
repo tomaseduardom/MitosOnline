@@ -59,35 +59,14 @@ var _selected_target_id: int = -1
 ## Filtros activos para la selección actual
 var _active_filters: Array[Dictionary] = []
 
-# =============================================================================
-# VINCULACIÓN DE EFECTO (Sección 8)
-# =============================================================================
-## Almacena las vinculaciones activas: {response_stack_id: LinkedEffect}
-var _linked_effects: Dictionary = {}
-
-## Estructura de efecto vinculado
-class LinkedEffect:
-	var response_stack_id: int = -1      # ID de la carta de respuesta en la pila
-	var target_stack_id: int = -1        # ID del objetivo en la pila
-	var effect_type: int = 0             # SelectionType (ANNUL/CANCEL)
-	var source_card: Dictionary = {}     # Datos de la carta fuente
-	var target_card: Dictionary = {}     # Datos del objetivo
-	var created_at: int = 0              # Timestamp
-	var is_pending: bool = true          # Aún no ejecutado
-
-# =============================================================================
-# ESTADO DE ARREPENTIMIENTO (antes de Paso B)
-# =============================================================================
-var _can_regret: bool = false           # Si el jugador puede arrepentirse
-var _regret_card: Dictionary = {}       # Carta que se puede devolver
-var _regret_player_id: int = -1         # Jugador que puede arrepentirse
+## Módulos extraídos (Fase 4 de reestructuración)
+var _linked_registry: LinkedEffectRegistry
+var _regret: RegretSystem
 
 # =============================================================================
 # REFERENCIAS
 # =============================================================================
-var _action_pipeline: Node = null
 var _stack_visualizer: Control = null
-var _game_manager: Node = null
 
 # =============================================================================
 # CONFIGURACIÓN VISUAL
@@ -103,14 +82,25 @@ var _default_cursor: Resource = null
 
 
 func _ready() -> void:
+	_linked_registry = LinkedEffectRegistry.new()
+	_linked_registry.setup(self)
+	_regret = RegretSystem.new()
+	_regret.setup(self)
+
 	call_deferred("_get_references")
 	print("[TargetSelector] Inicializado")
 
 
 func _get_references() -> void:
-	_action_pipeline = get_node_or_null("/root/ActionPipeline")
+	# (2026-08-28, "módulos gordos" punto 1): ActionPipeline es autoload
+	# garantizado — se saca el cacheo redundante. GameManager se cacheaba
+	# pero no se usaba en este archivo. StackVisualizer NO es autoload
+	# (nodo opcional de escena), se mantiene su lookup.
 	_stack_visualizer = get_node_or_null("/root/StackVisualizer")
-	_game_manager = get_node_or_null("/root/GameManager")
+
+	ActionPipeline.stack_object_resolving.connect(_linked_registry._on_stack_object_resolving)
+	ActionPipeline.stack_object_resolved.connect(_linked_registry._on_stack_object_resolved)
+	ActionPipeline.stack_object_removed.connect(_linked_registry._on_stack_object_removed)
 
 	if _stack_visualizer:
 		# Conectar señales del visualizador
@@ -121,22 +111,13 @@ func _get_references() -> void:
 		if _stack_visualizer.has_signal("stack_item_hovered"):
 			_stack_visualizer.stack_item_hovered.connect(_on_visualizer_item_hovered)
 
-	if _action_pipeline:
-		# Conectar para ejecutar efectos vinculados cuando se resuelven
-		if _action_pipeline.has_signal("stack_object_resolving"):
-			_action_pipeline.stack_object_resolving.connect(_on_stack_object_resolving)
-		if _action_pipeline.has_signal("stack_object_resolved"):
-			_action_pipeline.stack_object_resolved.connect(_on_stack_object_resolved)
-		if _action_pipeline.has_signal("stack_object_removed"):
-			_action_pipeline.stack_object_removed.connect(_on_stack_object_removed)
-
 
 func _input(event: InputEvent) -> void:
 	# ESC cancela la selección (con arrepentimiento si está disponible)
 	if event.is_action_pressed("ui_cancel"):
 		if _is_selecting:
 			# Cancelar selección en curso (devuelve carta si aún no pagó)
-			if _can_regret:
+			if _regret.can_regret():
 				cancel_selection_with_regret()
 			else:
 				cancel_selection()
@@ -155,7 +136,7 @@ func _input(event: InputEvent) -> void:
 
 		# Click derecho también puede cancelar con arrepentimiento
 		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			if _can_regret:
+			if _regret.can_regret():
 				cancel_selection_with_regret()
 			else:
 				cancel_selection()
@@ -176,11 +157,7 @@ func get_legal_targets(source_card: Dictionary) -> Array[Dictionary]:
 	Returns:
 		Array de stack_objects que cumplen las condiciones
 	"""
-	if not _action_pipeline:
-		push_error("[TargetSelector] ActionPipeline no disponible")
-		return []
-
-	var stack = _action_pipeline.get_stack()
+	var stack = ActionPipeline.get_stack()
 	if stack.is_empty():
 		return []
 
@@ -502,7 +479,7 @@ func enter_selection_mode(source_card: Dictionary, selection_type: SelectionType
 	_current_hover_id = -1
 
 	# Habilitar arrepentimiento desde el inicio de la selección
-	_enable_regret(source_card)
+	_regret._enable_regret(source_card)
 
 	# Cambiar cursor
 	_set_selection_cursor(true)
@@ -567,7 +544,7 @@ func confirm_selection(stack_id: int) -> void:
 	emit_signal("target_confirmed", stack_id, _source_card)
 
 	# Habilitar arrepentimiento antes de Paso B
-	_enable_regret(source_card_copy)
+	_regret._enable_regret(source_card_copy)
 
 	# Salir del modo selección (pero mantener datos para vinculación)
 	exit_selection_mode()
@@ -589,30 +566,33 @@ func cancel_selection_with_regret() -> void:
 	Solo válido antes del Paso B (pago de costes).
 	DAR Sección 6: El jugador puede arrepentirse antes de pagar.
 	"""
-	if not _can_regret:
+	if not _regret.can_regret():
 		print("[TargetSelector] No se puede ejercer arrepentimiento en este momento")
 		return
 
-	if _regret_card.is_empty():
+	var regret_card = _regret.get_regret_card()
+	if regret_card.is_empty():
 		print("[TargetSelector] No hay carta para devolver")
 		return
 
+	var regret_player_id = _regret.get_regret_player_id()
+
 	print("[TargetSelector] ═══ DERECHO DE ARREPENTIMIENTO ═══")
 	print("[TargetSelector] Carta '%s' devuelta a mano del Jugador %d" % [
-		_regret_card.get("nombre", _regret_card.get("name", "???")),
-		_regret_player_id + 1
+		regret_card.get("nombre", regret_card.get("name", "???")),
+		regret_player_id + 1
 	])
 
 	# Devolver carta a la mano
-	_return_card_to_hand(_regret_card, _regret_player_id)
+	_regret._return_card_to_hand(regret_card, regret_player_id)
 
 	# Emitir señales
-	emit_signal("selection_regret", _regret_card)
-	emit_signal("card_returned_to_hand", _regret_card, _regret_player_id)
+	emit_signal("selection_regret", regret_card)
+	emit_signal("card_returned_to_hand", regret_card, regret_player_id)
 	emit_signal("target_cancelled")
 
 	# Limpiar estado de arrepentimiento
-	_disable_regret()
+	_regret._disable_regret()
 
 	# Salir del modo selección
 	exit_selection_mode()
@@ -824,298 +804,46 @@ func validate_target_manually(source_card: Dictionary, stack_obj: Dictionary,
 
 
 # =============================================================================
-# VINCULACIÓN DE EFECTO (Sección 8)
+# VINCULACIÓN DE EFECTO (implementación en LinkedEffectRegistry.gd)
 # =============================================================================
 func link_effect(response_stack_id: int, target_stack_id: int,
 				  effect_type: SelectionType, source_card: Dictionary) -> bool:
-	"""Vincula una carta de respuesta con su objetivo en la pila
-
-	Cuando la carta de respuesta se resuelva, ejecutará annul() o cancel()
-	sobre el objetivo vinculado.
-
-	Args:
-		response_stack_id: ID de la carta de respuesta en la pila
-		target_stack_id: ID del objetivo a afectar
-		effect_type: ANNUL o CANCEL
-		source_card: Datos de la carta de respuesta
-
-	Returns:
-		true si la vinculación fue exitosa
-	"""
-	if response_stack_id <= 0 or target_stack_id <= 0:
-		push_error("[TargetSelector] IDs inválidos para vinculación")
-		return false
-
-	if effect_type not in [SelectionType.ANNUL, SelectionType.CANCEL]:
-		push_error("[TargetSelector] Tipo de efecto inválido para vinculación")
-		return false
-
-	# Verificar que el objetivo existe y es válido
-	if _action_pipeline:
-		var target_obj = _action_pipeline.get_object_by_id(target_stack_id)
-		if target_obj.is_empty():
-			push_error("[TargetSelector] Objetivo #%d no encontrado en la pila" % target_stack_id)
-			return false
-
-		# Crear vinculación
-		var link = LinkedEffect.new()
-		link.response_stack_id = response_stack_id
-		link.target_stack_id = target_stack_id
-		link.effect_type = effect_type
-		link.source_card = source_card.duplicate(true)
-		link.target_card = target_obj.get("card_data", {}).duplicate(true)
-		link.created_at = Time.get_ticks_msec()
-		link.is_pending = true
-
-		_linked_effects[response_stack_id] = link
-
-		print("[TargetSelector] ═══ EFECTO VINCULADO ═══")
-		print("[TargetSelector] Respuesta #%d → Objetivo #%d (%s)" % [
-			response_stack_id,
-			target_stack_id,
-			"ANULAR" if effect_type == SelectionType.ANNUL else "CANCELAR"
-		])
-
-		emit_signal("effect_linked", response_stack_id, target_stack_id, effect_type)
-		return true
-
-	return false
+	return _linked_registry.link_effect(response_stack_id, target_stack_id, effect_type, source_card)
 
 
 func get_linked_effect(response_stack_id: int) -> LinkedEffect:
-	"""Obtiene la vinculación de efecto para una carta de respuesta"""
-	if _linked_effects.has(response_stack_id):
-		return _linked_effects[response_stack_id]
-	return null
+	return _linked_registry.get_linked_effect(response_stack_id)
 
 
 func has_linked_effect(response_stack_id: int) -> bool:
-	"""Verifica si una carta de respuesta tiene un efecto vinculado"""
-	return _linked_effects.has(response_stack_id)
+	return _linked_registry.has_linked_effect(response_stack_id)
 
 
 func execute_linked_effect(response_stack_id: int) -> bool:
-	"""Ejecuta el efecto vinculado cuando la carta de respuesta se resuelve
-
-	Llama a annul() o cancel() en el ActionPipeline sobre el objetivo.
-
-	Returns:
-		true si el efecto se ejecutó exitosamente
-	"""
-	if not _linked_effects.has(response_stack_id):
-		print("[TargetSelector] No hay efecto vinculado para #%d" % response_stack_id)
-		return false
-
-	var link: LinkedEffect = _linked_effects[response_stack_id]
-
-	if not link.is_pending:
-		print("[TargetSelector] Efecto #%d ya fue ejecutado" % response_stack_id)
-		return false
-
-	if not _action_pipeline:
-		push_error("[TargetSelector] ActionPipeline no disponible")
-		return false
-
-	var target_id = link.target_stack_id
-	var success = false
-
-	# Verificar que el objetivo sigue en la pila
-	var target_obj = _action_pipeline.get_object_by_id(target_id)
-	if target_obj.is_empty():
-		print("[TargetSelector] Objetivo #%d ya no está en la pila (fizzle)" % target_id)
-		link.is_pending = false
-		emit_signal("effect_executed", response_stack_id, target_id, false)
-		return false
-
-	# Verificar que no fue ya procesado
-	if target_obj.get("was_annulled", false) or target_obj.get("was_cancelled", false):
-		print("[TargetSelector] Objetivo #%d ya fue anulado/cancelado" % target_id)
-		link.is_pending = false
-		emit_signal("effect_executed", response_stack_id, target_id, false)
-		return false
-
-	# Ejecutar según tipo
-	match link.effect_type:
-		SelectionType.ANNUL:
-			success = _execute_annul(target_id, link.source_card)
-
-		SelectionType.CANCEL:
-			success = _execute_cancel(target_id, link.source_card)
-
-	link.is_pending = false
-
-	print("[TargetSelector] Efecto %s sobre #%d: %s" % [
-		"ANULAR" if link.effect_type == SelectionType.ANNUL else "CANCELAR",
-		target_id,
-		"ÉXITO" if success else "FALLÓ"
-	])
-
-	emit_signal("effect_executed", response_stack_id, target_id, success)
-
-	return success
-
-
-func _execute_annul(target_stack_id: int, source_card: Dictionary) -> bool:
-	"""Ejecuta ANULAR sobre un objetivo (Sección 8)
-
-	La carta objetivo no se resuelve y va al Cementerio.
-	"""
-	if not _action_pipeline:
-		return false
-
-	# Llamar al ActionPipeline para marcar como anulado
-	if _action_pipeline.has_method("apply_special_action"):
-		_action_pipeline.apply_special_action({
-			"type": "nullify",
-			"target_stack_id": target_stack_id,
-			"source_card": source_card
-		})
-		return true
-
-	# Fallback: marcar directamente
-	var target_obj = _action_pipeline.get_object_by_id(target_stack_id)
-	if not target_obj.is_empty():
-		target_obj.was_annulled = true
-		target_obj.annuller = source_card
-		if _action_pipeline.has_signal("object_annulled"):
-			_action_pipeline.emit_signal("object_annulled", target_obj, source_card)
-		return true
-
-	return false
-
-
-func _execute_cancel(target_stack_id: int, source_card: Dictionary) -> bool:
-	"""Ejecuta CANCELAR sobre un objetivo (Sección 8)
-
-	La habilidad objetivo no se resuelve.
-	"""
-	if not _action_pipeline:
-		return false
-
-	# Llamar al ActionPipeline
-	if _action_pipeline.has_method("apply_special_action"):
-		_action_pipeline.apply_special_action({
-			"type": "cancel",
-			"target_stack_id": target_stack_id,
-			"source_card": source_card,
-			"reason": "cancelled_by_effect"
-		})
-		return true
-
-	# Fallback: marcar directamente
-	var target_obj = _action_pipeline.get_object_by_id(target_stack_id)
-	if not target_obj.is_empty():
-		target_obj.was_cancelled = true
-		target_obj.cancel_reason = "cancelled_by_%s" % source_card.get("nombre", "effect")
-		if _action_pipeline.has_signal("object_cancelled"):
-			_action_pipeline.emit_signal("object_cancelled", target_obj)
-		return true
-
-	return false
+	return _linked_registry.execute_linked_effect(response_stack_id)
 
 
 func remove_linked_effect(response_stack_id: int) -> void:
-	"""Remueve una vinculación de efecto"""
-	if _linked_effects.has(response_stack_id):
-		_linked_effects.erase(response_stack_id)
+	_linked_registry.remove_linked_effect(response_stack_id)
 
 
 func clear_all_linked_effects() -> void:
-	"""Limpia todas las vinculaciones (para nuevo juego)"""
-	_linked_effects.clear()
+	_linked_registry.clear_all_linked_effects()
 
 
 # =============================================================================
-# CALLBACKS DE ACTIONPIPELINE - Ejecución automática de efectos vinculados
+# DERECHO DE ARREPENTIMIENTO (implementación en RegretSystem.gd)
 # =============================================================================
-func _on_stack_object_resolving(stack_obj: Dictionary) -> void:
-	"""Cuando un objeto comienza a resolver, ejecutar efecto vinculado si existe"""
-	var stack_id = stack_obj.get("id", -1)
-
-	# Si es una carta de respuesta con efecto vinculado, ejecutarlo
-	if has_linked_effect(stack_id):
-		print("[TargetSelector] Carta de respuesta #%d resolviendo - ejecutando efecto vinculado" % stack_id)
-		execute_linked_effect(stack_id)
-
-
-func _on_stack_object_resolved(stack_obj: Dictionary, _result: Dictionary) -> void:
-	"""Cuando un objeto termina de resolver"""
-	var stack_id = stack_obj.get("id", -1)
-
-	# Limpiar vinculación usada
-	remove_linked_effect(stack_id)
-
-
-func _on_stack_object_removed(stack_obj: Dictionary, reason: String) -> void:
-	"""Cuando un objeto es removido de la pila"""
-	var stack_id = stack_obj.get("id", -1)
-
-	# Si el objetivo de una vinculación fue removido, la vinculación hace fizzle
-	for response_id in _linked_effects.keys():
-		var link: LinkedEffect = _linked_effects[response_id]
-		if link.target_stack_id == stack_id and link.is_pending:
-			print("[TargetSelector] Objetivo #%d removido (%s) - vinculación #%d hace fizzle" % [
-				stack_id, reason, response_id
-			])
-			link.is_pending = false
-
-	# Limpiar vinculación si es la respuesta
-	remove_linked_effect(stack_id)
-
-
-# =============================================================================
-# DERECHO DE ARREPENTIMIENTO (antes de Paso B)
-# =============================================================================
-func _enable_regret(card_data: Dictionary) -> void:
-	"""Habilita el derecho de arrepentimiento para una carta"""
-	_can_regret = true
-	_regret_card = card_data.duplicate(true)
-	_regret_player_id = card_data.get("controller_id", card_data.get("player_id", 0))
-
-	print("[TargetSelector] Arrepentimiento habilitado para '%s'" %
-		  card_data.get("nombre", card_data.get("name", "???")))
-
-
-func _disable_regret() -> void:
-	"""Deshabilita el derecho de arrepentimiento"""
-	_can_regret = false
-	_regret_card = {}
-	_regret_player_id = -1
-
-
 func can_regret() -> bool:
-	"""Retorna si el jugador puede ejercer arrepentimiento"""
-	return _can_regret
+	return _regret.can_regret()
 
 
 func get_regret_card() -> Dictionary:
-	"""Retorna la carta que se puede devolver por arrepentimiento"""
-	return _regret_card
-
-
-func _return_card_to_hand(card_data: Dictionary, player_id: int) -> void:
-	"""Devuelve una carta a la mano del jugador
-
-	Esta función debe integrarse con el sistema de manos del juego.
-	"""
-	if not _game_manager:
-		_game_manager = get_node_or_null("/root/GameManager")
-
-	if _game_manager and _game_manager.has_method("return_card_to_hand"):
-		_game_manager.return_card_to_hand(card_data, player_id)
-	elif _game_manager and _game_manager.has_method("add_card_to_hand"):
-		_game_manager.add_card_to_hand(player_id, card_data)
-	else:
-		# Fallback: emitir señal para que otro sistema lo maneje
-		print("[TargetSelector] WARN: No se pudo devolver carta a mano - GameManager no disponible")
-		# La señal card_returned_to_hand ya fue emitida
+	return _regret.get_regret_card()
 
 
 func notify_step_b_started() -> void:
-	"""Notifica que el Paso B (pago) ha comenzado - ya no se puede arrepentir"""
-	if _can_regret:
-		print("[TargetSelector] Paso B iniciado - arrepentimiento ya no disponible")
-		_disable_regret()
+	_regret.notify_step_b_started()
 
 
 # =============================================================================
@@ -1143,22 +871,19 @@ func complete_response_targeting(response_stack_id: int, target_stack_id: int) -
 		true si la vinculación fue exitosa
 	"""
 	# Deshabilitar arrepentimiento (ya se pagó el coste)
-	_disable_regret()
+	_regret._disable_regret()
 
 	# Determinar tipo de efecto
 	var effect_type = SelectionType.ANNUL
-	if _action_pipeline:
-		var target_obj = _action_pipeline.get_object_by_id(target_stack_id)
-		var obj_type = target_obj.get("type", 0)
-		# Si el objetivo es una habilidad, es CANCEL
-		if obj_type in [1, 2]:  # TRIGGERED_ABILITY, ACTIVATED_ABILITY
-			effect_type = SelectionType.CANCEL
+	var target_obj = ActionPipeline.get_object_by_id(target_stack_id)
+	var obj_type = target_obj.get("type", 0)
+	# Si el objetivo es una habilidad, es CANCEL
+	if obj_type in [1, 2]:  # TRIGGERED_ABILITY, ACTIVATED_ABILITY
+		effect_type = SelectionType.CANCEL
 
 	# Obtener datos de la carta de respuesta
-	var response_obj = {}
-	if _action_pipeline:
-		response_obj = _action_pipeline.get_object_by_id(response_stack_id)
+	var response_obj = ActionPipeline.get_object_by_id(response_stack_id)
 
 	var source_card = response_obj.get("card_data", {})
 
-	return link_effect(response_stack_id, target_stack_id, effect_type, source_card)
+	return _linked_registry.link_effect(response_stack_id, target_stack_id, effect_type, source_card)

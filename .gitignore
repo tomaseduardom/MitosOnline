@@ -13,3 +13,7 @@ export_credentials.cfg
 # Sistema operativo / editor
 .DS_Store
 Thumbs.db
+
+# Credenciales reales de la API externa de ShadowForge (tools/reload_card.ps1)
+# — nunca versionar, solo queda en el disco local.
+tools/shadowforge_credentials.local.ps1

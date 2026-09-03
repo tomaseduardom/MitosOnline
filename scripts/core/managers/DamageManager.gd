@@ -69,29 +69,21 @@ var _combat_damage_this_turn: Dictionary = {0: 0, 1: 0}
 # =============================================================================
 # REFERENCIAS
 # =============================================================================
-var _game_manager: Node = null
 var _game_board: Node = null
-var _action_module: Node = null
-var _combat_log: Node = null
-var _trigger_system: Node = null
+
+# (2026-08-28, "módulos gordos" punto 1): GameManager/ActionModule/CombatLog/
+# TriggerSystem son autoloads garantizados — se sacó el cacheo redundante vía
+# get_node_or_null() y se referencian directo. _game_board queda siempre
+# null: no existe autoload '/root/GameBoard' ni método
+# GameManager.get_game_board() (era el GameBoard.gd huérfano, eliminado).
+# _apply_damage_to_castle() (única consumidora real de _get_board()) no la
+# llama nadie hoy — el daño de combate real lo resuelve BattleManager, que ya
+# usa CardManager.
 
 
 func _ready() -> void:
-	call_deferred("_get_references")
 	call_deferred("_connect_signals")
 	print("[DamageManager] Inicializado")
-
-
-func _get_references() -> void:
-	# _game_board queda siempre null: no existe autoload '/root/GameBoard'
-	# ni método GameManager.get_game_board() (era el GameBoard.gd huérfano,
-	# eliminado). _apply_damage_to_castle() (única consumidora real de
-	# _get_board()) no la llama nadie hoy — el daño de combate real lo
-	# resuelve BattleManager, que ya usa CardManager.
-	_game_manager = get_node_or_null("/root/GameManager")
-	_action_module = get_node_or_null("/root/ActionModule")
-	_combat_log = get_node_or_null("/root/CombatLog")
-	_trigger_system = get_node_or_null("/root/TriggerSystem")
 
 
 func _connect_signals() -> void:
@@ -233,14 +225,11 @@ func apply_damage(target, amount: int, type: int = DamageType.DIRECT, context: D
 	# ─────────────────────────────────────────────────────────────────────────
 	# TRIGGERS POST-DAÑO
 	# ─────────────────────────────────────────────────────────────────────────
-	if _trigger_system and result.actual_damage > 0:
-		await _trigger_system.trigger_event("on_damage_dealt", {
-			"target_id": target_id,
-			"amount": result.actual_damage,
-			"type": type,
-			"source": context.get("source"),
-			"attacker": context.get("attacker")
-		})
+	# (2026-08-28): 'trigger_event' no existe (nunca existió) en TriggerSystem.gd
+	# — este bloque nunca se ejecutó realmente (era código muerto detrás de un
+	# guard `if _trigger_system`). apply_damage()/apply_combat_damage() tampoco
+	# tienen llamadores reales hoy (ver check_defeat_condition() más abajo, que
+	# sí es la ruta viva). Se deja documentado, no se inventa un trigger nuevo.
 
 	return result
 
@@ -289,14 +278,8 @@ func _apply_damage_to_castle(player_id: int, amount: int, result: Dictionary, co
 		board.move_card(card, Constants.Zone.CEMENTERIO, player_id)
 		result.cards_milled.append(card)
 
-		# Trigger por carta enviada al cementerio
-		if _trigger_system:
-			_trigger_system.queue_trigger("on_card_milled_by_damage", {
-				"card": card,
-				"player_id": player_id,
-				"damage_index": i,
-				"source": context.get("source")
-			})
+		# (2026-08-28): 'queue_trigger' tampoco existe en TriggerSystem.gd —
+		# mismo código muerto que arriba, documentado y no ejecutado nunca.
 
 	result.actual_damage = actual_damage
 
@@ -318,9 +301,10 @@ func _apply_damage_to_castle(player_id: int, amount: int, result: Dictionary, co
 		emit_signal("deck_empty", player_id)
 		emit_signal("game_over", winner_id, player_id, "deck_empty")
 
-		# Notificar al GameManager
-		if _game_manager and _game_manager.has_method("end_game"):
-			_game_manager.end_game(winner_id, "deck_empty")
+		# Notificar al GameManager (2026-08-28: 'end_game' no existe en
+		# GameManager.gd — la API real es player_loses(); ver el mismo fix
+		# en check_defeat_condition() más abajo)
+		GameManager.player_loses(player_id, "deck_empty")
 
 		# Log
 		_log_action("game_over", "🏆 Jugador %d GANA - Jugador %d se quedó sin cartas" % [
@@ -369,13 +353,7 @@ func _apply_damage_to_card(card: Node, amount: int, result: Dictionary, context:
 		emit_signal("lethal_damage", ctrl if ctrl != null else 0, card, total_damage)
 
 		# La carta se destruye
-		if _action_module and _action_module.has_method("destroy"):
-			var destroy_context = {
-				"source": context.get("source"),
-				"cause": "damage",
-				"damage_amount": total_damage
-			}
-			await _action_module.destroy([card], context.get("source"), true, false)
+		await ActionModule.destroy([card], context.get("source"), true, false)
 
 		_log_action("lethal", "%s destruido por %d daño" % [card_name, total_damage], {
 			"card": card_name,
@@ -677,9 +655,8 @@ func apply_x_damage(target_id: int, instance_x: int, type: int = DamageType.ABIL
 	var result = await apply_damage(target_id, instance_x, type, ctx)
 
 	# Log especial para daño X
-	if _combat_log and _combat_log.has_method("log_x_effect_result"):
-		var target_name = "Jugador %d" % (target_id + 1)
-		_combat_log.log_x_effect_result("damage", instance_x, result.actual_damage, target_name, result.success)
+	var target_name = "Jugador %d" % (target_id + 1)
+	CombatLog.log_x_effect_result("damage", instance_x, result.actual_damage, target_name, result.success)
 
 	return result
 
@@ -692,12 +669,9 @@ func _get_board() -> Node:
 	if _game_board:
 		return _game_board
 
-	if _game_manager:
-		if _game_manager.has_method("get_game_board"):
-			return _game_manager.get_game_board()
-		return _game_manager.get("_game_board")
-
-	return null
+	if GameManager.has_method("get_game_board"):
+		return GameManager.get_game_board()
+	return GameManager.get("_game_board")
 
 
 func _modifier_applies_to(card: Node, filter: Dictionary) -> bool:
@@ -728,8 +702,7 @@ func _modifier_applies_to(card: Node, filter: Dictionary) -> bool:
 
 func _log_action(action_type: String, message: String, data: Dictionary = {}) -> void:
 	"""Envía entrada al CombatLog"""
-	if _combat_log and _combat_log.has_method("add_entry"):
-		_combat_log.add_entry(action_type, message, data)
+	CombatLog.add_entry(action_type, message, data)
 
 
 func _log_damage_result(target_id: int, result: Dictionary, type: int, context: Dictionary) -> void:
@@ -762,10 +735,9 @@ func _log_damage_result(target_id: int, result: Dictionary, type: int, context: 
 
 func _log_partial_damage(requested: int, actual: int, player_id: int) -> void:
 	"""Loguea daño parcial (mazo con menos cartas que daño)"""
-	if _combat_log and _combat_log.has_method("log_partial_effect"):
-		_combat_log.log_partial_effect("damage", requested, actual, "Jugador %d" % (player_id + 1), {
-			"reason": "deck_size"
-		})
+	CombatLog.log_partial_effect("damage", requested, actual, "Jugador %d" % (player_id + 1), {
+		"reason": "deck_size"
+	})
 
 
 func _on_turn_ended(player_id: int) -> void:
@@ -806,10 +778,7 @@ func get_deck_size(player_id: int) -> int:
 	_get_board() (siempre null — dependía del GameBoard.gd huérfano) y
 	devolvía 0 SIEMPRE, lo que hacía que check_defeat_condition() pudiera
 	declarar derrota con el mazo lleno. CardManager lleva la cuenta real."""
-	var card_mgr = get_node_or_null("/root/CardManager")
-	if card_mgr and card_mgr.has_method("get_deck_count"):
-		return card_mgr.get_deck_count(player_id)
-	return 0
+	return CardManager.get_deck_count(player_id)
 
 
 func is_player_alive(player_id: int) -> bool:
@@ -828,8 +797,12 @@ func check_defeat_condition(player_id: int) -> bool:
 		emit_signal("deck_empty", player_id)
 		emit_signal("game_over", winner_id, player_id, "deck_empty")
 
-		if _game_manager and _game_manager.has_method("end_game"):
-			_game_manager.end_game(winner_id, "deck_empty")
+		# (2026-08-28): 'end_game' no existe en GameManager.gd — el
+		# has_method() de abajo siempre daba falso y esta llamada, la ÚNICA
+		# ruta real (check_defeat_condition() sí es llamada en vivo desde
+		# ActionModule.gd), nunca terminaba la partida por mazo vacío fuera
+		# de combate. La API real es GameManager.player_loses(player_id, reason).
+		GameManager.player_loses(player_id, "deck_empty")
 
 		return true
 

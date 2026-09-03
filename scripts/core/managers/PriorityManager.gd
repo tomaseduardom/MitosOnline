@@ -116,6 +116,13 @@ func _get_starting_priority_player(context: int) -> int:
 
 	match context:
 		PriorityContext.GUERRA_TALISMANES:
+			# "Tu tienes la prioridad en Guerra de Talismanes" (2026-08-30,
+			# p.ej. Garfio Pirata) — anula la regla DAR 5.C3 por defecto
+			# (defensor primero) si algún jugador controla una carta que se
+			# la otorgue.
+			var override_player := _player_with_guerra_talismanes_priority()
+			if override_player >= 0:
+				return override_player
 			# DAR 5.C3: El defensor (jugador inactivo) tiene prioridad primero
 			return inactive_player
 		PriorityContext.RESPONSE_WINDOW:
@@ -129,6 +136,38 @@ func _get_starting_priority_player(context: int) -> int:
 			return active_player
 		_:
 			return active_player
+
+
+func _player_with_guerra_talismanes_priority() -> int:
+	"""Busca, entre ambos jugadores, si alguno controla una carta (o Arma
+	equipada) cuyo texto le otorga la prioridad en Guerra de Talismanes
+	(2026-08-30, p.ej. Garfio Pirata: 'tu tienes la prioridad en Guerra de
+	Talismanes'). Devuelve el player_id o -1 si nadie la tiene."""
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return -1
+	for player_id in [0, 1]:
+		var fields = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo] if player_id == 0 \
+			else [main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
+		for field in fields:
+			if not field:
+				continue
+			for card in field.get_children():
+				if not is_instance_valid(card):
+					continue
+				if _card_grants_guerra_talismanes_priority(card):
+					return player_id
+				var weapons = card.get("equipped_weapons")
+				if weapons is Array:
+					for w in weapons:
+						if is_instance_valid(w) and _card_grants_guerra_talismanes_priority(w):
+							return player_id
+	return -1
+
+
+func _card_grants_guerra_talismanes_priority(card: Node) -> bool:
+	var text: String = str(card.get("card_ability")) if card.get("card_ability") != null else ""
+	return "prioridad en guerra de talismanes" in text.to_lower()
 
 
 func _get_valid_actions_for_context(context: int) -> Array[String]:
@@ -269,10 +308,6 @@ func _close_priority_window(both_passed: bool) -> void:
 # =============================================================================
 func _on_phase_changed(new_phase: int) -> void:
 	"""Responde a cambios de fase del TurnManager"""
-	var constants = get_node_or_null("/root/Constants")
-	if not constants:
-		return
-
 	# Cerrar cualquier ventana de prioridad activa al cambiar de fase
 	if priority_window_active:
 		_close_priority_window(false)
@@ -442,12 +477,7 @@ func _resolve_top_of_stack() -> void:
 
 func _move_card_to_cemetery(card: Node, player_id: int) -> void:
 	"""Mueve una carta al cementerio"""
-	var effect_ctrl = get_node_or_null("/root/EffectController")
-
-	if effect_ctrl and effect_ctrl.has_method("destroy_card"):
-		await effect_ctrl.destroy_card(player_id, card)
-	else:
-		push_warning("[PriorityManager] No se pudo mover carta al cementerio")
+	await EffectController.destroy_card(player_id, card)
 
 
 func _execute_effect(effect: Dictionary) -> Dictionary:
@@ -457,7 +487,6 @@ func _execute_effect(effect: Dictionary) -> Dictionary:
 		"effect_type": effect.get("type", -1)
 	}
 
-	var effect_ctrl = get_node_or_null("/root/EffectController")
 	var source_card = effect.get("source_card")
 
 	match effect.get("type"):

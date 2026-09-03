@@ -155,7 +155,7 @@ func _draw_cards_fallback(player_id: int, amount: int) -> Dictionary:
 	}
 
 	var main = get_node_or_null("/root/Main")
-	if not main or not main.has_method("draw_card"):
+	if not main or not main.get("_zone_manager"):
 		result.success = false
 		emit_signal("effect_failed", "draw_cards", player_id, "no_main")
 		return result
@@ -163,7 +163,7 @@ func _draw_cards_fallback(player_id: int, amount: int) -> Dictionary:
 	emit_signal("effect_started", "draw_cards", player_id)
 
 	for i in range(amount):
-		var drew: bool = await main.draw_card(player_id)
+		var drew: bool = await main._zone_manager.draw_card(player_id)
 		if not drew:
 			result.deck_emptied = true
 			break
@@ -265,17 +265,11 @@ func _mill_cards_fallback(player_id: int, amount: int, destination: int) -> Dict
 		"destination": destination
 	}
 
-	var cm = get_node_or_null("/root/CardManager")
-	if not cm:
-		result.success = false
-		emit_signal("effect_failed", "mill_cards", player_id, "no_card_manager")
-		return result
-
 	emit_signal("effect_started", "mill_cards", player_id)
 
 	if destination == Constants.Zone.DESTIERRO:
-		var deck: Array = cm.get_deck(player_id)
-		var exile: Array = cm.get_exile(player_id)
+		var deck: Array = CardManager.get_deck(player_id)
+		var exile: Array = CardManager.get_exile(player_id)
 		for i in range(amount):
 			if deck.is_empty():
 				break
@@ -283,12 +277,10 @@ func _mill_cards_fallback(player_id: int, amount: int, destination: int) -> Dict
 			card_data["esta_oculta"] = false
 			exile.append(card_data)
 			result.actual += 1
-		if cm.has_method("_emit_exile_changed"):
-			cm._emit_exile_changed(player_id)
-		if cm.has_method("_emit_deck_changed"):
-			cm._emit_deck_changed(player_id)
+		CardManager._emit_exile_changed(player_id)
+		CardManager._emit_deck_changed(player_id)
 	else:
-		var dmg_result: Dictionary = cm.mill_cards(player_id, amount)
+		var dmg_result: Dictionary = CardManager.mill_cards(player_id, amount)
 		result.actual = dmg_result.get("actual", 0)
 
 	print("[EffectController] (fallback) Jugador %d botó %d/%d cartas al %s" % [
@@ -318,6 +310,9 @@ func destroy_card(player_id: int, card: Node) -> bool:
 
 	Returns: true si se destruyó
 	"""
+	if _try_consume_leave_play_prevention(player_id, card):
+		return false
+
 	# Guardar zona origen
 	var from_zone = card.current_zone if card.get("current_zone") != null else -1
 
@@ -331,9 +326,7 @@ func destroy_card(player_id: int, card: Node) -> bool:
 		card.on_left_play()
 
 	# Limpiar keywords temporales y cache (DAR Sección 8)
-	var keyword_mgr = get_node_or_null("/root/KeywordManager")
-	if keyword_mgr:
-		keyword_mgr.clear_all_for_card(card)
+	KeywordManager.clear_all_for_card(card)
 
 	# Limpiar datos de conversión si estaba convertida
 	clear_conversion_on_leave(card)
@@ -349,12 +342,7 @@ func destroy_card(player_id: int, card: Node) -> bool:
 		# ya respeta la regla de exhumación y mantiene los contadores de UI
 		# sincronizados (a diferencia de game_board.move_card(), sí libera el
 		# nodo — correcto, porque el Cementerio real solo muestra un contador).
-		var cm = get_node_or_null("/root/CardManager")
-		if cm and cm.has_method("destroy_card"):
-			cm.destroy_card(player_id, card)
-		else:
-			push_error("[EffectController] No se pudo destruir la carta: ni GameBoard ni CardManager disponibles")
-			return false
+		await CardManager.destroy_card(player_id, card)
 
 	# Emitir trigger de destrucción
 	emit_signal("on_card_destroyed", player_id, card)
@@ -368,12 +356,22 @@ func destroy_card(player_id: int, card: Node) -> bool:
 # =============================================================================
 # 9. DESTERRAR CARTA (DAR - Destierro)
 # =============================================================================
-func exile_card(player_id: int, card: Node) -> bool:
+func exile_card(player_id: int, card: Node, bypass_prevention: bool = false) -> bool:
 	"""Destierra una carta, enviándola al Destierro
 	Emite on_card_left_play (si estaba en juego) y on_card_exiled
 
+	bypass_prevention (2026-08-28): true cuando desterrar ES el costo que el
+	propio jugador eligió pagar (p.ej. 'Puedes Desterrarlo para...', Legión
+	Paladín) — la Prevención protege contra remoción del RIVAL, no debe
+	poder bloquear que pagues tu propio costo (y si el jugador tiene otra
+	copia de la misma carta con una carga de Prevención ya activa, sin esto
+	quedaría sin poder pagar el costo de la segunda nunca).
+
 	Returns: true si se desterró
 	"""
+	if not bypass_prevention and _try_consume_leave_play_prevention(player_id, card):
+		return false
+
 	var from_zone = card.current_zone if card.get("current_zone") != null else -1
 
 	# Si estaba en juego, notificar y emitir salida
@@ -382,9 +380,7 @@ func exile_card(player_id: int, card: Node) -> bool:
 			card.on_left_play()
 
 		# Limpiar keywords temporales y cache (DAR Sección 8)
-		var keyword_mgr = get_node_or_null("/root/KeywordManager")
-		if keyword_mgr:
-			keyword_mgr.clear_all_for_card(card)
+		KeywordManager.clear_all_for_card(card)
 
 		# Limpiar datos de conversión si estaba convertida
 		clear_conversion_on_leave(card)
@@ -396,12 +392,7 @@ func exile_card(player_id: int, card: Node) -> bool:
 		game_board.move_card(card, Constants.Zone.DESTIERRO, player_id, true)
 	else:
 		# GameBoard legacy no disponible (docs/audit, hallazgo 2/4)
-		var cm = get_node_or_null("/root/CardManager")
-		if cm and cm.has_method("exile_card"):
-			cm.exile_card(player_id, card)
-		else:
-			push_error("[EffectController] No se pudo desterrar la carta: ni GameBoard ni CardManager disponibles")
-			return false
+		await CardManager.exile_card(player_id, card)
 
 	# Emitir trigger de destierro
 	emit_signal("on_card_exiled", player_id, card)
@@ -437,3 +428,206 @@ func clear_conversion_on_leave(card: Node) -> void:
 	"""Limpia datos de conversión cuando una carta sale del juego"""
 	if is_instance_valid(card):
 		_converted_cards.erase(card.get_instance_id())
+
+
+# =============================================================================
+# PREVENCIÓN "SALE DEL JUEGO" (DAR - Utilizar Habilidades: Prevenir. P.ej.
+# Legión Paladín: "Puedes Desterrarlo para prevenir que un Aliado que
+# controles salga del juego", 2026-08-28)
+# =============================================================================
+## Cargas de Prevención por jugador — "prevenir" en el DAR no es una
+## keyword fija (no existe "Escudo" como término del juego): es el mismo
+## verbo que se usa para prevenir daño (DamageManager.add_damage_prevention)
+## o prevenir que un efecto afecte a un Aliado, aplicado acá a "salir del
+## juego". destroy_card()/exile_card() son el único choke point real de
+## "salir del juego" en todo el proyecto (todo camino de remoción, incluido
+## combate vía BattleManager y ActionModule.destroy(), termina llamando
+## acá — verificado 2026-08-28), así que interceptar acá cubre TODOS los
+## casos sin tener que tocar cada uno.
+var _leave_play_preventions: Dictionary = {0: 0, 1: 0}
+
+
+func add_leave_play_prevention(player_id: int, amount: int = 1) -> void:
+	_leave_play_preventions[player_id] = _leave_play_preventions.get(player_id, 0) + amount
+	print("[EffectController] Prevención 'sale del juego' +%d para J%d (total: %d)" % [
+		amount, player_id + 1, _leave_play_preventions[player_id]
+	])
+
+
+## Inmunidad TEMPORAL de "no pueden salir del juego" para TODOS los Aliados
+## de un jugador, con vencimiento por TURNO (no por carga) — distinto de
+## _leave_play_preventions (cargas consumibles una por una). 2026-08-29,
+## p.ej. Sherlock Holmes: "los Aliados que controlas no pueden salir del
+## juego hasta tu próximo turno" — protege a TODOS a la vez, sin límite de
+## cantidad, hasta que vuelva a empezar el turno de ese jugador.
+var _blanket_leave_play_immunity: Dictionary = {0: false, 1: false}
+
+
+func add_blanket_leave_play_immunity(player_id: int) -> void:
+	"""Activa la inmunidad para TODOS los Aliados de player_id hasta que
+	vuelva a empezar SU turno (GameManager.turn_started con ese player_id)."""
+	if _blanket_leave_play_immunity.get(player_id, false):
+		return  # Ya activa — no hace falta una segunda conexión
+	_blanket_leave_play_immunity[player_id] = true
+	print("[EffectController] Inmunidad de salida del juego activada para J%d (hasta su próximo turno)" % (player_id + 1))
+	var clear_it: Callable
+	clear_it = func(started_player_id: int, _turn: int) -> void:
+		if started_player_id != player_id:
+			return
+		_blanket_leave_play_immunity[player_id] = false
+		if GameManager.turn_started.is_connected(clear_it):
+			GameManager.turn_started.disconnect(clear_it)
+		print("[EffectController] Inmunidad de salida del juego terminó para J%d" % (player_id + 1))
+	GameManager.turn_started.connect(clear_it)
+
+
+## Inmunidad TEMPORAL de "no puede salir del juego" para UNA carta puntual
+## (2026-08-30, p.ej. Garfio Pirata: "Cuando entra en juego, el portador no
+## puede salir del juego hasta tu próximo turno") — distinta de
+## _blanket_leave_play_immunity (esa protege a TODOS los Aliados de un
+## jugador a la vez, no una carta elegida). {card_instance_id: true}
+var _single_card_leave_play_immunity: Dictionary = {}
+
+
+func add_single_card_leave_play_immunity(card: Node, player_id: int) -> void:
+	"""Activa la inmunidad para ESTA carta hasta que vuelva a empezar el
+	turno de player_id (el controlador de la fuente, no necesariamente el
+	dueño de 'card' — DAR: la protección la otorga QUIEN controla el
+	efecto)."""
+	if not is_instance_valid(card):
+		return
+	var id := card.get_instance_id()
+	if _single_card_leave_play_immunity.get(id, false):
+		return  # ya activa — no hace falta una segunda conexión
+	_single_card_leave_play_immunity[id] = true
+	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else "Carta"
+	print("[EffectController] Inmunidad de salida del juego activada para %s (hasta el próximo turno de J%d)" % [card_name, player_id + 1])
+	var clear_it: Callable
+	clear_it = func(started_player_id: int, _turn: int) -> void:
+		if started_player_id != player_id:
+			return
+		_single_card_leave_play_immunity.erase(id)
+		if GameManager.turn_started.is_connected(clear_it):
+			GameManager.turn_started.disconnect(clear_it)
+	GameManager.turn_started.connect(clear_it)
+
+
+func _try_consume_leave_play_prevention(player_id: int, card: Node) -> bool:
+	"""Solo previene la salida de Aliados (texto literal de Legión Paladín/
+	Sherlock Holmes/Garfio Pirata). La inmunidad temporal en bloque (blanket)
+	y la puntual por carta se revisan PRIMERO y no consumen nada — solo
+	bloquean mientras estén activas. Si ninguna aplica, cae a las cargas de
+	Prevención (_leave_play_preventions), que sí se consumen una por una.
+	Cancela la salida del juego por completo — la carta queda exactamente
+	como estaba, sin pasar por ningún otro paso de destroy_card/exile_card
+	(on_left_play, limpieza de keywords, cambio de zona, etc.)."""
+	if not is_instance_valid(card) or card.get("card_type") != Constants.CardType.ALIADO:
+		return false
+	if _blanket_leave_play_immunity.get(player_id, false):
+		var card_name0: String = str(card.get("card_name")) if card.get("card_name") != null else "Aliado"
+		print("[EffectController] %s no sale del juego (inmunidad temporal activa para J%d)" % [card_name0, player_id + 1])
+		var main0 := get_node_or_null("/root/Main")
+		if main0:
+			main0._update_debug("%s: no puede salir del juego este turno" % card_name0)
+		return true
+	if _single_card_leave_play_immunity.get(card.get_instance_id(), false):
+		var card_name1: String = str(card.get("card_name")) if card.get("card_name") != null else "Aliado"
+		print("[EffectController] %s no sale del juego (inmunidad puntual activa)" % card_name1)
+		var main1 := get_node_or_null("/root/Main")
+		if main1:
+			main1._update_debug("%s: no puede salir del juego este turno" % card_name1)
+		return true
+	if _leave_play_preventions.get(player_id, 0) <= 0:
+		return false
+	_leave_play_preventions[player_id] -= 1
+	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else "Aliado"
+	print("[EffectController] Prevención consumida: %s no sale del juego (quedan %d para J%d)" % [
+		card_name, _leave_play_preventions[player_id], player_id + 1
+	])
+	var main := get_node_or_null("/root/Main")
+	if main:
+		main._update_debug("%s: se previno que saliera del juego" % card_name)
+	return true
+
+
+## "Puedes Desterrarla para prevenir que una carta sea afectada por un
+## efecto oponente" (2026-08-30, Estaca) — cargas de protección POR CARTA
+## puntual (no por jugador, a diferencia de _leave_play_preventions),
+## consumibles una por una contra el PRÓXIMO efecto CON OBJETIVO de un
+## jugador distinto al controlador de la carta protegida (anular, destruir,
+## desterrar, debuff, silenciar — alcance confirmado por el usuario,
+## 2026-08-30: NO cubre daño de combate normal ni auras pasivas).
+## {card_instance_id: count}
+var _opponent_effect_preventions: Dictionary = {}
+
+
+func add_opponent_effect_prevention(card: Node) -> void:
+	if not is_instance_valid(card):
+		return
+	var id := card.get_instance_id()
+	_opponent_effect_preventions[id] = _opponent_effect_preventions.get(id, 0) + 1
+	print("[EffectController] Protección contra efecto rival +1 para %s (total: %d)" % [
+		str(card.get("card_name")) if card.get("card_name") != null else "Carta",
+		_opponent_effect_preventions[id]
+	])
+
+
+func try_consume_opponent_effect_prevention(target: Node, source: Node) -> bool:
+	"""Consume una carga de protección de 'target' si 'source' pertenece a
+	un jugador distinto al controlador de 'target' — un efecto propio NUNCA
+	gasta la protección. Returns true si bloqueó el efecto (el llamador
+	debe abortar la acción sobre ESTE target puntual, sin afectar otros
+	targets de la misma resolución)."""
+	if not is_instance_valid(target):
+		return false
+	var id := target.get_instance_id()
+	var charges: int = _opponent_effect_preventions.get(id, 0)
+	if charges <= 0:
+		return false
+	var target_controller: int = target.controller_id if target.get("controller_id") != null else -1
+	var source_controller: int = -2
+	if source and is_instance_valid(source):
+		source_controller = source.controller_id if source.get("controller_id") != null else -2
+	if source_controller == target_controller:
+		return false
+	_opponent_effect_preventions[id] = charges - 1
+	var card_name: String = str(target.get("card_name")) if target.get("card_name") != null else "Carta"
+	print("[EffectController] Protección consumida: %s no fue afectada por el efecto rival (quedan %d)" % [
+		card_name, _opponent_effect_preventions[id]
+	])
+	var main := get_node_or_null("/root/Main")
+	if main:
+		main._update_debug("%s: protegida de un efecto rival" % card_name)
+	return true
+
+
+## "Puedes convertirlo en un Oro sin habilidad para prevenir que una
+## habilidad sea cancelada o un Aliado de coste 1 sea Anulado" (2026-08-30,
+## Drácula) — carga POR JUGADOR (no por carta puntual, a diferencia de
+## _opponent_effect_preventions: Drácula protege cualquier habilidad/Aliado
+## propio, no una carta elegida de antemano), consumible contra CUALQUIERA
+## de las dos amenazas, lo que ocurra primero. Opera sobre la pila
+## (ActionPipeline/LinkedEffectRegistry), no sobre Nodos en juego, así que
+## no puede reusar _opponent_effect_preventions (keyed por instance_id de
+## Node).
+var _stack_annul_cancel_preventions: Dictionary = {0: 0, 1: 0}
+
+
+func add_stack_annul_cancel_prevention(player_id: int) -> void:
+	_stack_annul_cancel_preventions[player_id] = _stack_annul_cancel_preventions.get(player_id, 0) + 1
+	print("[EffectController] Prevención 'Cancelar/Anular en pila' +1 para J%d (total: %d)" % [
+		player_id + 1, _stack_annul_cancel_preventions[player_id]
+	])
+
+
+func try_consume_stack_annul_cancel_prevention(player_id: int) -> bool:
+	if _stack_annul_cancel_preventions.get(player_id, 0) <= 0:
+		return false
+	_stack_annul_cancel_preventions[player_id] -= 1
+	print("[EffectController] Prevención 'Cancelar/Anular en pila' consumida para J%d (quedan %d)" % [
+		player_id + 1, _stack_annul_cancel_preventions[player_id]
+	])
+	var main := get_node_or_null("/root/Main")
+	if main:
+		main._update_debug("Se previno una Cancelación/Anulación (Drácula)")
+	return true

@@ -82,10 +82,7 @@ func load_cards_from_external_api(ediciones: Array = ["imp", "esc", "pb", "fx"])
 	esc. Antes solo se pedían imp/esc (~2426 cartas) — pb y fx devuelven 0
 	sin autenticar, así que probablemente requieren el token Bearer (ver
 	ExternalApiClient.fetch_cards())."""
-	var client = get_node_or_null("/root/ExternalApiClient")
-	if not client:
-		emit_signal("cards_load_failed", "ExternalApiClient no disponible")
-		return
+	var client = ExternalApiClient
 
 	# Asegurar login ANTES de pedir las cartas: pb/fx necesitan el token
 	# Bearer (a diferencia de imp/esc, que responden sin autenticar) — sin
@@ -93,13 +90,18 @@ func load_cards_from_external_api(ediciones: Array = ["imp", "esc", "pb", "fx"])
 	# tiene 'await señal_a O señal_b' directo, así que se sondea un flag
 	# que cualquiera de las dos señales puede marcar.
 	if not client.is_authenticated():
-		var login_attempt_done := false
-		var on_login_succeeded := func(): login_attempt_done = true
-		var on_login_failed := func(_reason): login_attempt_done = true
+		# state es Dictionary a propósito (2026-08-22): los lambdas de
+		# GDScript capturan variables locales POR VALOR — 'login_attempt_done'
+		# suelto nunca se actualizaba de verdad afuera del lambda y el 'while'
+		# colgaba para siempre en silencio (confirmado con un test aislado
+		# en Godot).
+		var state := {"done": false}
+		var on_login_succeeded := func(): state.done = true
+		var on_login_failed := func(_reason): state.done = true
 		client.login_succeeded.connect(on_login_succeeded, CONNECT_ONE_SHOT)
 		client.login_failed.connect(on_login_failed, CONNECT_ONE_SHOT)
 		client.login()
-		while not login_attempt_done:
+		while not state.done:
 			await get_tree().process_frame
 
 	is_loading = true
@@ -676,6 +678,49 @@ func _build_cdn_url(imagen_path: String) -> String:
 	return imagen_path if imagen_path.begins_with("http") else CDN_BASE_URL + "/" + imagen_path
 
 
+## Recortes pendientes de aplicar tras descargar (2026-08-25): {card_id: Rect2i}
+## — ver _unwrap_broken_cloudinary_fetch()/_on_image_request_completed().
+var _pending_crops: Dictionary = {}
+
+func _unwrap_broken_cloudinary_fetch(card_id: String, url: String) -> String:
+	"""Desenvuelve un proxy Cloudinary 'fetch' roto a la URL real de origen
+	(2026-08-25): la cuenta de Cloudinary usada para las cartas custom/
+	homebrew (drw7y27sm) bloquea el fetch remoto sin firmar (401 en TODAS
+	sus imágenes, confirmado en vivo) — pero la imagen de origen (Shopify
+	CDN) responde 200 directo.
+
+	Cuando el fetch trae un recorte ('c_crop,x_X,y_Y,w_W,h_H/https://...'),
+	varias cartas comparten UNA sola imagen de origen (una lámina con 2-3
+	cartas lado a lado — confirmado: 'azi_1.png' aparece con x_0/x_256/x_512,
+	tres cartas en la misma lámina) — no se puede usar la imagen de origen
+	tal cual. El recorte real se reconstruye del lado del juego con
+	Image.get_region() en _on_image_request_completed(), así que acá se
+	guarda el Rect2i en _pending_crops[card_id] para que ese callback lo
+	recupere cuando la descarga termine."""
+	var marker := "/drw7y27sm/image/fetch/"
+	var idx := url.find(marker)
+	if idx == -1:
+		return url
+	var after := url.substr(idx + marker.length())
+
+	if after.begins_with("http%3A") or after.begins_with("https%3A") or after.begins_with("http://") or after.begins_with("https://"):
+		return after.uri_decode()
+
+	# ¿Trae 'c_crop,x_X,y_Y,w_W,h_H/' antes de la URL real?
+	var crop_rx := RegEx.new()
+	crop_rx.compile("^c_crop,x_(\\d+),y_(\\d+),w_(\\d+),h_(\\d+)/(https?%3A.+|https?://.+)$")
+	var m := crop_rx.search(after)
+	if not m:
+		return url  # otra transformación no reconocida — no tocar
+
+	var crop_x := int(m.get_string(1))
+	var crop_y := int(m.get_string(2))
+	var crop_w := int(m.get_string(3))
+	var crop_h := int(m.get_string(4))
+	_pending_crops[card_id] = Rect2i(crop_x, crop_y, crop_w, crop_h)
+	return m.get_string(5).uri_decode()
+
+
 func _start_image_download(card_id: String, imagen_path: String) -> void:
 	"""Inicia la descarga HTTP de una imagen.
 	URLs externas absolutas (p.ej. Cloudinary, API nueva) se descargan directo.
@@ -683,6 +728,8 @@ func _start_image_download(card_id: String, imagen_path: String) -> void:
 	ese proxy ya no está disponible, así que ese camino queda solo por
 	compatibilidad si alguna vez vuelve a levantarse."""
 	_pending_downloads[card_id] = true
+
+	imagen_path = _unwrap_broken_cloudinary_fetch(card_id, imagen_path)
 
 	var is_direct_external := imagen_path.begins_with("http") and not imagen_path.begins_with(CDN_BASE_URL)
 	var download_url: String
@@ -727,6 +774,10 @@ func _on_image_request_completed(result: int, response_code: int, headers: Packe
 	"""Callback cuando se descarga una imagen"""
 	http.queue_free()
 	_pending_downloads.erase(card_id)
+	# Se saca del dict acá (no solo al usarlo) para no dejar basura pendiente
+	# si la descarga falla más abajo — ver _unwrap_broken_cloudinary_fetch().
+	var crop_rect: Variant = _pending_crops.get(card_id)
+	_pending_crops.erase(card_id)
 	_process_download_queue()  # Liberar slot → siguiente en cola
 
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
@@ -749,6 +800,20 @@ func _on_image_request_completed(result: int, response_code: int, headers: Packe
 		printerr("[CardDatabase] NEGRO — Error decodificando id='%s' error=%d" % [card_id, error])
 		emit_signal("card_image_loaded", card_id, null)
 		return
+
+	# Reconstruir el recorte que hacía el proxy Cloudinary roto (2026-08-25):
+	# varias cartas custom comparten UNA imagen de origen con 2-3 cartas
+	# lado a lado — sin este recorte se vería la lámina completa en vez de
+	# solo esta carta. Ver _unwrap_broken_cloudinary_fetch().
+	if crop_rect != null:
+		var full_rect := Rect2i(Vector2i.ZERO, image.get_size())
+		var safe_rect: Rect2i = full_rect.intersection(crop_rect)
+		if safe_rect.size.x > 0 and safe_rect.size.y > 0:
+			image = image.get_region(safe_rect)
+		else:
+			printerr("[CardDatabase] Recorte fuera de rango para '%s' (imagen %s, recorte %s) — se usa sin recortar" % [
+				card_id, image.get_size(), crop_rect
+			])
 
 	var texture = ImageTexture.create_from_image(image)
 	image_cache[card_id] = texture

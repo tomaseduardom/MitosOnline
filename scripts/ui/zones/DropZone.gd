@@ -117,8 +117,9 @@ func on_card_dropped(card: Node) -> void:
 
 	# Zona de batalla: declarar atacante (Furia en Vigilia, o normal en Ataque)
 	if zone_type == Constants.Zone.LINEA_ATAQUE:
-		if main and main.has_method("_declare_attacker"):
-			main._declare_attacker(card)
+		var card_interaction = main.get("_card_interaction") if main else null
+		if card_interaction and card_interaction.has_method("_declare_attacker"):
+			card_interaction._declare_attacker(card)
 		else:
 			card.return_to_hand()
 		return
@@ -134,8 +135,9 @@ func on_card_dropped(card: Node) -> void:
 		return
 
 	# Para otras zonas, usar play_card
-	if main and main.has_method("play_card"):
-		main.play_card(card)
+	var gold_mgr = main.get("_gold_manager") if main else null
+	if gold_mgr and gold_mgr.has_method("play_card"):
+		gold_mgr.play_card(card)
 	else:
 		# Fallback: intentar con método alternativo
 		_play_card_fallback(card)
@@ -164,14 +166,10 @@ func _can_accept_card(card: Node) -> bool:
 
 
 func _play_card_fallback(card: Node) -> void:
-	"""Intento alternativo de jugar la carta"""
-	# Intentar encontrar GameManager
-	var game_manager = get_node_or_null("/root/GameManager")
-	if game_manager and game_manager.has_method("play_card"):
-		game_manager.play_card(card)
-		return
-
-	# Si no hay sistema, devolver a la mano
+	"""Intento alternativo de jugar la carta (2026-08-28, "módulos gordos"
+	punto 1: antes intentaba GameManager.play_card(), que nunca existió —
+	esta rama era inalcanzable siempre. GoldManager.play_card() es el
+	camino real, ya intentado antes de llegar acá — ver el llamador)."""
 	push_warning("[DropZone] No se encontró sistema para jugar carta")
 	card.return_to_hand()
 
@@ -248,16 +246,29 @@ func _hide_highlight() -> void:
 
 
 func _player_has_ally_in_play(p_id: int) -> bool:
-	"""Verifica si el jugador p_id tiene al menos un Aliado en juego."""
+	"""Verifica si el jugador p_id tiene al menos un Aliado libre para portar
+	un Arma (sin una ya equipada) — mismo criterio que
+	GoldManager._player_has_ally_in_play(), para que el highlight del
+	arrastre no diga 'legal' cuando GoldManager lo va a rechazar."""
 	var main = get_tree().current_scene
 	if not main:
 		return false
-	var field = main.player_field if p_id == 0 else main.opponent_field
-	if not field:
-		return false
-	for card in field.get_children():
-		if card.get("card_type") == Constants.CardType.ALIADO:
-			return true
+	if p_id == 0 and main.get("_gold_manager") and main._gold_manager.has_method("_player_has_ally_in_play"):
+		return main._gold_manager._player_has_ally_in_play()
+	var fields = [main.player_field, main.player_linea_ataque] if p_id == 0 else [main.opponent_field, main.opponent_linea_ataque]
+	for field in fields:
+		if not field:
+			continue
+		for card in field.get_children():
+			if card.get("card_type") != Constants.CardType.ALIADO:
+				continue
+			var already_armed := false
+			for child in card.get_children():
+				if child is Card and child.get("card_type") == Constants.CardType.ARMA:
+					already_armed = true
+					break
+			if not already_armed:
+				return true
 	return false
 
 
@@ -274,11 +285,11 @@ func _check_card_legality(card: Node) -> bool:
 		if not _player_has_ally_in_play(player_id):
 			return false
 
-	# ZONA DE BATALLA: Aliados desde LINEA_DEFENSA — con Furia durante Vigilia
-	# (ataque anticipado, DAR 8), o cualquiera sin enfermedad de invocación
-	# durante el paso de Ataque normal (DAR 5.3.1). El drop en sí (on_card_dropped
-	# → _can_accept_card) ya aceptaba ambos casos; esto solo hace que el brillo
-	# de "legal/ilegal" diga la verdad en los dos. Ver hallazgo 5.
+	# ZONA DE BATALLA: Aliados desde LINEA_DEFENSA, sin enfermedad de
+	# invocación, durante el paso de Ataque (DAR 5.3.1) — ya sin atajo de
+	# Vigilia (2026-08-28). El drop en sí (on_card_dropped → _can_accept_card)
+	# ya lo aceptaba; esto solo hace que el brillo de "legal/ilegal" diga la
+	# verdad. Ver hallazgo 5.
 	if zone_type == Constants.Zone.LINEA_ATAQUE:
 		var ct = card.get("card_type") if card.get("card_type") != null else -1
 		if ct != Constants.CardType.ALIADO:
@@ -286,27 +297,25 @@ func _check_card_legality(card: Node) -> bool:
 		var cz = card.get("current_zone") if card.get("current_zone") != null else -1
 		if cz != Constants.Zone.LINEA_DEFENSA:
 			return false
-		var gm2 = get_node_or_null("/root/GameManager")
-		if not gm2:
-			return false
-		if gm2.current_phase == Constants.Phase.VIGILIA:
-			return card.has_method("has_keyword") and card.has_keyword(Constants.Keyword.FURIA)
-		if gm2.current_phase == Constants.Phase.ATAQUE:
-			var tm = get_node_or_null("/root/TurnManager")
-			if tm and tm.has_method("can_attack"):
-				return tm.can_attack(card).get("can_attack", false)
-			return true
+		# Ya no hay atajo Vigilia→Ataque (2026-08-28, a pedido del usuario):
+		# declarar atacantes requiere el botón "Atacar" primero, incluso con
+		# Furia — ese keyword solo evita la enfermedad de invocación.
+		if GameManager.current_phase == Constants.Phase.ATAQUE:
+			return TurnManager.can_attack(card).get("can_attack", false)
 		return false
 
 	# Verificar tipo aceptado
 	if not _can_accept_card(card):
 		return false
 
-	# Verificar fase
-	var game_manager = get_node_or_null("/root/GameManager")
-	if game_manager:
-		var current_phase = game_manager.get("current_phase")
-		if current_phase != null and current_phase != Constants.Phase.VIGILIA:
+	# Verificar fase (con la misma excepción de Arma/Talismán en Guerra de
+	# Talismanes que GoldManager.play_card() — si no, el borde se veía en
+	# rojo/ilegal para una jugada que en realidad sí se iba a aceptar).
+	if GameManager.current_phase != Constants.Phase.VIGILIA:
+		var main = get_tree().current_scene
+		var gold_mgr = main.get("_gold_manager") if main else null
+		var ct = card.get("card_type") if card.get("card_type") != null else -1
+		if not (gold_mgr and gold_mgr.has_method("has_phase_exception") and gold_mgr.has_phase_exception(ct)):
 			return false
 
 	# Oros siempre son legales (no tienen coste)
@@ -318,18 +327,7 @@ func _check_card_legality(card: Node) -> bool:
 	var card_cost = card.get("card_cost") if card.get("card_cost") != null else 0
 
 	# Verificar oro disponible usando GameState
-	var game_state = get_node_or_null("/root/GameState")
-	if game_state:
-		var oro_reserva = game_state.get_oro_reserva(player_id)
-		return oro_reserva >= card_cost
-
-	# Fallback: verificar coste con Main.gd
-	var main = get_tree().current_scene
-	if main and main.has_method("calcular_coste_real") and main.has_method("puede_pagar"):
-		var coste = main.calcular_coste_real(card)
-		return main.puede_pagar(coste)
-
-	return true
+	return GameState.get_oro_reserva(player_id) >= card_cost
 
 
 # =============================================================================

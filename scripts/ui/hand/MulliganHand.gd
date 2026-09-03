@@ -10,7 +10,7 @@ signal card_clicked(card: Node)
 # CONFIGURACIÓN DEL ABANICO
 # =============================================================================
 @export var max_rotation: float = 15.0  # Rotación máxima de las cartas externas (grados)
-@export var card_spacing: float = 120.0  # Espacio horizontal entre cartas
+@export var card_spacing: float = 145.0  # Espacio horizontal entre cartas
 @export var vertical_curve: float = 30.0  # Curvatura vertical del arco (píxeles)
 
 # =============================================================================
@@ -18,8 +18,7 @@ signal card_clicked(card: Node)
 # =============================================================================
 @export var entry_duration: float = 0.4  # Duración de animación de entrada
 @export var entry_delay_per_card: float = 0.08  # Delay entre cada carta
-@export var hover_lift: float = 30.0  # Elevación al hover
-@export var hover_scale: float = 1.12  # Escala al hover
+@export var hover_scale: float = 2.0  # Escala al hover (a pedido del usuario, 2026-08-22 — antes 1.12 apenas devolvía la carta a su tamaño base, casi no se notaba)
 @export var hover_duration: float = 0.15  # Duración del hover
 
 # =============================================================================
@@ -187,14 +186,14 @@ func get_cards() -> Array[Node]:
 # CÁLCULO DEL ABANICO
 # =============================================================================
 func _calculate_fan_positions(override_size: Vector2 = Vector2.ZERO) -> void:
-	"""Calcula las posiciones en abanico para todas las cartas"""
+	"""Calcula las posiciones horizontales centradas para todas las cartas de mulligan"""
 	_card_targets.clear()
 
 	if cards.is_empty():
 		return
 
 	var card_count = cards.size()
-	var card_size = Vector2(150, 210) * 0.9  # Tamaño de carta escalada
+	var card_size = Vector2(150, 210)  # Tamaño base de carta
 
 	# Usar tamaño override si se proporciona, sino el tamaño del contenedor
 	var container_size = override_size if override_size.x > 0 else size
@@ -203,34 +202,26 @@ func _calculate_fan_positions(override_size: Vector2 = Vector2.ZERO) -> void:
 
 	# Centro del contenedor
 	var center_x = container_size.x / 2.0
-	var center_y = container_size.y / 2.0
+	var center_y = container_size.y / 2.0 - 20.0  # Ligeramente elevado sobre los botones
 
-	# Ancho total que ocuparán las cartas
-	var total_width = (card_count - 1) * card_spacing
+	# Espaciado dinámico para que quepan holgadamente en el ancho disponible
+	var available_w = minf(container_size.x - 200.0, 1150.0)
+	var step = 135.0
+	if card_count > 1:
+		step = minf(135.0, (available_w - card_size.x) / float(card_count - 1))
+
+	var total_width = card_size.x + (card_count - 1) * step if card_count > 1 else card_size.x
 	var start_x = center_x - total_width / 2.0
 
 	for i in range(card_count):
 		var card = cards[i]
-
-		# Posición X centrada
-		var pos_x = start_x + i * card_spacing - card_size.x / 2.0
-
-		# Factor de -1 a 1 según posición (centro = 0)
-		var t = 0.0
-		if card_count > 1:
-			t = (float(i) / (card_count - 1)) * 2.0 - 1.0  # -1 a 1
-
-		# Posición Y con curva (centro más arriba)
-		var curve_offset = (1.0 - t * t) * vertical_curve  # Parábola invertida
-		var pos_y = center_y - card_size.y / 2.0 - curve_offset
-
-		# Rotación basada en posición (izquierda rota negativo, derecha positivo)
-		var rotation = t * max_rotation
+		var pos_x = start_x + i * step
+		var pos_y = center_y - card_size.y / 2.0
 
 		_card_targets[card] = {
 			"position": Vector2(pos_x, pos_y),
-			"rotation": rotation,
-			"scale": Vector2(0.9, 0.9),
+			"rotation": 0.0,
+			"scale": Vector2(1.0, 1.0),
 			"z_index": i
 		}
 
@@ -333,12 +324,13 @@ func _on_card_hovered(card: Node) -> void:
 		return
 
 	var target = _card_targets[card]
-	var hover_pos = target.position + Vector2(0, -hover_lift)
 
+	# Sin desplazamiento de posición al hacer hover (2026-08-28, a pedido
+	# del usuario) — la carta crece/rota en su propio lugar, ya no "salta"
+	# hacia arriba.
 	_kill_tween(card)
 	var tween = create_tween()
 	tween.set_parallel(true)
-	tween.tween_property(card, "position", hover_pos, hover_duration).set_ease(Tween.EASE_OUT)
 	tween.tween_property(card, "scale", target.scale * hover_scale, hover_duration).set_ease(Tween.EASE_OUT)
 	# Reducir rotación al hacer hover para mejor visibilidad
 	tween.tween_property(card, "rotation_degrees", target.rotation * 0.3, hover_duration).set_ease(Tween.EASE_OUT)

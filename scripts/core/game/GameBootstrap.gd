@@ -56,7 +56,7 @@ func _on_cards_load_failed(error: String) -> void:
 # =============================================================================
 func _show_deck_selector() -> void:
 	"""Muestra el popup de selección de mazos antes del sorteo de dados."""
-	var script = load("res://scripts/ui/DeckSelector.gd")
+	var script = load("res://scripts/ui/zones/DeckSelector.gd")
 	if not script:
 		push_warning("[Bootstrap] DeckSelector.gd no encontrado — saltando al sorteo")
 		_show_dice_roll()
@@ -67,30 +67,42 @@ func _show_deck_selector() -> void:
 	selector.show_selector(_main)
 
 
-func _on_decks_selected(player_data: Dictionary, opponent_data: Dictionary, is_external: bool = false) -> void:
+func _on_decks_selected(player_data: Dictionary, opponent_data: Dictionary, player_is_external: bool = false, opponent_is_external: bool = false) -> void:
+	# get_node_or_null("/root/...") en vez del identificador global directo
+	# (2026-08-30): MatchLoadingOverlay SÍ está registrado como autoload en
+	# project.godot, pero el compilador de GDScript no lo reconocía como
+	# identificador válido ("Compile Error: Identifier not found") — mismo
+	# síntoma que CardNameSearchDialog antes (un class_name/autoload nuevo
+	# que el editor todavía no había terminado de indexar). La búsqueda por
+	# ruta es una resolución en tiempo de ejecución, no depende de que el
+	# compilador ya conozca el identificador.
+	var _loading_overlay := get_node_or_null("/root/MatchLoadingOverlay")
+	if _loading_overlay:
+		_loading_overlay.show_loading(_main, "PREPARANDO PARTIDA", "Barajando los grimorios...")
+
 	if player_data.is_empty() or opponent_data.is_empty():
 		_show_dice_roll()
 		return
-	var deck_loader = get_node_or_null("/root/DeckLoader")
-	if not deck_loader:
-		push_warning("[Bootstrap] DeckLoader no disponible — usando mazos aleatorios")
-		_show_dice_roll()
-		return
-	if not deck_loader.all_decks_ready.is_connected(_show_dice_roll):
-		deck_loader.all_decks_ready.connect(_show_dice_roll, CONNECT_ONE_SHOT)
+	if not DeckLoader.all_decks_ready.is_connected(_show_dice_roll):
+		DeckLoader.all_decks_ready.connect(_show_dice_roll, CONNECT_ONE_SHOT)
 	# Nadie escuchaba deck_load_failed en este flujo (2026-08-18): si un mazo
 	# no tenía ninguna carta encontrable en CardDatabase (p.ej. porque el
 	# catálogo cargado es más chico que el mazo guardado), DeckLoader emitía
 	# el fallo a la nada y el juego se quedaba esperando para siempre una
 	# all_decks_ready que nunca iba a llegar — sin ningún error visible.
-	if not deck_loader.deck_load_failed.is_connected(_on_deck_load_failed):
-		deck_loader.deck_load_failed.connect(_on_deck_load_failed)
-	if is_external:
-		deck_loader.load_deck_from_external_data(0, player_data)
-		deck_loader.load_deck_from_external_data(1, opponent_data)
+	if not DeckLoader.deck_load_failed.is_connected(_on_deck_load_failed):
+		DeckLoader.deck_load_failed.connect(_on_deck_load_failed)
+	# Jugador y oponente pueden venir de orígenes distintos ahora (2026-08-24):
+	# tu propio mazo (externo) para uno, un preset por raza (local) para el
+	# otro — cada lado se enruta según SU propio origen, no uno compartido.
+	if player_is_external:
+		DeckLoader.load_deck_from_external_data(0, player_data)
 	else:
-		deck_loader.load_deck_from_data(0, player_data)
-		deck_loader.load_deck_from_data(1, opponent_data)
+		DeckLoader.load_deck_from_data(0, player_data)
+	if opponent_is_external:
+		DeckLoader.load_deck_from_external_data(1, opponent_data)
+	else:
+		DeckLoader.load_deck_from_data(1, opponent_data)
 
 
 func _on_deck_load_failed(player_id: int, error: String) -> void:
@@ -99,9 +111,7 @@ func _on_deck_load_failed(player_id: int, error: String) -> void:
 	jugador, que sí calza con las cartas realmente disponibles."""
 	_main._update_debug("Mazo del jugador %d falló (%s) — usando mazo aleatorio" % [player_id + 1, error])
 	push_warning("[Bootstrap] Mazo de jugador %d falló: %s — cargando mazo aleatorio de respaldo" % [player_id, error])
-	var deck_loader = get_node_or_null("/root/DeckLoader")
-	if deck_loader:
-		deck_loader.load_random_deck(player_id)
+	DeckLoader.load_random_deck(player_id)
 
 
 # =============================================================================
@@ -110,8 +120,7 @@ func _on_deck_load_failed(player_id: int, error: String) -> void:
 func _prepare_game() -> void:
 	"""Prepara mazos, jugadores y GameManager (sin mulligan)."""
 	print("[Bootstrap] Preparando partida...")
-	var deck_loader = get_node_or_null("/root/DeckLoader")
-	if deck_loader and deck_loader.has_method("is_deck_loaded") and deck_loader.is_deck_loaded(0):
+	if DeckLoader.is_deck_loaded(0):
 		print("[Bootstrap] Usando mazo del DeckLoader")
 		_sync_decks_from_loader()
 	if _main.player_deck.size() < 10:
@@ -123,16 +132,14 @@ func _prepare_game() -> void:
 	if not _main.get_node_or_null("Player2"):
 		var p2 = Node.new(); p2.name = "Player2"; _main.add_child(p2)
 	GameManager.setup_game(_main.get_node("Player1"), _main.get_node("Player2"))
-	_main.shuffle_deck(0)
-	_main.shuffle_deck(1)
-	var cdb = get_node_or_null("/root/CardDatabase")
-	if cdb and cdb.has_method("preload_deck_images"):
-		cdb.preload_deck_images(_main.player_deck + _main.opponent_deck)
+	_main._zone_manager.shuffle_deck(0)
+	_main._zone_manager.shuffle_deck(1)
+	CardDatabase.preload_deck_images(_main.player_deck + _main.opponent_deck)
 
 
 func _start_test_game() -> void:
 	_prepare_game()
-	await _main._start_mulligan_phase()
+	await _main._mulligan_ctrl.start_mulligan_phase()
 
 
 func _setup_oro_inicial() -> void:
@@ -166,31 +173,54 @@ func _setup_oro_inicial() -> void:
 		if player_id == 0:
 			var card = _main._create_card(oro_data)
 			card.can_interact = true
+			card.scale = Constants.GOLD_CARD_SCALE
+			card.base_scale = Constants.GOLD_CARD_SCALE
 			_main._connect_card_signals(card)
 			_main.player_gold.add_child(card)
+			# set_zone() faltaba acá (2026-08-29, bug real reportado: el Oro
+			# Inicial quedaba con current_zone en su valor por defecto, MANO
+			# — nunca se actualizaba a RESERVA_ORO porque este camino de
+			# colocación es distinto al de _place_card_as_gold(), que sí lo
+			# hace. Cualquier efecto que revise 'está en juego/en Reserva'
+			# vía current_zone —p.ej. Convertir de Capitán O'Brien— rechazaba
+			# el Oro Inicial como objetivo aunque estuviera ahí a la vista).
+			card.set_zone(Constants.Zone.RESERVA_ORO)
 			_main.gold_cards.append(card)
-			if _main._game_state:
-				_main._game_state.agregar_oro_reserva(0, 1)
-			_main._update_gold_display()
+			GameState.agregar_oro_reserva(0, 1)
+			_main._gold_manager._update_gold_display()
 		else:
-			if _main._game_state:
-				_main._game_state.agregar_oro_reserva(1, 1)
-	_main._update_castillo_counts()
+			# El Oro Inicial del oponente ahora también se muestra como carta
+			# real (2026-08-25, a pedido del usuario) — antes solo sumaba al
+			# contador, sin ningún nodo visible en OpponentReservaOro. El Oro
+			# es información pública (DAR): va boca arriba, no oculta como una
+			# carta de mano (2026-08-26 — se creaba con is_hidden=true por error).
+			var card = _main._create_card(oro_data, false)
+			card.owner_id = 1
+			# can_interact = true (2026-08-28, a pedido del usuario: "necesito
+			# poder interactuar con él como con mis cartas") — antes estaba en
+			# false, así que ni el hover corría sobre esta carta (con
+			# can_interact=false, CardInteraction.process() la ignora entera).
+			card.can_interact = true
+			card.scale = Constants.GOLD_CARD_SCALE
+			card.base_scale = Constants.GOLD_CARD_SCALE
+			card.pivot_offset = Vector2(75.0, 105.0)
+			card.rotation_degrees = 180.0
+			_main._connect_card_signals(card)
+			_main.opponent_gold.add_child(card)
+			card.set_zone(Constants.Zone.RESERVA_ORO)  # ver comentario arriba, mismo bug en el lado rival
+			GameState.agregar_oro_reserva(1, 1)
+	_main._zone_manager._update_castillo_counts()
 
 
 func _sync_decks_from_loader() -> void:
 	_main.player_deck.clear()
 	_main.opponent_deck.clear()
-	var deck_loader = get_node_or_null("/root/DeckLoader")
-	if not deck_loader:
-		push_error("[Bootstrap] DeckLoader no disponible para sincronizar")
-		return
-	for card_data in deck_loader.get_deck_data(0):
+	for card_data in DeckLoader.get_deck_data(0):
 		_main.player_deck.append(card_data)
-	for card_data in deck_loader.get_deck_data(1):
+	for card_data in DeckLoader.get_deck_data(1):
 		_main.opponent_deck.append(card_data)
-	deck_loader.clear_deck_data(0)
-	deck_loader.clear_deck_data(1)
+	DeckLoader.clear_deck_data(0)
+	DeckLoader.clear_deck_data(1)
 	print("[Bootstrap] Mazos sincronizados: Jugador=%d, Oponente=%d" % [_main.player_deck.size(), _main.opponent_deck.size()])
 
 
@@ -260,155 +290,100 @@ func _build_test_decks() -> void:
 	print("[Bootstrap] Mazos de prueba: %d cartas" % _main.player_deck.size())
 
 
+func _debug_spawn_opponent_test_allies(count: int = 3, card_name: String = "bernardo ohiggins") -> void:
+	"""DEBUG TEMPORAL (2026-09-02, a pedido del usuario, "solo por ahora"):
+	al terminar el mulligan, pone 'count' copias de la misma carta conocida
+	(Bernardo O'Higgins por defecto — 2026-09-02, a pedido del usuario:
+	'que sean 3 Bernardo OHiggins o algo así', para tener un objetivo fijo
+	y repetible en vez de lo que sea que toque al azar del mazo cargado)
+	directo en la Línea de Defensa del rival, para poder probar efectos que
+	apuntan a 'una carta oponente' en juego (p.ej. Estaca — Barajar una
+	carta oponente que no sea Oro) sin tener que jugar una partida completa
+	contra el bot primero. Busca la carta por nombre en CardDatabase (no en
+	el mazo cargado — así siempre están disponibles, tenga o no el mazo del
+	rival esa carta) y duplica sus datos ('duplicate(true)', para que las 3
+	copias no compartan el mismo Dictionary). Si no la encuentra, cae al
+	comportamiento viejo (primeros Aliados que encuentre en opponent_deck).
+	Sin ETB (no pasa por _trigger_enter_play() a propósito — son solo
+	cuerpos en juego, no 'jugados' de verdad) PERO CON efectos continuos
+	(auras tipo 'Tus Aliados ganan Fuerza' — 2026-09-02, corrección: se
+	registran directo vía ContinuousEffectManager._register_card_
+	continuous_effects(), sin abrir ninguna ventana de trigger/respuesta,
+	porque una aura pasiva no depende de haber sido 'jugada'). Buscar este
+	comentario para sacarlo cuando ya no haga falta — llamado desde
+	MulliganController._end_mulligan_phase()."""
+	if not _main.opponent_field:
+		return
+
+	var base_data: Dictionary = CardDatabase.get_card_by_name(card_name) if CardDatabase else {}
+	var placed := 0
+
+	if not base_data.is_empty():
+		for i in range(count):
+			var data: Dictionary = base_data.duplicate(true)
+			var card = _main._create_card(data, false)  # is_hidden=false: en juego es info pública
+			card.owner_id = 1
+			card.controller_id = 1
+			card.pivot_offset = Vector2(75.0, 105.0)
+			card.rotation_degrees = 180.0
+			_main._connect_card_signals(card)
+			_main.opponent_field.add_child(card)
+			card.top_level = false
+			card.set_zone(Constants.Zone.LINEA_DEFENSA)
+			card.scale = Vector2.ONE
+			card.base_scale = Vector2.ONE
+			card.can_interact = true
+			CardFactory.on_card_enters_play(card)
+			ContinuousEffectManager._register_card_continuous_effects(card)
+			placed += 1
+	elif not _main.opponent_deck.is_empty():
+		# Fallback (no se encontró 'card_name' en CardDatabase): primeros
+		# Aliados del propio mazo del rival, como antes de este cambio.
+		var i := 0
+		while i < _main.opponent_deck.size() and placed < count:
+			var data: Dictionary = _main.opponent_deck[i]
+			if data.get("tipo", -1) != Constants.CardType.ALIADO:
+				i += 1
+				continue
+			_main.opponent_deck.remove_at(i)
+			var card = _main._create_card(data, false)  # is_hidden=false: en juego es info pública
+			card.owner_id = 1
+			card.controller_id = 1
+			card.pivot_offset = Vector2(75.0, 105.0)
+			card.rotation_degrees = 180.0
+			_main._connect_card_signals(card)
+			_main.opponent_field.add_child(card)
+			card.top_level = false
+			card.set_zone(Constants.Zone.LINEA_DEFENSA)
+			card.scale = Vector2.ONE
+			card.base_scale = Vector2.ONE
+			card.can_interact = true
+			CardFactory.on_card_enters_play(card)
+			ContinuousEffectManager._register_card_continuous_effects(card)
+			placed += 1
+
+	if placed > 0:
+		_main._zone_manager._update_castillo_counts()
+		_main._update_debug("[DEBUG] %d Aliado(s) rival(es) puestos en juego para pruebas" % placed)
+
+
 # =============================================================================
-# DUELO DE DADOS
+# DUELO DE DADOS D20 EN 3D
 # =============================================================================
 func _show_dice_roll() -> void:
-	"""Animación de dados — al terminar llama _start_mulligan_phase()."""
-	print("[Bootstrap] _show_dice_roll: iniciando")
-	UIManager.set_phase_text("Sorteo")
+	"""Lanza el Duelo de Dados D20 en 3D en tiempo real — al terminar llama _start_mulligan_phase()."""
+	print("[Bootstrap] _show_dice_roll: iniciando duelo D20 en 3D")
+	var loading_overlay := get_node_or_null("/root/MatchLoadingOverlay")
+	if loading_overlay:
+		loading_overlay.hide_loading()
+	UIManager.set_phase_text("Sorteo D20")
 
-	const DICE_FACES: Array = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-	var vp_size = _main.get_viewport().get_visible_rect().size
+	var dice_duel = DiceDuel3D.new()
+	_main.add_child(dice_duel)
 
-	var overlay = CanvasLayer.new()
-	overlay.layer = 60
-	_main.add_child(overlay)
-
-	var wrapper = Control.new()
-	wrapper.size = vp_size
-	wrapper.pivot_offset = vp_size / 2.0
-	overlay.add_child(wrapper)
-
-	var bg = ColorRect.new()
-	bg.size = vp_size
-	bg.color = Color(0.0, 0.0, 0.0, 0.88)
-	bg.mouse_filter = Control.MOUSE_FILTER_STOP
-	wrapper.add_child(bg)
-
-	var panel = Panel.new()
-	panel.size = Vector2(460, 340)
-	panel.position = (vp_size - panel.size) / 2.0
-	var ps = StyleBoxFlat.new()
-	ps.bg_color = Color(0.07, 0.06, 0.11, 0.97)
-	ps.border_color = Color(0.75, 0.55, 0.2, 1.0)
-	ps.set_border_width_all(3)
-	ps.set_corner_radius_all(14)
-	ps.shadow_color = Color(0.75, 0.55, 0.2, 0.45)
-	ps.shadow_size = 18
-	panel.add_theme_stylebox_override("panel", ps)
-	wrapper.add_child(panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.position = Vector2(18, 18)
-	vbox.size = panel.size - Vector2(36, 36)
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 18)
-	panel.add_child(vbox)
-
-	var title = Label.new()
-	title.text = "⚔  DUELO DE DADOS  ⚔"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 22)
-	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35, 1.0))
-	vbox.add_child(title)
-
-	var subtitle = Label.new()
-	subtitle.text = "¿Quién comienza la partida?"
-	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.add_theme_font_size_override("font_size", 13)
-	subtitle.add_theme_color_override("font_color", Color(0.65, 0.6, 0.55, 1.0))
-	vbox.add_child(subtitle)
-
-	var row = HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 55)
-	vbox.add_child(row)
-
-	var _make_die_col = func(label_text: String, color: Color) -> Array:
-		var col = VBoxContainer.new()
-		col.alignment = BoxContainer.ALIGNMENT_CENTER
-		col.add_theme_constant_override("separation", 6)
-		row.add_child(col)
-		var lbl = Label.new()
-		lbl.text = label_text
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.add_theme_font_size_override("font_size", 12)
-		lbl.add_theme_color_override("font_color", color)
-		col.add_child(lbl)
-		var die = Label.new()
-		die.text = "⚀"
-		die.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		die.add_theme_font_size_override("font_size", 60)
-		col.add_child(die)
-		var res = Label.new()
-		res.text = " "
-		res.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		res.add_theme_font_size_override("font_size", 18)
-		col.add_child(res)
-		return [die, res, lbl]
-
-	var p1_parts = _make_die_col.call("JUGADOR 1", Color(0.5, 0.72, 1.0, 1.0))
-	var die1: Label = p1_parts[0]; var res1: Label = p1_parts[1]; var lbl1: Label = p1_parts[2]
-
-	var vs = Label.new()
-	vs.text = "VS"
-	vs.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	vs.add_theme_font_size_override("font_size", 18)
-	vs.add_theme_color_override("font_color", Color(0.55, 0.5, 0.45, 1.0))
-	row.add_child(vs)
-
-	var p2_parts = _make_die_col.call("JUGADOR 2", Color(1.0, 0.5, 0.5, 1.0))
-	var die2: Label = p2_parts[0]; var res2: Label = p2_parts[1]; var lbl2: Label = p2_parts[2]
-
-	var winner_lbl = Label.new()
-	winner_lbl.text = ""
-	winner_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	winner_lbl.add_theme_font_size_override("font_size", 17)
-	winner_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35, 0.0))
-	vbox.add_child(winner_lbl)
-
-	var roll_interval = 0.07
-	var elapsed = 0.0
-	var roll_duration = 1.8
-	while elapsed < roll_duration:
-		die1.text = DICE_FACES[randi() % 6]
-		die2.text = DICE_FACES[randi() % 6]
-		await get_tree().create_timer(roll_interval).timeout
-		elapsed += roll_interval
-		if elapsed > roll_duration * 0.65:
-			roll_interval = minf(roll_interval * 1.18, 0.22)
-
-	var fp1 = 6
-	var fp2 = randi() % 5 + 1
-	die1.text = DICE_FACES[fp1 - 1]
-	die2.text = DICE_FACES[fp2 - 1]
-	res1.text = str(fp1)
-	res2.text = str(fp2)
-	_main._dice_winner = 0 if fp1 > fp2 else 1
-
-	if _main._dice_winner == 0:
-		lbl1.text = "✓ JUGADOR 1"
-		res1.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5, 1.0))
-		res2.add_theme_color_override("font_color", Color(0.45, 0.45, 0.45, 1.0))
-	else:
-		lbl2.text = "✓ JUGADOR 2"
-		res2.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5, 1.0))
-		res1.add_theme_color_override("font_color", Color(0.45, 0.45, 0.45, 1.0))
-
-	winner_lbl.text = "¡Jugador %d comienza la partida!" % (_main._dice_winner + 1)
-	var ft = create_tween()
-	ft.tween_property(winner_lbl, "theme_override_colors/font_color", Color(1.0, 0.85, 0.35, 1.0), 0.35)
-
-	await get_tree().create_timer(1.5).timeout
-	_prepare_game()
-
-	var exit_tween = create_tween()
-	exit_tween.set_parallel(true)
-	exit_tween.tween_property(wrapper, "modulate:a", 0.0, 0.5).set_ease(Tween.EASE_IN)
-	exit_tween.tween_property(wrapper, "scale", Vector2(0.8, 0.8), 0.5).set_ease(Tween.EASE_IN)
-	exit_tween.finished.connect(func():
-		overlay.queue_free()
-		print("[Bootstrap] Dados cerrados, iniciando mulligan")
-		await _main._start_mulligan_phase()
+	dice_duel.duel_completed.connect(func(winner_id: int):
+		_main._dice_winner = winner_id
+		print("[Bootstrap] Duelo D20 3D finalizado. Ganador: Jugador %d. Iniciando juego..." % (winner_id + 1))
+		_prepare_game()
+		await _main._mulligan_ctrl.start_mulligan_phase()
 	)

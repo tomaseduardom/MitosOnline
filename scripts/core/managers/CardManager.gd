@@ -50,6 +50,14 @@ var _zones: Dictionary = {
 	}
 }
 
+## "las cartas que estén o sean puestas en los Cementerios este turno pierden
+## su habilidad hasta tu próximo turno" (2026-08-30, Sable de Napoleón) —
+## mientras esté true, cualquier carta que entre a CUALQUIER Cementerio
+## (ver _append_to_cemetery()) queda marcada como silenciada también. Se
+## apaga sola al empezar el próximo turno (turno del rival), ver
+## silence_all_cemetery_cards().
+var _cemetery_silence_capture_active: bool = false
+
 # =============================================================================
 # INICIALIZACIÓN
 # =============================================================================
@@ -190,14 +198,26 @@ func draw_cards(player_id: int, count: int) -> Array:
 
 
 func add_to_deck_top(player_id: int, card_data: Dictionary) -> void:
-	"""Añade una carta al tope del mazo"""
-	_zones[player_id].deck.append(card_data)
+	"""Añade una carta al tope del mazo.
+
+	Convención real del tope (2026-08-30, corregido — estaba al revés): el
+	camino de robo que de verdad se usa en la partida es ZoneManager.
+	draw_card(), que hace _main.player_deck.pop_front() — el FRENTE del
+	array (índice 0) es el tope. _zones[player_id].deck es el MISMO array
+	que _main.player_deck (ver sync_from_main(): asignación directa, no una
+	copia), así que esta función tiene que insertar al frente para que
+	'tope' signifique lo mismo acá que en el robo real. draw_card() de este
+	mismo archivo (más arriba) usa pop_back() y NUNCA se llama desde
+	ningún lado — quedó con la convención vieja/incorrecta, no se tocó
+	porque no tiene ningún llamador real que arreglar."""
+	_zones[player_id].deck.insert(0, card_data)
 	_update_deck_visual(player_id)
 
 
 func add_to_deck_bottom(player_id: int, card_data: Dictionary) -> void:
-	"""Añade una carta al fondo del mazo"""
-	_zones[player_id].deck.insert(0, card_data)
+	"""Añade una carta al fondo del mazo (ver nota de convención en
+	add_to_deck_top() — fondo = el otro extremo del array real de robo)."""
+	_zones[player_id].deck.append(card_data)
 	_update_deck_visual(player_id)
 
 
@@ -205,6 +225,16 @@ func shuffle_deck(player_id: int) -> void:
 	"""Baraja el mazo de un jugador"""
 	_zones[player_id].deck.shuffle()
 	print("[CardManager] Mazo de jugador %d barajado" % player_id)
+
+
+func add_to_exile(player_id: int, card_data: Dictionary) -> void:
+	"""Añade datos de una carta directo al Destierro (2026-08-25) — para
+	efectos que la mandan ahí sin pasar por una carta en juego (p.ej. Rey de
+	Amarillo: busca en un Castillo y Destiérralas directo, sin llevárselas a
+	la mano primero)."""
+	card_data["esta_oculta"] = false
+	_zones[player_id].exile.append(card_data)
+	_emit_exile_changed(player_id)
 
 
 # =============================================================================
@@ -236,22 +266,77 @@ func discard_from_hand(player_id: int, card: Node) -> void:
 		# Guardar datos antes de destruir el nodo
 		var card_data = card.card_data.duplicate() if card.get("card_data") else {}
 		card_data["esta_oculta"] = false
-		_zones[player_id].cemetery.append(card_data)
+		_append_to_cemetery(player_id, card_data)
 
 		emit_signal("card_discarded", player_id, card_data)
 		emit_signal("zone_changed", card, Constants.Zone.MANO, Constants.Zone.CEMENTERIO, player_id)
 
 		_update_cemetery_visual(player_id)
+		_disconnect_card_interaction_signals(card)
 		card.queue_free()
 
 
 # =============================================================================
 # MOVIMIENTO DE CARTAS - CEMENTERIO
 # =============================================================================
+func _append_to_cemetery(player_id: int, card_data: Dictionary) -> void:
+	"""Choke point único para agregar una entrada a un Cementerio (2026-08-30)
+	— antes cada llamador hacía _zones[player_id].cemetery.append(card_data)
+	por su cuenta; se centraliza acá para que la 'captura' de Sable de
+	Napoleón (silenciar cartas que entren al Cementerio durante la ventana
+	activa) no dependa de tocar cada llamador por separado."""
+	if _cemetery_silence_capture_active:
+		card_data["_silenced_by_cemetery_effect"] = true
+	_zones[player_id].cemetery.append(card_data)
+
+
+func is_cemetery_card_silenced(card_data: Dictionary) -> bool:
+	"""'Pierde su habilidad' para una carta EN CEMENTERIO (2026-08-30, Sable
+	de Napoleón) — KeywordManager._silenced_cards es por instance_id de un
+	Node vivo, no aplica a datos de Cementerio (Dictionary puro), así que
+	esto vive acá, junto con el dato mismo."""
+	return card_data.get("_silenced_by_cemetery_effect", false)
+
+
+func silence_all_cemetery_cards(activator_player_id: int) -> void:
+	"""'Las cartas que estén o sean puestas en los Cementerios este turno
+	pierden su habilidad hasta tu próximo turno' (Sable de Napoleón,
+	2026-08-30). 'los Cementerios' sin posesivo = AMBOS (mismo criterio ya
+	confirmado para 'un Cementerio' de Miguel). Dos ventanas de tiempo
+	DISTINTAS:
+	  1) La CAPTURA de nuevas entradas dura 'este turno' — se apaga sola en
+	     cuanto empiece cualquier otro turno (CONNECT_ONE_SHOT, sin
+	     importar de quién sea: no podés volver a tu propio turno sin que
+	     pase el del rival primero).
+	  2) El SILENCIO en sí dura 'hasta tu próximo turno' (el de
+	     activator_player_id específicamente, no el del rival que viene
+	     primero) — se levanta recién cuando vuelva a empezar SU turno."""
+	for player_id in [0, 1]:
+		for card_data in _zones[player_id].cemetery:
+			card_data["_silenced_by_cemetery_effect"] = true
+	_cemetery_silence_capture_active = true
+
+	GameManager.turn_started.connect(
+		func(_p, _t): _cemetery_silence_capture_active = false,
+		CONNECT_ONE_SHOT
+	)
+
+	var clear_silence: Callable
+	clear_silence = func(started_player_id: int, _turn: int) -> void:
+		if started_player_id != activator_player_id:
+			return
+		for player_id in [0, 1]:
+			for card_data in _zones[player_id].cemetery:
+				card_data.erase("_silenced_by_cemetery_effect")
+		if GameManager.turn_started.is_connected(clear_silence):
+			GameManager.turn_started.disconnect(clear_silence)
+	GameManager.turn_started.connect(clear_silence)
+
+
 func add_to_cemetery(player_id: int, card_data: Dictionary) -> void:
 	"""Añade datos de carta al cementerio (desde mazo o efecto)"""
 	card_data["esta_oculta"] = false
-	_zones[player_id].cemetery.append(card_data)
+	_append_to_cemetery(player_id, card_data)
 	_update_cemetery_visual(player_id)
 
 
@@ -261,12 +346,124 @@ func add_card_to_cemetery(player_id: int, card: Node) -> void:
 	"""
 	var card_data = card.card_data.duplicate() if card.get("card_data") else {}
 	card_data["esta_oculta"] = false
-	_zones[player_id].cemetery.append(card_data)
+	_append_to_cemetery(player_id, card_data)
 
 	emit_signal("card_destroyed", player_id, card)
 	_update_cemetery_visual(player_id)
 
+	_disconnect_card_interaction_signals(card)
 	card.queue_free()
+
+
+func _move_equipped_weapons_with(player_id: int, card: Node, mover: Callable) -> void:
+	"""El Arma sigue a su portador al mismo destino (DAR — no queda suelta en
+	juego). Se llama ANTES de queue_free() en destroy_card()/exile_card(),
+	pasándose a sí misma (mover) como la función a aplicar a cada Arma.
+	Excepción (2026-08-30, p.ej. Aho: 'Cuando el portador fuera a salir del
+	juego, súbela a tu mano o cámbiala de portador') — un Arma con ese texto
+	NO sigue al portador, el jugador elige entre las dos alternativas."""
+	if not card.get("equipped_weapons"):
+		return
+	for weapon in card.equipped_weapons.duplicate():
+		if not is_instance_valid(weapon):
+			continue
+		if player_id == 0 and _weapon_survives_wielder_death(weapon):
+			await _resolve_weapon_survives_wielder(weapon)
+			continue
+		await mover.call(player_id, weapon)
+
+
+func _weapon_survives_wielder_death(weapon: Node) -> bool:
+	"""2026-08-31: se ancla también en 'bela a tu mano' (sin la 'sú' acentuada
+	inicial) — la API de cartas puede traer el texto con la doble-
+	codificación UTF-8→Latin-1→UTF-8 típica en vocales acentuadas (mismo
+	problema ya conocido y corregido aparte en GoldManager._fix_mojibake(),
+	p.ej. 'TalismÃ¡n' en vez de 'Talismán'); si 'súbela' llega corrupto acá
+	el check anterior (que exigía el acento exacto) fallaba en silencio y
+	Aho terminaba siguiendo a su portador al Cementerio/Destierro en vez de
+	ofrecer la elección real."""
+	var text: String = str(weapon.get("card_ability")) if weapon.get("card_ability") != null else ""
+	var lower := text.to_lower()
+	return "portador fuera a salir del juego" in lower and "bela a tu mano" in lower
+
+
+func _resolve_weapon_survives_wielder(weapon: Node) -> void:
+	"""'Cuando el portador fuera a salir del juego, súbela a tu mano o
+	cámbiala de portador' (2026-08-30, p.ej. Aho) — reemplaza la regla por
+	defecto de que un Arma sigue a su portador al Cementerio/Destierro.
+	Solo el jugador humano elige por ahora (mover_placeholder del bot, ver
+	llamador: para el rival se sigue aplicando la regla vieja hasta que
+	haya IA para esta decisión)."""
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return
+
+	# Popup mínimo de 2 botones (mismo patrón que TargetedEffectExecutor.
+	# _choose_search_zone_owner()) — si no hay otro Aliado libre para
+	# portarla (GoldManager._get_eligible_weapon_wielders(), ya excluye
+	# solo el portador que se está muriendo porque ÉL SÍ 'tiene un Arma' en
+	# este instante — todavía no se soltó — y a cualquier otro que ya porte
+	# una distinta), la única alternativa real es subirla a la mano.
+	var other_wielders: Array = []
+	if main._gold_manager and main._gold_manager.has_method("_get_eligible_weapon_wielders"):
+		other_wielders = main._gold_manager._get_eligible_weapon_wielders()
+
+	var to_hand := true
+	if not other_wielders.is_empty():
+		to_hand = await SelectionManager.await_two_choice(
+			main, "%s: ¿Subir a tu mano o cambiar de portador?" % str(weapon.get("card_name")),
+			"Subir a la mano", "Cambiar de portador")
+
+	if to_hand:
+		var weapon_parent = weapon.get_parent()
+		if weapon_parent:
+			weapon_parent.remove_child(weapon)
+		weapon.can_interact = true
+		weapon.scale = Vector2.ONE
+		weapon.base_scale = Vector2.ONE
+		weapon.z_index = 0
+		weapon.original_z_index = 0
+		weapon.set_zone(Constants.Zone.MANO)
+		main.player_hand.add_card(weapon)
+		return
+
+	var new_wielder: Node = null
+	if main._card_interaction:
+		var filter := func(c: Node) -> bool:
+			return c in other_wielders
+		new_wielder = await main._card_interaction.await_target(
+			"Elige qué Aliado porta %s ahora" % str(weapon.get("card_name")), filter)
+	if not new_wielder or not is_instance_valid(new_wielder):
+		# Canceló sin elegir — no queda otra que subirla a la mano igual,
+		# no puede quedar suelta en juego sin portador (DAR).
+		await _resolve_weapon_survives_wielder(weapon)
+		return
+	if main._gold_manager and main._gold_manager.has_method("_equip_weapon"):
+		await main._gold_manager._equip_weapon(weapon, new_wielder)
+
+
+func _disconnect_card_interaction_signals(card: Node) -> void:
+	"""Desconecta TODAS las conexiones de las señales de interacción de una
+	carta antes de queue_free() (2026-08-29) — sin esto, un hover/click que
+	sigue apuntando al nodo después de liberarlo tira 'Invalid access...
+	on a base object of type previously freed' al tocar .modulate en el
+	próximo evento de mouse (reportado con Don de Amma desterrándose a sí
+	mismo desde su Reserva). HandManager.remove_card() ya hacía esta
+	desconexión para cartas en la MANO, pero destroy_card()/exile_card()
+	acá abajo son el camino real de TODA destrucción/destierro sin
+	GameBoard (siempre null en este proyecto) — cartas en Reserva/Oro
+	Pagado/líneas de juego, conectadas por Main._connect_card_signals(),
+	nunca pasaban por esa limpieza. Desconecta cualquier conexión existente
+	sin asumir quién la hizo (Main, HandManager, DynamicHand, MulliganHand,
+	SelectionManager conectan las mismas 4 señales cada uno en su propio
+	contexto)."""
+	if not is_instance_valid(card):
+		return
+	for signal_name in ["card_hovered", "card_unhovered", "card_clicked", "card_double_clicked"]:
+		if not card.has_signal(signal_name):
+			continue
+		for conn in card.get_signal_connection_list(signal_name):
+			card.disconnect(signal_name, conn.callable)
 
 
 func destroy_card(player_id: int, card: Node) -> void:
@@ -275,6 +472,8 @@ func destroy_card(player_id: int, card: Node) -> void:
 	Si la carta fue exhumada (is_exhumed = true), va al destierro.
 	Si no fue exhumada, va al cementerio normalmente.
 	"""
+	await _move_equipped_weapons_with(player_id, card, destroy_card)
+
 	var card_data = card.card_data.duplicate() if card.get("card_data") else {}
 
 	# Cartas exhumadas van al destierro, no al cementerio
@@ -285,11 +484,14 @@ func destroy_card(player_id: int, card: Node) -> void:
 		_emit_exile_changed(player_id)
 		print("[CardManager] Carta exhumada '%s' desterrada (no vuelve al cementerio)" % card_data.get("nombre", "?"))
 	else:
-		_zones[player_id].cemetery.append(card_data)
+		_append_to_cemetery(player_id, card_data)
 		emit_signal("card_destroyed", player_id, card)
 		_update_cemetery_visual(player_id)
 
+	_disconnect_card_interaction_signals(card)
 	card.queue_free()
+	if _main and _main.get("_zone_manager") != null:
+		_main._zone_manager.compact_all_fields(true)
 
 
 func remove_from_cemetery(player_id: int, index: int = -1) -> Dictionary:
@@ -323,13 +525,18 @@ func remove_from_cemetery(player_id: int, index: int = -1) -> Dictionary:
 # =============================================================================
 func exile_card(player_id: int, card: Node) -> void:
 	"""Destierra una carta (la remueve del juego)"""
+	await _move_equipped_weapons_with(player_id, card, exile_card)
+
 	var card_data = card.card_data.duplicate() if card.get("card_data") else {}
 	card_data["esta_oculta"] = false
 	_zones[player_id].exile.append(card_data)
 
 	emit_signal("card_exiled", player_id, card)
 	_emit_exile_changed(player_id)
+	_disconnect_card_interaction_signals(card)
 	card.queue_free()
+	if _main and _main.get("_zone_manager") != null:
+		_main._zone_manager.compact_all_fields(true)
 
 
 func exile_from_cemetery(player_id: int, index: int = -1) -> Dictionary:
@@ -394,9 +601,14 @@ func take_damage(player_id: int, amount: int) -> Dictionary:
 			result.deck_empty = true
 			break
 
-		var card_data = deck.pop_back()
+		# pop_front() = tope real (2026-08-30, corregido — antes pop_back()
+		# tomaba del FONDO; el camino de robo que de verdad usa la partida,
+		# ZoneManager.draw_card(), confirma que el FRENTE del array es el
+		# tope). El daño de combate debe consumir cartas del tope del
+		# Castillo, no del fondo.
+		var card_data = deck.pop_front()
 		card_data["esta_oculta"] = false
-		_zones[player_id].cemetery.append(card_data)
+		_append_to_cemetery(player_id, card_data)
 		result.cards.append(card_data)
 		result.actual += 1
 
@@ -419,10 +631,13 @@ func take_damage(player_id: int, amount: int) -> Dictionary:
 	])
 
 	# Log parcial si no se pudo hacer todo el daño
+	# (2026-08-28, "módulos gordos" punto 1): 'log_partial_damage' espera
+	# target_name: String como 3er parámetro — se pasaba player_id (int)
+	# directo, lo que revienta en tiempo de ejecución (error de tipo) cada
+	# vez que este log se dispara. Se corrige con el mismo formato usado en
+	# DamageManager._log_partial_damage().
 	if result.actual < result.requested:
-		var combat_log = get_node_or_null("/root/CombatLog")
-		if combat_log and combat_log.has_method("log_partial_damage"):
-			combat_log.log_partial_damage(result.requested, result.actual, player_id)
+		CombatLog.log_partial_damage(result.requested, result.actual, "Jugador %d" % (player_id + 1))
 
 	return result
 

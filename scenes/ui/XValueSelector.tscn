@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://is6kfo8bvpcr"]
 
-[ext_resource type="Script" path="res://scripts/ui/XValueSelector.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/ui/selection/XValueSelector.gd" id="1_script"]
 
 [node name="XValueSelector" type="Control"]
 layout_mode = 3
