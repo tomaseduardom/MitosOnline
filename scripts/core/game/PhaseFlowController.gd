@@ -87,6 +87,8 @@ func _on_phase_state_machine(new_phase: Constants.Phase) -> void:
 				await _main._card_interaction.unmark_attackers(atk_line.get_children().duplicate())
 			if GameManager.active_player_id == 0:
 				await _main._gold_manager._reset_gold()
+			else:
+				await _main._easy_bot.reset_gold()
 			# "En tu Agrupación" (2026-08-30, p.ej. Espada del Juicio) —
 			# mismo patrón que resolve_turn_end_triggers() para Fase Final.
 			await TriggerSystem.resolve_agrupacion_triggers(GameManager.active_player_id)
@@ -94,11 +96,21 @@ func _on_phase_state_machine(new_phase: Constants.Phase) -> void:
 		Constants.Phase.VIGILIA:
 			_main._game_hud.show_phase_announcement("VIGILIA")
 			TurnManager._reset_oro_tracking()
+			# "En tu Vigilia" (2026-09-03, p.ej. Mariano Osorio) — mismo
+			# patrón que Agrupación/Fase Final.
+			await TriggerSystem.resolve_vigilia_triggers(GameManager.active_player_id)
 			if _main._card_inspector:
 				_main._card_inspector.refresh_activatable_glows()
+			if GameManager.active_player_id == 1:
+				await _main._easy_bot.take_vigilia_actions()
 
 		Constants.Phase.ATAQUE:
 			_main._game_hud.show_phase_announcement("BATALLA MITOLÓGICA")
+			# "Al comienzo del Ataque" (2026-09-04, p.ej. almirante akari) —
+			# mismo patrón que Agrupación/Vigilia/Fase Final.
+			await TriggerSystem.resolve_ataque_triggers(GameManager.active_player_id)
+			if GameManager.active_player_id == 1:
+				await _main._easy_bot.take_ataque_actions()
 
 		Constants.Phase.BLOQUEO:
 			_main._game_hud.show_phase_announcement("BLOQUEO")
@@ -111,12 +123,12 @@ func _on_phase_state_machine(new_phase: Constants.Phase) -> void:
 
 		Constants.Phase.FINAL:
 			_main._game_hud.show_phase_announcement("FASE FINAL")
+			if GameManager.active_player_id == 1:
+				await _resolve_fase_final(1)
 
 
 func _on_turn_started(player_id: int, turn_number: int) -> void:
 	UIManager.announce_turn(player_id, turn_number)
-	if player_id == 1:
-		_opponent_auto_pass()
 
 
 func _on_priority_changed_bot_autopass(player_id: int) -> void:
@@ -136,6 +148,35 @@ func _on_priority_changed_bot_autopass(player_id: int) -> void:
 		PriorityManager.pass_priority()
 	else:
 		print("[DIAG] bot_autopass: tras esperar, ya no aplica — priority_window_active=%s current_priority_player=%d" % [PriorityManager.priority_window_active, PriorityManager.current_priority_player])
+		_try_recover_stuck_phase_priority_window()
+
+
+func _try_recover_stuck_phase_priority_window() -> bool:
+	"""Reabre la ventana de prioridad de FASE (Guerra de Talismanes/Bloqueo)
+	si quedó clobbereada (2026-09-04, bug reportado: 'se queda estancado
+	en guerra de talismanes') — una ventana anidada de Paso D
+	(StackStepResolver._execute_step_d(), que abre su PROPIA
+	RESPONSE_WINDOW sobre la misma instancia de PriorityManager cuando algo
+	pasa por la pila del ActionPipeline durante la fase) a veces no la
+	restaura al cerrar, dejando priority_window_active=false sin que nadie
+	vuelva a abrir nada — ni el botón ¿Paso? (gateado a
+	priority_window_active) con qué reaccionar. Extraído a función propia
+	(2026-09-06, bug reportado: el mismo estancamiento en Bloqueo, esta vez
+	SIN pasar por el auto-pase del bot — el botón ¿Paso? del humano caía
+	directo en el aviso 'Sin ventana de prioridad activa' sin intentar
+	recuperarse) para poder llamarla también desde ahí. Returns true si
+	reabrió una ventana."""
+	var phase = GameManager.current_phase
+	if GameManager.is_game_active and not PriorityManager.priority_window_active \
+			and not ActionPipeline.is_stack_processing() and not TriggerSystem.awaiting_response \
+			and phase in [Constants.Phase.GUERRA_TALISMANES, Constants.Phase.BLOQUEO]:
+		print("[DIAG] recuperación: reabriendo ventana de prioridad para %s" % Constants.PHASE_NAMES.get(phase, "?"))
+		PriorityManager.start_priority_window(
+			PriorityManager.PriorityContext.GUERRA_TALISMANES if phase == Constants.Phase.GUERRA_TALISMANES
+			else PriorityManager.PriorityContext.BLOCK_DECLARATION
+		)
+		return true
+	return false
 
 
 func _on_priority_changed_glow(player_id: int) -> void:
@@ -150,6 +191,12 @@ func _on_priority_changed_glow(player_id: int) -> void:
 	el juego parecía trabado. Si la prioridad pasa al oponente (bot) dentro
 	de la misma ventana, el brillo se apaga hasta que vuelva a ser el turno
 	del humano de actuar."""
+	# La visibilidad del botón depende de quién tiene la prioridad AHORA
+	# (ver update_paso_button_state(), 2026-09-03) — no solo se recalcula
+	# al cambiar de fase, también hay que refrescarla cada vez que la
+	# prioridad cambia de jugador DENTRO de la misma fase (p.ej. el bot
+	# pasa en Guerra de Talismanes y la prioridad vuelve al humano).
+	_main._game_hud.update_paso_button_state()
 	if player_id == 0:
 		_main._game_hud.start_paso_glow()
 	else:
@@ -159,20 +206,6 @@ func _on_priority_changed_glow(player_id: int) -> void:
 func _on_priority_window_closed_glow() -> void:
 	"""Apaga el brillo del botón ¿Paso? al cerrarse la ventana de prioridad."""
 	_main._game_hud.stop_paso_glow()
-
-
-func _opponent_auto_pass() -> void:
-	"""IA stub: espera a que la fase FINAL esté activa y termina el turno del oponente.
-	Comparte _resolve_fase_final() con el jugador humano para que robo y descarte
-	por límite de mano no diverjan entre los dos caminos (ver auditoría, hallazgo 1)."""
-	await get_tree().create_timer(1.2).timeout
-	if not GameManager.is_game_active or GameManager.active_player_id != 1:
-		return
-	GameManager.advance_to_phase(Constants.Phase.FINAL)
-	await get_tree().create_timer(0.6).timeout
-	if GameManager.active_player_id == 1:
-		_main._update_debug("Oponente termina su turno")
-		await _resolve_fase_final(1)
 
 
 # =============================================================================
@@ -325,7 +358,10 @@ func _on_paso_pressed() -> void:
 
 		Constants.Phase.GUERRA_TALISMANES, Constants.Phase.BLOQUEO:
 			push_warning("[PhaseFlow] ¿Paso? en %s sin ventana activa" % Constants.PHASE_NAMES.get(phase, "?"))
-			_main._update_debug("Sin ventana de prioridad activa")
+			if _try_recover_stuck_phase_priority_window():
+				_main._update_debug("Ventana de prioridad recuperada — pulsa ¿Paso? de nuevo")
+			else:
+				_main._update_debug("Sin ventana de prioridad activa")
 
 		_:
 			_main._update_debug("Paso presionado en fase %s" % Constants.PHASE_NAMES.get(phase, "?"))
@@ -345,6 +381,14 @@ func _resolve_fase_final(player_id: int) -> void:
 	# dispara al ENTRAR a la fase, antes del robo/límite de mano normales
 	# (mismo orden que cualquier trigger de entrada de fase en el DAR).
 	await TriggerSystem.resolve_turn_end_triggers(player_id)
+
+	# Efectos suspendidos de un solo uso agendados para ESTA Fase Final en
+	# particular (2026-09-06, p.ej. Fisión Nuclear: 'En la próxima Fase
+	# Final oponente, Baraja una carta de coste 2 o menos o Roba dos
+	# cartas') — distinto de resolve_turn_end_triggers() de arriba, que
+	# consulta cartas EN JUEGO; esto resuelve algo que quedó pendiente de
+	# un Talismán ya Desterrado hace rato.
+	await EffectController.consume_scheduled_final_phase_effects(player_id)
 
 	if GameManager.is_first_turn:
 		_main._update_debug("Fase Final: primer turno — sin robo")

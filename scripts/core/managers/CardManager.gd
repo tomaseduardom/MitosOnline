@@ -306,7 +306,7 @@ func silence_all_cemetery_cards(activator_player_id: int) -> void:
 	DISTINTAS:
 	  1) La CAPTURA de nuevas entradas dura 'este turno' — se apaga sola en
 	     cuanto empiece cualquier otro turno (CONNECT_ONE_SHOT, sin
-	     importar de quién sea: no podés volver a tu propio turno sin que
+	     importar de quién sea: no puedes volver a tu propio turno sin que
 	     pase el del rival primero).
 	  2) El SILENCIO en sí dura 'hasta tu próximo turno' (el de
 	     activator_player_id específicamente, no el del rival que viene

@@ -81,6 +81,16 @@ var _silenced_cards: Dictionary = {}
 ## vivo y en juego (auto-expira solo cuando el que nombró sale de juego).
 var _named_ability_locks: Dictionary = {}
 
+## Bloqueo de habilidad de UNA carta puntual, mientras una fuente concreta
+## siga en juego (2026-09-03, p.ej. Kuchiku Kan: "una carta pierda su
+## habilidad... mientras este Aliado esté en juego") — análogo instance-
+## based de _named_ability_locks (mismo criterio de auto-expiración
+## perezosa), a diferencia de silence_card(..., "permanent") que es
+## indefinido de verdad y no debe usarse acá (rompería cartas como
+## Convertir/_execute_targeted_silence, que SÍ son permanentes sin
+## condición). {card_instance_id: [source_node, ...]}
+var _instance_ability_locks: Dictionary = {}
+
 
 ## Cache de keywords parseados por carta {card_instance_id: Array}
 var _parsed_cache: Dictionary = {}
@@ -91,6 +101,26 @@ var _parsed_cache: Dictionary = {}
 ## Array[Node] — sin unregister explícito, se auto-limpia comparando
 ## is_instance_valid()/is_in_play() en cada consulta.
 var _weapon_wielder_silence_immunity_sources: Array = []
+
+## 'Tus Aliados... no pueden perder su habilidad' SIN calificador de Arma
+## (2026-09-04, p.ej. Abu Simbel) — versión más amplia de
+## _weapon_wielder_silence_immunity_sources, protege a TODOS los Aliados
+## del controlador de la fuente, no solo a los que porten Arma.
+var _all_allies_silence_immunity_sources: Array = []
+
+## '...No puede perder su habilidad' EN SINGULAR referido a sí misma
+## (2026-09-04, p.ej. lagrima del dragon: 'Oro Inicial. Indesterrable. No
+## puede perder su habilidad.') — a diferencia de las dos listas de arriba
+## (que protegen a TERCEROS mientras 'source' siga en juego), acá 'source'
+## se protege a SÍ MISMA.
+var _self_silence_immunity_sources: Array = []
+
+## 'Si está en tu Reserva, las cartas que controles no pueden perder su
+## habilidad...' (2026-09-04, p.ej. Terminal P-12) — protege TODAS las
+## cartas del controlador de 'source' (sin restringir a Aliados, a
+## diferencia de _all_allies_silence_immunity_sources), pero SOLO mientras
+## 'source' esté específicamente en Reserva de Oro (no en juego en general).
+var _reserva_conditional_full_silence_immunity_sources: Array = []
 
 
 func _ready() -> void:
@@ -427,33 +457,215 @@ func _is_protected_from_silence_by_weapon(card: Node) -> bool:
 	return protected_by_weapon
 
 
+func register_all_allies_silence_immunity(source: Node) -> void:
+	"""'Tus Aliados... no pueden perder su habilidad' SIN calificador de
+	Arma (2026-09-04, p.ej. Abu Simbel) — mientras 'source' siga en juego,
+	protege de silence_card() a TODOS los Aliados del MISMO controlador de
+	'source' (a diferencia de register_weapon_wielder_silence_immunity(),
+	que solo protege a los que porten Arma)."""
+	if not is_instance_valid(source):
+		return
+	if source not in _all_allies_silence_immunity_sources:
+		_all_allies_silence_immunity_sources.append(source)
+
+
+func _is_protected_from_silence_by_all_allies_source(card: Node) -> bool:
+	"""Consulta acumulativa de register_all_allies_silence_immunity() —
+	auto-limpia fuentes inválidas/fuera de juego en el camino."""
+	if not is_instance_valid(card) or card.get("card_type") != Constants.CardType.ALIADO:
+		return false
+	var card_controller: int = card.controller_id if card.get("controller_id") != null else -1
+	var still_valid: Array = []
+	var protected_generally := false
+	for source in _all_allies_silence_immunity_sources:
+		if not is_instance_valid(source) or not source.is_in_play():
+			continue
+		still_valid.append(source)
+		var source_controller: int = source.controller_id if source.get("controller_id") != null else -2
+		if source_controller == card_controller:
+			protected_generally = true
+	_all_allies_silence_immunity_sources = still_valid
+	return protected_generally
+
+
+## 'Tus Armas no pueden perder su habilidad' (2026-09-04, p.ej. skofnung) —
+## mismo criterio que _all_allies_silence_immunity_sources, pero para Armas.
+var _all_weapons_silence_immunity_sources: Array = []
+
+
+func register_all_weapons_silence_immunity(source: Node) -> void:
+	"""'Tus Armas... no pueden perder su habilidad' (2026-09-04, p.ej.
+	skofnung) — mientras 'source' siga en juego, protege de silence_card()
+	a TODAS las Armas del MISMO controlador de 'source'."""
+	if not is_instance_valid(source):
+		return
+	if source not in _all_weapons_silence_immunity_sources:
+		_all_weapons_silence_immunity_sources.append(source)
+
+
+func _is_protected_from_silence_by_all_weapons_source(card: Node) -> bool:
+	"""Consulta acumulativa de register_all_weapons_silence_immunity()."""
+	if not is_instance_valid(card) or card.get("card_type") != Constants.CardType.ARMA:
+		return false
+	var card_controller: int = card.controller_id if card.get("controller_id") != null else -1
+	var still_valid: Array = []
+	var protected_generally := false
+	for source in _all_weapons_silence_immunity_sources:
+		if not is_instance_valid(source) or not source.is_in_play():
+			continue
+		still_valid.append(source)
+		var source_controller: int = source.controller_id if source.get("controller_id") != null else -2
+		if source_controller == card_controller:
+			protected_generally = true
+	_all_weapons_silence_immunity_sources = still_valid
+	return protected_generally
+
+
+func register_self_silence_immunity(source: Node) -> void:
+	"""'No puede perder su habilidad' en singular, referido a la propia
+	carta (2026-09-04, p.ej. lagrima del dragon)."""
+	if not is_instance_valid(source):
+		return
+	if source not in _self_silence_immunity_sources:
+		_self_silence_immunity_sources.append(source)
+
+
+func _is_protected_from_silence_by_self(card: Node) -> bool:
+	"""Consulta de register_self_silence_immunity() — auto-limpia fuentes
+	inválidas/fuera de juego en el camino."""
+	if not is_instance_valid(card):
+		return false
+	var still_valid: Array = []
+	var protected_self := false
+	for source in _self_silence_immunity_sources:
+		if not is_instance_valid(source) or not source.is_in_play():
+			continue
+		still_valid.append(source)
+		if source == card:
+			protected_self = true
+	_self_silence_immunity_sources = still_valid
+	return protected_self
+
+
+func register_reserva_conditional_full_silence_immunity(source: Node) -> void:
+	"""'Si está en tu Reserva, las cartas que controles no pueden perder su
+	habilidad...' (2026-09-04, p.ej. Terminal P-12) — protege TODAS las
+	cartas del mismo controlador de 'source' (no solo Aliados), pero solo
+	mientras 'source' esté en Constants.Zone.RESERVA_ORO específicamente."""
+	if not is_instance_valid(source):
+		return
+	if source not in _reserva_conditional_full_silence_immunity_sources:
+		_reserva_conditional_full_silence_immunity_sources.append(source)
+
+
+func _is_protected_from_silence_by_reserva_source(card: Node) -> bool:
+	"""Consulta de register_reserva_conditional_full_silence_immunity() —
+	auto-limpia fuentes inválidas/fuera de la Reserva en el camino."""
+	if not is_instance_valid(card):
+		return false
+	var card_controller: int = card.controller_id if card.get("controller_id") != null else -1
+	var still_valid: Array = []
+	var protected_generally := false
+	for source in _reserva_conditional_full_silence_immunity_sources:
+		if not is_instance_valid(source) or source.get("current_zone") != Constants.Zone.RESERVA_ORO:
+			continue
+		still_valid.append(source)
+		var source_controller: int = source.controller_id if source.get("controller_id") != null else -2
+		if source_controller == card_controller:
+			protected_generally = true
+	_reserva_conditional_full_silence_immunity_sources = still_valid
+	return protected_generally
+
+
 func silence_card(card: Node, source: Node = null, duration: String = "permanent") -> void:
 	"""Silencia una carta: pierde todas sus keywords (vía remove_keyword, así
 	respeta la misma limpieza por duración/salida de juego que cualquier otra
 	remoción) y deja de disparar sus habilidades activadas/disparadas — eso lo
 	filtra TriggerSystem._check_trigger_conditions() consultando is_silenced().
 	Respeta la protección de 'Aliados que porten Arma no pueden perder su
-	habilidad' (2026-08-30, Manuel Bulnes) y la de 'prevenir que una carta
-	sea afectada por un efecto oponente' (2026-08-30, Estaca) — si
-	cualquiera de las dos aplica, no hace nada."""
+	habilidad' (2026-08-30, Manuel Bulnes), 'Tus Aliados... no pueden perder
+	su habilidad' sin calificador (2026-09-04, Abu Simbel) y la de 'prevenir
+	que una carta sea afectada por un efecto oponente' (2026-08-30, Estaca)
+	— si cualquiera aplica, no hace nada."""
 	if not is_instance_valid(card):
 		return
 	if _is_protected_from_silence_by_weapon(card):
 		print("[KeywordManager] %s no pierde su habilidad — protegido por porta Arma" % _get_card_name(card))
 		return
-	if EffectController.try_consume_opponent_effect_prevention(card, source):
+	if _is_protected_from_silence_by_all_allies_source(card):
+		print("[KeywordManager] %s no pierde su habilidad — protección de Aliados" % _get_card_name(card))
+		return
+	if _is_protected_from_silence_by_all_weapons_source(card):
+		print("[KeywordManager] %s no pierde su habilidad — protección de Armas" % _get_card_name(card))
+		return
+	if _is_protected_from_silence_by_self(card):
+		print("[KeywordManager] %s no pierde su habilidad — protección propia" % _get_card_name(card))
+		return
+	if _is_protected_from_silence_by_reserva_source(card):
+		print("[KeywordManager] %s no pierde su habilidad — protección de Terminal P-12 en Reserva" % _get_card_name(card))
+		return
+	# Prevención reactiva real (2026-09-09 — Estaca, tag "silence"): los
+	# ~20 llamadores de silence_card() ya se actualizaron con 'await' para
+	# soportar esto (a pedido del usuario).
+	if await EffectController.offer_prevention(card, source, "silence"):
 		return
 	var card_id = card.get_instance_id()
 	if not _silenced_cards.has(card_id):
 		_silenced_cards[card_id] = []
 	_silenced_cards[card_id].append({"source": source, "duration": duration})
+	# Solo los keywords que la carta REALMENTE tiene (2026-09-04, bug
+	# reportado: silenciar un Oro base imprimía 'perdió FURIA'/'perdió
+	# INDESTRUCTIBLE'/etc. para los ~8 keywords del juego enteros, sin
+	# importar si la carta los tenía o no — puro ruido de debug engañoso,
+	# no afectaba is_silenced() en sí (que solo mira si hay ENTRADA en
+	# _silenced_cards, no cuántos keywords se sacaron).
 	for keyword in Constants.Keyword.values():
-		remove_keyword(card, keyword, source, duration)
+		if has_keyword(card, keyword):
+			remove_keyword(card, keyword, source, duration)
 	print("[KeywordManager] %s fue silenciada (fuente: %s)" % [
 		_get_card_name(card), _get_card_name(source) if source else "efecto"
 	])
 	if card.has_method("_refresh_disabled_rotation"):
 		card._refresh_disabled_rotation()
+
+
+## 'Los Oros oponentes pierden su habilidad' (2026-09-06, p.ej. Daikaiju
+## Furioso) — a diferencia de _silenced_cards (silencio puntual ya
+## resuelto), esto es una condición CONTINUA: cualquier Oro rival del
+## controlador de 'source', presente o futuro, mientras 'source' siga en
+## juego (mismo criterio de auto-limpieza perezosa que _named_ability_locks).
+var _opponent_type_silence_sources: Array = []
+
+func register_opponent_type_silence(source: Node, card_type: int) -> void:
+	if not is_instance_valid(source):
+		return
+	_opponent_type_silence_sources.append({"source": source, "card_type": card_type})
+
+
+func _is_silenced_by_opponent_type_source(card: Node) -> bool:
+	if not is_instance_valid(card):
+		return false
+	var card_type: int = card.get("card_type") if card.get("card_type") != null else -1
+	var card_controller: int = card.controller_id if card.get("controller_id") != null else -1
+	var still_valid: Array = []
+	var silenced := false
+	for entry in _opponent_type_silence_sources:
+		var source = entry.get("source")
+		if not is_instance_valid(source) or not _is_card_in_play_generic(source):
+			continue
+		still_valid.append(entry)
+		if entry.get("card_type") != card_type:
+			continue
+		var source_controller: int = source.controller_id if source.get("controller_id") != null else -2
+		if source_controller != card_controller:
+			silenced = true
+	_opponent_type_silence_sources = still_valid
+	return silenced
+
+
+func _is_card_in_play_generic(card: Node) -> bool:
+	var zone = card.get("current_zone")
+	return zone != null and zone in Constants.ZONES_IN_PLAY
 
 
 func is_silenced(card: Node) -> bool:
@@ -466,6 +678,10 @@ func is_silenced(card: Node) -> bool:
 		return false
 	var entries = _silenced_cards.get(card.get_instance_id(), [])
 	if not entries.is_empty():
+		return true
+	if is_instance_locked(card):
+		return true
+	if _is_silenced_by_opponent_type_source(card):
 		return true
 	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else ""
 	if card_name.is_empty():
@@ -514,6 +730,52 @@ func is_name_locked(card_name: String) -> bool:
 			_named_ability_locks.erase(key)
 		else:
 			_named_ability_locks[key] = still_valid
+	return any_active
+
+
+func lock_ability_by_instance(card: Node, source: Node) -> void:
+	"""Registra que ESTA carta puntual (no todas las copias del nombre,
+	ver lock_ability_by_name) pierde su habilidad mientras 'source' siga
+	vivo y en juego (2026-09-03, DAR 'pierda su habilidad... mientras
+	[esta carta] esté en juego', p.ej. Kuchiku Kan). Sin unregister
+	explícito: is_instance_locked() descarta solo las fuentes que ya no
+	son válidas, mismo criterio que is_name_locked()."""
+	if not is_instance_valid(card) or not is_instance_valid(source):
+		return
+	var key := card.get_instance_id()
+	if not _instance_ability_locks.has(key):
+		_instance_ability_locks[key] = []
+	_instance_ability_locks[key].append(source)
+	print("[KeywordManager] %s pierde su habilidad (fuente: %s, mientras esté en juego)" % [
+		_get_card_name(card), _get_card_name(source)
+	])
+
+
+func is_instance_locked(card: Node) -> bool:
+	"""Verifica si esta carta puntual está bloqueada por algún
+	lock_ability_by_instance() todavía vigente — descarta en el camino las
+	fuentes inválidas o que ya salieron de juego (auto-limpieza perezosa)."""
+	if not is_instance_valid(card):
+		return false
+	var key := card.get_instance_id()
+	if not _instance_ability_locks.has(key):
+		return false
+	var sources: Array = _instance_ability_locks[key]
+	var still_valid: Array = []
+	var any_active := false
+	for source in sources:
+		if not is_instance_valid(source):
+			continue
+		var zone = source.get("current_zone")
+		if zone != null and zone not in Constants.ZONES_IN_PLAY:
+			continue
+		still_valid.append(source)
+		any_active = true
+	if still_valid.size() != sources.size():
+		if still_valid.is_empty():
+			_instance_ability_locks.erase(key)
+		else:
+			_instance_ability_locks[key] = still_valid
 	return any_active
 
 

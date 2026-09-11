@@ -48,36 +48,48 @@ func _setup_styles() -> void:
 		debug_panel.visible = false
 
 	var mulligan_keep_style = StyleBoxFlat.new()
-	mulligan_keep_style.bg_color = Color(0.10, 0.28, 0.16, 0.95)
-	mulligan_keep_style.border_color = Color(0.4, 0.8, 0.5, 1.0)
+	mulligan_keep_style.bg_color = Color(0.06, 0.22, 0.12, 0.95)
+	mulligan_keep_style.border_color = Color(0.40, 0.85, 0.50, 0.90)
 	mulligan_keep_style.set_border_width_all(2)
 	mulligan_keep_style.set_corner_radius_all(8)
+	mulligan_keep_style.shadow_color = Color(0, 0, 0, 0.6)
+	mulligan_keep_style.shadow_size = 8
 	_main.keep_hand_button.add_theme_stylebox_override("normal", mulligan_keep_style)
-	_main.keep_hand_button.add_theme_font_override("font", font_medieval)
-	_main.keep_hand_button.add_theme_font_size_override("font_size", 18)
+	_main.keep_hand_button.add_theme_font_override("font", font_bold)
+	_main.keep_hand_button.add_theme_font_size_override("font_size", 15)
+	_main.keep_hand_button.add_theme_color_override("font_color", Color(0.90, 1.0, 0.90, 1.0))
 
 	var mulligan_keep_hover = StyleBoxFlat.new()
-	mulligan_keep_hover.bg_color = Color(0.14, 0.36, 0.20, 1.0)
-	mulligan_keep_hover.border_color = Color(0.6, 1.0, 0.7, 1.0)
+	mulligan_keep_hover.bg_color = Color(0.10, 0.32, 0.18, 1.0)
+	mulligan_keep_hover.border_color = Color(0.55, 1.0, 0.65, 1.0)
 	mulligan_keep_hover.set_border_width_all(2)
 	mulligan_keep_hover.set_corner_radius_all(8)
+	mulligan_keep_hover.shadow_color = Color(0, 0, 0, 0.7)
+	mulligan_keep_hover.shadow_size = 10
 	_main.keep_hand_button.add_theme_stylebox_override("hover", mulligan_keep_hover)
+	_main.keep_hand_button.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0, 1.0))
 
 	var mulligan_btn_style = StyleBoxFlat.new()
-	mulligan_btn_style.bg_color = Color(0.32, 0.18, 0.10, 0.95)
-	mulligan_btn_style.border_color = Color(0.9, 0.6, 0.3, 1.0)
+	mulligan_btn_style.bg_color = Color(0.22, 0.08, 0.08, 0.95)
+	mulligan_btn_style.border_color = Color(0.85, 0.35, 0.35, 0.90)
 	mulligan_btn_style.set_border_width_all(2)
 	mulligan_btn_style.set_corner_radius_all(8)
+	mulligan_btn_style.shadow_color = Color(0, 0, 0, 0.6)
+	mulligan_btn_style.shadow_size = 8
 	_main.mulligan_button.add_theme_stylebox_override("normal", mulligan_btn_style)
-	_main.mulligan_button.add_theme_font_override("font", font_medieval)
-	_main.mulligan_button.add_theme_font_size_override("font_size", 18)
+	_main.mulligan_button.add_theme_font_override("font", font_bold)
+	_main.mulligan_button.add_theme_font_size_override("font_size", 15)
+	_main.mulligan_button.add_theme_color_override("font_color", Color(1.0, 0.88, 0.88, 1.0))
 
 	var mulligan_btn_hover = StyleBoxFlat.new()
-	mulligan_btn_hover.bg_color = Color(0.42, 0.24, 0.14, 1.0)
-	mulligan_btn_hover.border_color = Color(1.0, 0.75, 0.4, 1.0)
+	mulligan_btn_hover.bg_color = Color(0.32, 0.12, 0.12, 1.0)
+	mulligan_btn_hover.border_color = Color(1.0, 0.50, 0.50, 1.0)
 	mulligan_btn_hover.set_border_width_all(2)
 	mulligan_btn_hover.set_corner_radius_all(8)
+	mulligan_btn_hover.shadow_color = Color(0, 0, 0, 0.7)
+	mulligan_btn_hover.shadow_size = 10
 	_main.mulligan_button.add_theme_stylebox_override("hover", mulligan_btn_hover)
+	_main.mulligan_button.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0, 1.0))
 
 
 func _setup_card_backs() -> void:
@@ -91,6 +103,8 @@ func _setup_card_backs() -> void:
 		var tex = GameSettings.get_card_back_texture(1)
 		if tex:
 			opponent_dorso.texture = tex
+		opponent_dorso.pivot_offset = Vector2(50.0, 70.0)
+		opponent_dorso.rotation_degrees = 180.0
 	if not GameSettings.card_back_changed.is_connected(_on_card_back_changed):
 		GameSettings.card_back_changed.connect(_on_card_back_changed)
 
@@ -217,8 +231,8 @@ func _setup_drop_zones() -> void:
 		Constants.CardType.TALISMAN, Constants.CardType.TOTEM
 	])
 	field_drop.set_anchors_preset(Control.PRESET_CENTER)
-	field_drop.offset_left = -540; field_drop.offset_top = -120
-	field_drop.offset_right = 540; field_drop.offset_bottom = 120
+	field_drop.offset_left = -620; field_drop.offset_top = -120
+	field_drop.offset_right = 620; field_drop.offset_bottom = 120
 	_main.game_board.add_child(field_drop)
 
 	var gold_drop = DropZoneScript.new()
@@ -242,8 +256,8 @@ func _setup_drop_zones() -> void:
 	battle_drop.runic_glow_color = Color(1.0, 0.55, 0.1, 0.8)
 	battle_drop.set_accepts_types([Constants.CardType.ALIADO])
 	battle_drop.set_anchors_preset(Control.PRESET_CENTER)
-	battle_drop.offset_left = -540; battle_drop.offset_top = -48
-	battle_drop.offset_right = 540; battle_drop.offset_bottom = 48
+	battle_drop.offset_left = -620; battle_drop.offset_top = -80
+	battle_drop.offset_right = 620; battle_drop.offset_bottom = 80
 	_main.game_board.add_child(battle_drop)
 
 	print("[SceneSetup] Zonas de drop configuradas")

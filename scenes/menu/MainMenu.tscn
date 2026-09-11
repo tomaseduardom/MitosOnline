@@ -63,7 +63,6 @@ grow_horizontal = 2
 grow_vertical = 2
 texture = ExtResource("2_background")
 expand_mode = 1
-stretch_mode = 6
 
 [node name="DarkOverlay" type="ColorRect" parent="."]
 layout_mode = 1
@@ -120,7 +119,7 @@ anchor_bottom = 0.5
 offset_left = -160.0
 offset_top = 40.0
 offset_right = 160.0
-offset_bottom = 400.0
+offset_bottom = 472.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 16
@@ -137,6 +136,19 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_button")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "JUGAR"
+
+[node name="OnlineButton" type="Button" parent="VBoxContainer"]
+custom_minimum_size = Vector2(320, 56)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+theme_override_fonts/font = ExtResource("4_font_medieval")
+theme_override_colors/font_color = Color(0.75, 0.88, 1, 1)
+theme_override_colors/font_hover_color = Color(0.55, 0.8, 1, 1)
+theme_override_font_sizes/font_size = 26
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
+text = "JUGAR ONLINE"
 
 [node name="DecksButton" type="Button" parent="VBoxContainer"]
 custom_minimum_size = Vector2(320, 56)

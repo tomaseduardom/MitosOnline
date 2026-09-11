@@ -52,6 +52,7 @@ ActionPipeline="*res://scripts/core/effects/actions/ActionPipeline.gd"
 DamageManager="*res://scripts/core/managers/DamageManager.gd"
 SelectionManager="*res://scripts/core/effects/targeting/SelectionManager.gd"
 MatchLoadingOverlay="*res://scripts/ui/hud/MatchLoadingOverlay.gd"
+NetworkClient="*res://scripts/core/network/NetworkClient.gd"
 
 [display]
 

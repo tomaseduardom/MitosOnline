@@ -132,16 +132,26 @@ func update_paso_button_state() -> void:
 		return
 	var phase = GameManager.current_phase
 	_paso_button.text = "Atacar" if phase == Constants.Phase.VIGILIA else "¿Paso?"
+
+	# Con ventana de prioridad activa (Bloqueo, Guerra de Talismanes,
+	# cualquier ventana de respuesta) quien debe actuar es quien TIENE la
+	# prioridad ahora mismo, no necesariamente el dueño del turno (2026-
+	# 09-03, bug reportado: 'se queda estancado en guerra de talismanes' —
+	# cuando el humano defiende en el turno del oponente, DAR 5.C3 le da
+	# la prioridad primero en Guerra de Talismanes, pero la visibilidad
+	# dependía solo de active_player_id == 0, así que el botón nunca
+	# aparecía y no había forma de pasar).
+	if PriorityManager.priority_window_active:
+		_paso_button.visible = GameManager.is_game_active and PriorityManager.current_priority_player == 0
+		return
+
 	var is_player_turn = (GameManager.active_player_id == 0)
 	var relevant_phase = phase in [
 		Constants.Phase.VIGILIA,
 		Constants.Phase.ATAQUE,
-		Constants.Phase.BLOQUEO,
-		Constants.Phase.GUERRA_TALISMANES,
 		Constants.Phase.FINAL
 	]
-	var force_show_ataque = (phase == Constants.Phase.ATAQUE and PriorityManager.priority_window_active)
-	_paso_button.visible = GameManager.is_game_active and (is_player_turn and relevant_phase or force_show_ataque)
+	_paso_button.visible = GameManager.is_game_active and is_player_turn and relevant_phase
 
 
 func hide_paso_button() -> void:

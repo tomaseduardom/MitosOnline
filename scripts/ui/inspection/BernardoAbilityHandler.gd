@@ -1,4 +1,4 @@
-extends RefCounted
+﻿extends RefCounted
 class_name BernardoAbilityHandler
 ## BernardoAbilityHandler — Caso especial de Bernardo O'Higgins: coste
 ## alternativo (Barajar un Arma/Aliado Caballero) + elección de efecto con
@@ -144,9 +144,20 @@ func _show_bernardo_effect_choice(on_choice: Callable) -> void:
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.add_theme_font_size_override("font_size", 13)
 	vbox.add_child(lbl)
+	# mouse_filter = IGNORE ANTES de queue_free() (2026-09-06, a raíz de un
+	# reporte del usuario de clicks que "no detectaban" el siguiente paso de
+	# selección de objetivo justo después de elegir acá): queue_free() no
+	# saca al nodo del árbol hasta el final del frame — este ColorRect a
+	# pantalla completa seguía activo (con su mouse_filter STOP por
+	# defecto) durante ese frame y podía tragarse el primer click que el
+	# jugador daba sobre la carta objetivo real, si llegaba a caer justo
+	# ahí. Poniéndolo en IGNORE de inmediato, cualquier click de ese mismo
+	# frame pasa de largo hacia las cartas de abajo sin esperar a que el
+	# nodo se libere de verdad.
 	var btn_banish = Button.new()
 	btn_banish.text = "Desterrar una carta de coste 3 o menos"
 	btn_banish.pressed.connect(func():
+		overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		overlay.queue_free()
 		on_choice.call("desterrar")
 	)
@@ -154,6 +165,7 @@ func _show_bernardo_effect_choice(on_choice: Callable) -> void:
 	var btn_cancel = Button.new()
 	btn_cancel.text = "Cancelar la habilidad de una carta"
 	btn_cancel.pressed.connect(func():
+		overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		overlay.queue_free()
 		on_choice.call("cancelar")
 	)
@@ -164,6 +176,11 @@ func _bernardo_banish_target(source_card: Node) -> void:
 	if not _inspector._main._card_interaction:
 		return
 	var filter := func(c: Node) -> bool:
+		# Bernardo SÍ puede ser objetivo válido de su propio Destierro
+		# (2026-09-06, corregido: el usuario confirmó que puede desterrarse
+		# a sí mismo/a otra copia con nombre Bernardo con esta habilidad —
+		# nada en el texto lo prohíbe, revertido un intento anterior de
+		# excluirlo).
 		if not (c.get("card_type") in [Constants.CardType.ALIADO, Constants.CardType.ARMA, Constants.CardType.TOTEM]):
 			return false
 		return int(c.get("card_cost")) <= 3
@@ -181,4 +198,4 @@ func _bernardo_cancel_ability_target(source_card: Node) -> void:
 	var chosen: Node = await _inspector._main._card_interaction.await_target(
 		"Elige un Aliado que pierda su habilidad", filter)
 	if chosen and is_instance_valid(chosen):
-		KeywordManager.silence_card(chosen, source_card, "permanent")
+		await KeywordManager.silence_card(chosen, source_card, "permanent")

@@ -69,11 +69,16 @@ func get_cards() -> Array[Node]:
 # CONFIGURACIÓN DE CARTA
 # =============================================================================
 func _init_card(card: Node) -> void:
+	card.owner_id      = 1
+	card.controller_id = 1
 	card.esta_oculta   = true
 	card.can_interact  = false
 	card.scale         = Vector2(card_scale, card_scale)
 	card.base_scale    = Vector2(card_scale, card_scale)
 	card.pivot_offset  = Vector2(CARD_W / 2.0, CARD_H / 2.0)
+	card.actualizar_aspecto()
+	if card.has_method("_refresh_disabled_rotation"):
+		card._refresh_disabled_rotation()
 
 
 # =============================================================================
@@ -117,3 +122,34 @@ func _arrange() -> void:
 		tw.tween_property(card, "position",         Vector2(px, py), anim_duration).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 		tw.tween_property(card, "rotation_degrees", 0.0,             anim_duration).set_ease(Tween.EASE_OUT)
 		tw.tween_property(card, "modulate:a",       1.0,             anim_duration * 0.6)
+		if card.has_method("_refresh_disabled_rotation"):
+			card._refresh_disabled_rotation()
+
+
+func get_card_target_position(card: Node) -> Vector2:
+	"""Calcula la posición local de destino de una carta en la mano del oponente."""
+	var idx := _cards.find(card)
+	if idx < 0:
+		idx = _cards.size() - 1
+	if idx < 0:
+		idx = 0
+	var n := maxi(1, _cards.size())
+	var cx := size.x / 2.0
+	if cx < 50.0:
+		var vp := get_viewport()
+		cx = vp.get_visible_rect().size.x / 2.0 if vp else 960.0
+
+	var effective_width := CARD_W * card_scale
+	var overlap := card_overlap
+	var max_available_width := 420.0
+	if n > 1:
+		var natural_total := effective_width + float(n - 1) * (effective_width + overlap)
+		if natural_total > max_available_width:
+			var max_step := (max_available_width - effective_width) / float(n - 1)
+			overlap = max_step - effective_width
+
+	var step := effective_width + overlap
+	var total_w := effective_width + float(n - 1) * step if n > 1 else effective_width
+	var start_x := cx - total_w / 2.0
+	var target_x := start_x + float(idx) * step
+	return Vector2(target_x, 0.0)

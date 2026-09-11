@@ -129,10 +129,10 @@ func execute_linked_effect(response_stack_id: int) -> bool:
 	# Ejecutar según tipo
 	match link.effect_type:
 		_main.SelectionType.ANNUL:
-			success = _execute_annul(target_id, link.source_card)
+			success = await _execute_annul(target_id, link.source_card)
 
 		_main.SelectionType.CANCEL:
-			success = _execute_cancel(target_id, link.source_card)
+			success = await _execute_cancel(target_id, link.source_card)
 
 	link.is_pending = false
 
@@ -155,16 +155,17 @@ func _execute_annul(target_stack_id: int, source_card: Dictionary) -> bool:
 	if not _main._action_pipeline:
 		return false
 
-	# Prevención de Drácula (2026-08-30): "prevenir que ... un Aliado de
-	# coste 1 sea Anulado" — solo cubre Aliados de coste 1 exactamente,
-	# consume la carga del jugador DUEÑO del objetivo (no del que anula).
+	# Prevención reactiva real (2026-09-09 — Drácula): "prevenir que ... un
+	# Aliado de coste 1 sea Anulado" — solo cubre Aliados de coste 1 exacto
+	# (chequeado en el 'applies' del registro, no acá). Opera sobre un
+	# OBJETO DE LA PILA (card_data Dictionary), no un Node en juego, así que
+	# usa offer_prevention_for_player() en vez de offer_prevention().
 	var pre_obj := _main._action_pipeline.get_object_by_id(target_stack_id)
 	if not pre_obj.is_empty():
 		var pre_data: Dictionary = pre_obj.get("card_data", {})
 		var pre_controller: int = pre_obj.get("context", {}).get("controller_id", 0)
-		if int(pre_data.get("tipo", -1)) == Constants.CardType.ALIADO and int(pre_data.get("coste", -1)) == 1:
-			if EffectController.try_consume_stack_annul_cancel_prevention(pre_controller):
-				return false
+		if await EffectController.offer_prevention_for_player(pre_controller, null, "annul", pre_data):
+			return false
 
 	# Llamar al ActionPipeline para marcar como anulado
 	if _main._action_pipeline.has_method("apply_special_action"):
@@ -207,9 +208,10 @@ func _execute_cancel(target_stack_id: int, source_card: Dictionary) -> bool:
 		var pre_source_ability: String = str(pre_source.get("habilidad", "")).to_lower()
 		if "no pueden ser canceladas" in pre_source_ability:
 			return false
-		# Prevención de Drácula (2026-08-30): "prevenir que una habilidad sea
-		# cancelada" — carga consumible, cualquier habilidad propia.
-		if EffectController.try_consume_stack_annul_cancel_prevention(pre_ctx.get("controller_id", 0)):
+		# Prevención reactiva real (2026-09-09 — Drácula): "prevenir que una
+		# habilidad sea cancelada". tag "cancel", sin target puntual (null) —
+		# el registro no le exige coste/tipo a esta rama.
+		if await EffectController.offer_prevention_for_player(pre_ctx.get("controller_id", 0), null, "cancel", null):
 			return false
 
 	# Llamar al ActionPipeline
@@ -255,7 +257,7 @@ func _on_stack_object_resolving(stack_obj: Dictionary) -> void:
 	# Si es una carta de respuesta con efecto vinculado, ejecutarlo
 	if has_linked_effect(stack_id):
 		print("[TargetSelector] Carta de respuesta #%d resolviendo - ejecutando efecto vinculado" % stack_id)
-		execute_linked_effect(stack_id)
+		await execute_linked_effect(stack_id)
 
 
 func _on_stack_object_resolved(stack_obj: Dictionary, _result: Dictionary) -> void:

@@ -52,7 +52,7 @@ func _ready() -> void:
 	if highlight_on_hover:
 		_create_highlight_rect()
 
-	mouse_filter = Control.MOUSE_FILTER_PASS
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	print("[DropZone] '%s' inicializada (player %d)" % [zone_name, player_id])
 
 
@@ -245,31 +245,19 @@ func _hide_highlight() -> void:
 		tween2.tween_callback(func(): _runic_border.visible = false)
 
 
-func _player_has_ally_in_play(p_id: int) -> bool:
-	"""Verifica si el jugador p_id tiene al menos un Aliado libre para portar
-	un Arma (sin una ya equipada) — mismo criterio que
-	GoldManager._player_has_ally_in_play(), para que el highlight del
-	arrastre no diga 'legal' cuando GoldManager lo va a rechazar."""
+func _player_has_ally_in_play(_p_id: int) -> bool:
+	"""Verifica si hay al menos un Aliado libre en juego (propio O rival,
+	2026-09-03: DAR no restringe el portador de un Arma a Aliados que
+	controlas) para portar un Arma (sin una ya equipada) — delega siempre
+	a GoldManager._player_has_ally_in_play(), que ya escanea ambos lados,
+	para que el highlight del arrastre no diga 'legal' cuando GoldManager
+	lo va a rechazar. _p_id ya no importa (la elegibilidad no depende de
+	quién arrastra la carta), se mantiene solo para no romper la firma
+	del único llamador."""
 	var main = get_tree().current_scene
-	if not main:
+	if not main or not main.get("_gold_manager") or not main._gold_manager.has_method("_player_has_ally_in_play"):
 		return false
-	if p_id == 0 and main.get("_gold_manager") and main._gold_manager.has_method("_player_has_ally_in_play"):
-		return main._gold_manager._player_has_ally_in_play()
-	var fields = [main.player_field, main.player_linea_ataque] if p_id == 0 else [main.opponent_field, main.opponent_linea_ataque]
-	for field in fields:
-		if not field:
-			continue
-		for card in field.get_children():
-			if card.get("card_type") != Constants.CardType.ALIADO:
-				continue
-			var already_armed := false
-			for child in card.get_children():
-				if child is Card and child.get("card_type") == Constants.CardType.ARMA:
-					already_armed = true
-					break
-			if not already_armed:
-				return true
-	return false
+	return main._gold_manager._player_has_ally_in_play()
 
 
 func _check_card_legality(card: Node) -> bool:

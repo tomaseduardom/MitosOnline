@@ -17,22 +17,27 @@ func setup(main: Node) -> void:
 # =============================================================================
 # SISTEMA DE MAZO (CASTILLO)
 # =============================================================================
-func draw_card(player_id: int = 0) -> bool:
-	"""Roba una carta del Castillo y la pone en la mano."""
+func draw_card(player_id: int = 0, animated: bool = true) -> bool:
+	"""Roba una carta del Castillo con animación cinemática en arco parabólico y revelado 3D (Opción 1)."""
 	if player_id == 0:
 		if _main.player_deck.is_empty():
-			_main._update_debug("Tu Castillo esta vacio!")
+			_main._update_debug("Tu Castillo está vacío!")
 			GameManager.check_victory()
 			return false
 		var card_data = _main.player_deck.pop_front()
-		var card = _main._create_card(card_data)
+		var card = _main._create_card(card_data, true)  # Empieza oculta para mostrar dorso al despegar
+		card.owner_id = 0
+		card.controller_id = 0
 		_main.player_hand.add_card(card)
 		_main._connect_card_signals(card)
-		card.modulate.a = 0
-		var tween = create_tween()
-		tween.tween_property(card, "modulate:a", 1.0, 0.3)
 		_update_castillo_counts()
-		_main._update_debug("Robas: %s" % card_data.nombre)
+		_main._update_debug("Robas: %s" % card_data.get("nombre", "Carta"))
+		if animated:
+			await _animate_player_card_draw(card)
+		else:
+			card.esta_oculta = false
+			card.actualizar_aspecto()
+			_main.player_hand._arrange_cards(false)
 		return true
 	else:
 		if _main.opponent_deck.is_empty():
@@ -40,15 +45,138 @@ func draw_card(player_id: int = 0) -> bool:
 			return false
 		var card_data = _main.opponent_deck.pop_front()
 		var card = _main._create_card(card_data, true)
+		card.owner_id = 1
+		card.controller_id = 1
 		_main._opponent_fan.add_card(card)
 		_update_castillo_counts()
+		if animated:
+			await _animate_opponent_card_draw(card)
+		else:
+			_main._opponent_fan._arrange()
 		return true
 
 
 func draw_initial_hand(player_id: int, count: int = 7) -> void:
-	"""Roba la mano inicial."""
+	"""Roba la mano inicial en una elegante cascada cinemática escalonada."""
 	for i in range(count):
-		await draw_card(player_id)
+		draw_card(player_id, true)
+		await get_tree().create_timer(0.09).timeout
+	await get_tree().create_timer(0.35).timeout
+
+
+func _animate_player_card_draw(card: Node) -> void:
+	if not is_instance_valid(card) or not _main:
+		return
+
+	var start_pos: Vector2 = Vector2(1685.0, 680.0)
+	var castillo_panel = _main.get_node_or_null("GameBoard/PlayerArea/PlayerCastillo")
+	if castillo_panel:
+		start_pos = castillo_panel.global_position + Vector2(
+			castillo_panel.size.x / 2.0 - 75.0,
+			castillo_panel.size.y / 2.0 - 105.0
+		)
+
+	card.top_level = true
+	card.global_position = start_pos
+	card.scale = Vector2(0.66, 0.66)
+	card.base_scale = Vector2.ONE
+	card.z_index = 250
+	card.esta_oculta = true
+	card.actualizar_aspecto()
+
+	var duration: float = 0.38
+	var tw = card.create_tween()
+
+	tw.tween_method(func(t: float):
+		if not is_instance_valid(card) or not _main or not _main.player_hand:
+			return
+		var live_target_local = _main.player_hand.get_card_target_position(card)
+		var live_end_pos = _main.player_hand.global_position + live_target_local
+
+		# Curva ease out cúbica para avance horizontal
+		var ease_t = 1.0 - pow(1.0 - t, 3.0)
+		var current_x = lerpf(start_pos.x, live_end_pos.x, ease_t)
+		var base_y = lerpf(start_pos.y, live_end_pos.y, ease_t)
+		var arc_lift = -sin(t * PI) * 110.0  # Elevación parabólica hacia el centro
+		var current_y = base_y + arc_lift
+		card.global_position = Vector2(current_x, current_y)
+
+		# Escala 2.5D con elevación
+		var scale_y = lerpf(0.66, 1.0, t) + sin(t * PI) * 0.22
+
+		# Volteo 3D horizontal a mitad de recorrido
+		var flip_factor: float = 1.0
+		if t >= 0.35 and t <= 0.65:
+			var phase = (t - 0.35) / 0.30
+			flip_factor = absf(cos(phase * PI))
+			if t >= 0.50 and card.esta_oculta:
+				card.esta_oculta = false
+				card.actualizar_aspecto()
+		elif t > 0.65:
+			if card.esta_oculta:
+				card.esta_oculta = false
+				card.actualizar_aspecto()
+
+		card.scale = Vector2(scale_y * flip_factor, scale_y)
+	, 0.0, 1.0, duration).set_trans(Tween.TRANS_LINEAR)
+
+	await tw.finished
+	if is_instance_valid(card) and _main and _main.player_hand:
+		card.top_level = false
+		card.scale = Vector2.ONE
+		card.z_index = _main.player_hand.cards.find(card)
+		_main.player_hand._arrange_cards(false)
+
+
+func _animate_opponent_card_draw(card: Node) -> void:
+	if not is_instance_valid(card) or not _main or not _main._opponent_fan:
+		return
+
+	var start_pos: Vector2 = Vector2(1685.0, 210.0)
+	var opp_castillo = _main.get_node_or_null("GameBoard/OpponentArea/OpponentCastillo")
+	if opp_castillo:
+		start_pos = opp_castillo.global_position + Vector2(
+			opp_castillo.size.x / 2.0 - (150.0 * 0.50) / 2.0,
+			opp_castillo.size.y / 2.0 - (210.0 * 0.50) / 2.0
+		)
+
+	card.top_level = true
+	card.global_position = start_pos
+	card.scale = Vector2(0.50, 0.50)
+	card.base_scale = Vector2(0.50, 0.50)
+	card.z_index = 250
+	card.esta_oculta = true
+	card.owner_id = 1
+	card.controller_id = 1
+	card.actualizar_aspecto()
+	if card.has_method("_refresh_disabled_rotation"):
+		card._refresh_disabled_rotation()
+
+	var duration: float = 0.34
+	var tw = card.create_tween()
+
+	tw.tween_method(func(t: float):
+		if not is_instance_valid(card) or not _main or not _main._opponent_fan:
+			return
+		var live_target_local = _main._opponent_fan.get_card_target_position(card)
+		var live_end_pos = _main._opponent_fan.global_position + live_target_local
+
+		var ease_t = 1.0 - pow(1.0 - t, 3.0)
+		var current_x = lerpf(start_pos.x, live_end_pos.x, ease_t)
+		var base_y = lerpf(start_pos.y, live_end_pos.y, ease_t)
+		var arc_lift = sin(t * PI) * 50.0  # Desciende ligeramente en arco
+		var current_y = base_y + arc_lift
+		card.global_position = Vector2(current_x, current_y)
+
+		var scale_val = 0.50 + sin(t * PI) * 0.10
+		card.scale = Vector2(scale_val, scale_val)
+	, 0.0, 1.0, duration).set_trans(Tween.TRANS_LINEAR)
+
+	await tw.finished
+	if is_instance_valid(card) and _main and _main._opponent_fan:
+		card.top_level = false
+		card.scale = Vector2(0.50, 0.50)
+		_main._opponent_fan._arrange()
 
 
 func _update_castillo_counts() -> void:
@@ -276,7 +404,7 @@ func _test_mostrar_tope_tres() -> void:
 ## (top_level=true, mismo truco que CardInteraction._start_drag()) y se le
 ## asigna una posición fija dentro de una grilla de slots imaginaria que el
 ## Container ya no puede tocar.
-const _FIELD_SLOT_WIDTH: float = 162.0  # 150 (ancho de carta) + 12 (separación del HBoxContainer)
+const _FIELD_SLOT_WIDTH: float = 170.0  # 150 (ancho de carta) + 20 (separación limpia entre cartas)
 var _field_slot_occupants: Dictionary = {}  # {container: Array[Node]}
 
 
@@ -345,7 +473,8 @@ func pin_card_to_field_slot(card: Node, container: Control) -> Vector2:
 	card.set_meta("field_slot_index", slot_index)
 
 	var center_val: float = (max_slots - 1) / 2.0
-	var card_size: Vector2 = card.size * card.scale
+	var target_scale: Vector2 = Vector2(0.8, 0.8) if card.get("card_type") == Constants.CardType.TOTEM else Vector2.ONE
+	var card_size: Vector2 = (card.custom_minimum_size if card.custom_minimum_size != Vector2.ZERO else Vector2(150.0, 210.0)) * target_scale
 	var local_center_x: float = container.size.x / 2.0 + (slot_index - center_val) * _FIELD_SLOT_WIDTH
 	var local_pos: Vector2 = Vector2(
 		local_center_x - card_size.x / 2.0,
@@ -356,11 +485,10 @@ func pin_card_to_field_slot(card: Node, container: Control) -> Vector2:
 	card.set_meta("field_slot_x", target_pos.x)
 	card.set_meta("field_slot_pos", target_pos)
 	card.global_position = target_pos
+	if card.has_method("set_click_clip_right"):
+		card.set_click_clip_right(-1.0)
 
-	var is_opp: bool = (card.owner_id == 1 or card.controller_id == 1)
-	if is_opp:
-		card.pivot_offset = card_size / 2.0
-		card.rotation_degrees = 180.0
+	card._refresh_disabled_rotation()
 	return target_pos
 
 
@@ -403,9 +531,13 @@ func compact_field_slots(container: Control, animate: bool = true) -> void:
 	for i in range(count):
 		var card: Node = active_cards[i]
 		var slot_pos_idx: float = start_slot + float(i)
-		var card_size: Vector2 = card.size * card.scale
+		var target_scale: Vector2 = Vector2(0.8, 0.8) if card.get("card_type") == Constants.CardType.TOTEM else Vector2.ONE
+		var card_size: Vector2 = (card.custom_minimum_size if card.custom_minimum_size != Vector2.ZERO else Vector2(150.0, 210.0)) * target_scale
 		var local_center_x: float = base_container.size.x / 2.0 + (slot_pos_idx - center_val) * _FIELD_SLOT_WIDTH
 		var target_x: float = base_container.global_position.x + local_center_x - card_size.x / 2.0
+		var card_parent: Control = card.get_parent() as Control
+		var current_container: Control = card_parent if (card_parent == atk_container or card_parent == base_container) else base_container
+		var target_y: float = current_container.global_position.y + (current_container.size.y - card_size.y) / 2.0
 
 		var int_slot: int = int(round(slot_pos_idx))
 		if int_slot >= 0 and int_slot < max_slots:
@@ -413,18 +545,17 @@ func compact_field_slots(container: Control, animate: bool = true) -> void:
 		card.set_meta("field_slot_index", int_slot)
 		card.set_meta("field_slot_x", target_x)
 		var current_pos: Vector2 = card.global_position
-		card.set_meta("field_slot_pos", Vector2(target_x, current_pos.y))
+		card.set_meta("field_slot_pos", Vector2(target_x, target_y))
 
-		var is_opp: bool = (card.owner_id == 1 or card.controller_id == 1)
-		if is_opp:
-			card.pivot_offset = card_size / 2.0
-			card.rotation_degrees = 180.0
+		card._refresh_disabled_rotation()
 
-		if animate and absf(current_pos.x - target_x) > 1.0:
+		if animate and (absf(current_pos.x - target_x) > 1.0 or absf(current_pos.y - target_y) > 1.0):
 			var tw = card.create_tween()
+			tw.set_parallel(true)
 			tw.tween_property(card, "global_position:x", target_x, 0.28).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+			tw.tween_property(card, "global_position:y", target_y, 0.28).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 		elif not animate:
-			card.global_position.x = target_x
+			card.global_position = Vector2(target_x, target_y)
 
 	_field_slot_occupants[base_container] = new_occupants
 

@@ -60,6 +60,10 @@ enum CostType {
 	SELF_AS_GOLD,   # "Pagar este Oro" — la propia carta se gasta como Oro (2026-08-29, p.ej. Tyet)
 	SELF_BANISH,    # "Puedes Desterrarlo" — la propia carta se destierra como costo (2026-08-30, p.ej. Legión Paladín, Ramón Freire)
 	SELF_TO_DECK_BOTTOM, # "Puedes poner esta ... carta(s) en el fondo de tu Castillo" — la propia carta (+ otra) al fondo del mazo como costo (2026-08-30, p.ej. Tyet)
+	SELF_SHUFFLE,   # "Barajar esta carta desde tu mano/Barajarla" — la propia carta se baraja de vuelta al Castillo como costo (2026-09-06, p.ej. Sacrificio Solar, skofnung)
+	SELF_CONVERT,   # "Puedes convertirlo/la en un Oro sin habilidad" — la propia carta se convierte como costo (2026-09-07, p.ej. Perla de Sangre)
+	SELF_DISCARD,   # "Puedes Descartarlo/Descartarla" — la propia carta se descarta como costo (2026-09-07, p.ej. Sumi)
+	SELF_DESTROY,   # "Puedes Destruir esta Arma" — la propia carta se destruye como costo (2026-09-07, p.ej. Lanza Argenta)
 }
 
 enum TargetType {
@@ -459,6 +463,14 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 			or "sólo puedes utilizar la habilidad" in lower_s
 			or "solo puedes usar esta habilidad" in lower_s
 			or "sólo puedes usar esta habilidad" in lower_s
+			# "Sólo puedes utilizar ESTA habilidad de X una vez por turno"
+			# (2026-09-06, p.ej. Cuervo Nocturno) — variante con "utilizar" +
+			# "esta" que faltaba: ninguna de las 4 combinaciones de arriba la
+			# cubría ("utilizar" solo se chequeaba con "la", "esta" solo con
+			# "usar"), así que esta oración de cierre quedaba como su propia
+			# entrada ACTIVATED espuria en vez de fusionarse con la anterior.
+			or "solo puedes utilizar esta habilidad" in lower_s
+			or "sólo puedes utilizar esta habilidad" in lower_s
 		)
 		if is_once_per_turn_qualifier_only and not result.is_empty():
 			var prev_qual: Dictionary = result[result.size() - 1]
@@ -504,6 +516,46 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 		# hasta el fix de arriba, tampoco encadenaba como continuación —
 		# quedaba fuera de 'result' por completo, sin botón.
 		var pays_self_to_deck_bottom: bool = "poner esta" in lower_s and "fondo de tu castillo" in lower_s
+		# "Barajar esta carta desde tu mano"/"Barajarla de tu mano"/
+		# "Barajarla" a secas (2026-09-06, bug real reportado por el
+		# usuario: Sacrificio Solar — 'Puedes pagar un Oro y Barajar esta
+		# carta desde tu mano para...' — no matcheaba NINGÚN cost_type,
+		# así que la oración entera quedaba fuera de 'result' sin
+		# ability_type ACTIVATED, y _build_ability_buttons() nunca le
+		# mostraba botón al jugador: la habilidad, literal, no se podía
+		# usar. skofnung tiene el mismo patrón ('Puedes Barajarla de tu
+		# mano para...') y compartía el mismo problema.
+		var pays_self_shuffle: bool = ("barajar esta carta" in lower_s and "mano" in lower_s) \
+			or "barajarla de tu mano" in lower_s or "puedes barajarla" in lower_s
+		# "Puedes convertirlo/la en un Oro sin habilidad para..." (2026-09-07,
+		# bug real reportado por el usuario: Perla de Sangre — dos habilidades
+		# ACTIVADAS separadas, pero la segunda no tiene 'una vez por turno' ni
+		# ':' ni ningún otro cost_type reconocido, así que caía en la rama de
+		# 'oración sin coste que sigue a una ACTIVATED abierta' y se fusionaba
+		# como continuación de la PRIMERA habilidad en vez de ser su propia
+		# entrada — solo se mostraba/podía usar el primer botón).
+		var pays_self_convert: bool = "convertirlo en un oro sin habilidad" in lower_s \
+			or "convertirla en un oro sin habilidad" in lower_s
+		# "Puedes Barajarlo..." (2026-09-07, bug real encontrado en auditoría:
+		# Tótem del Dragón Ancestral — variante MASCULINA de pays_self_shuffle,
+		# que solo cubría "barajarla"/"barajar esta carta...mano").
+		var pays_self_shuffle_masc: bool = "puedes barajarlo" in lower_s
+		# "Puedes Descartarlo/Descartarla..." (2026-09-07, bug real encontrado
+		# en auditoría: Sumi — coste de autodescartarse, mismo molde que
+		# pays_self_banish pero con Descartar).
+		var pays_self_discard_self: bool = "puedes descartarlo" in lower_s or "puedes descartarla" in lower_s
+		# "Puedes Destruir esta Arma..." (2026-09-07, bug real encontrado en
+		# auditoría: Lanza Argenta — coste de autodestruirse).
+		var pays_self_destroy: bool = "puedes destruir esta arma" in lower_s
+		# "Puedes pagar un/N Oro(s) para..." SIN ':' (2026-09-07, bug real
+		# encontrado en auditoría: Sandraudiga, Visión Heroica — distinto de
+		# pays_self_as_gold ('puedes pagarlo', la carta SE PAGA A SÍ MISMA
+		# como Oro): acá se paga Oro GENÉRICO de la Reserva como costo de un
+		# efecto, la carta de texto no es un Oro. El formato con ':' ya cubre
+		# esto cuando la carta lo imprime así; esta es la variante en prosa.
+		var pay_gold_rx := RegEx.new()
+		pay_gold_rx.compile("puedes pagar (\\w+) oros? para")
+		var m_pay_gold := pay_gold_rx.search(lower_s)
 
 		if once_per_turn:
 			cost_type = CostType.ONCE_PER_TURN
@@ -513,6 +565,19 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 			cost_type = CostType.SELF_BANISH
 		elif pays_self_to_deck_bottom:
 			cost_type = CostType.SELF_TO_DECK_BOTTOM
+		elif pays_self_shuffle:
+			cost_type = CostType.SELF_SHUFFLE
+		elif pays_self_convert:
+			cost_type = CostType.SELF_CONVERT
+		elif pays_self_shuffle_masc:
+			cost_type = CostType.SELF_SHUFFLE
+		elif pays_self_discard_self:
+			cost_type = CostType.SELF_DISCARD
+		elif pays_self_destroy:
+			cost_type = CostType.SELF_DESTROY
+		elif m_pay_gold:
+			cost_type = CostType.GOLD
+			cost_amount = _parse_amount(m_pay_gold.get_string(1))
 		elif ":" in sentence:
 			var colon_pos: int = sentence.find(":")
 			cost_text   = sentence.substr(0, colon_pos).strip_edges()
@@ -620,7 +685,11 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 # =============================================================================
 
 ## Regex de robo canónico — cubre "Roba dos cartas", "Robas 3 cartas", etc.
-const DRAW_REGEX: String = "(?:Roba|Robas)\\s+(una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\\d+)\\s+cartas?"
+## "(?:hasta\s+)?" agregado (2026-09-06, p.ej. Mecha-Daikaiju: "Roba hasta
+## tres cartas") — "hasta N" no reduce el robo real (nunca hay motivo para
+## robar menos de lo permitido), así que tratarlo igual que "Roba N cartas"
+## a secas es una simplificación segura.
+const DRAW_REGEX: String = "(?:Roba|Robas)\\s+(?:hasta\\s+)?(una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\\d+)\\s+cartas?"
 
 
 func extract_action(text: String) -> Dictionary:

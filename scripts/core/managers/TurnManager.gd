@@ -107,6 +107,14 @@ func can_attack(ally: Node) -> Dictionary:
 	"""
 	var result = {"can_attack": true, "reason": "", "has_furia": false}
 
+	# Restricción explícita (2026-09-03, p.ej. Kuchiku Kan: 'no pueda
+	# atacar... mientras este Aliado esté en juego') — ContinuousEffect
+	# Manager.can_attack() ya existía pero nadie lo consultaba todavía.
+	if ContinuousEffectManager and not ContinuousEffectManager.can_attack(ally):
+		result.can_attack = false
+		result.reason = "no puede atacar — efecto continuo se lo impide"
+		return result
+
 	# Verificar si entró este turno (enfermedad de invocación)
 	var entered_this_turn = ally.get("entered_this_turn") if ally.get("entered_this_turn") != null else false
 

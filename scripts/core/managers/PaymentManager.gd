@@ -240,6 +240,7 @@ func calcular_coste_real(card: Node) -> int:
 		oros_mas_total += _get_named_surcharge_next_turn(card_name_for_surcharge)
 
 	oros_menos_total += _self_scaling_oro_discount(card)
+	oros_menos_total += _conditional_boolean_discount(card)
 
 	return maxi(coste_mod - oros_menos_total + oros_mas_total, 0)
 
@@ -255,10 +256,82 @@ func _self_scaling_oro_discount(card: Node) -> int:
 	if card.get("card_data") == null:
 		return 0
 	var habilidad: String = str(card.card_data.get("habilidad", "")).to_lower()
-	if not "cuesta un oro menos por cada oro que controles" in habilidad:
+	# "Reduce su coste en un Oro por cada Oro que controles" (2026-09-04,
+	# Piruquina) — mismo concepto que Aaru, otra forma de imprimirlo. Nota:
+	# el texto de Piruquina dice 'hasta un mínimo de 1', pero el piso real
+	# de esta función es 0 (ver calcular_coste_real(), maxi(..., 0) es
+	# compartido con oros_menos_modifiers) — desviación menor conocida, sin
+	# caso de prueba a mano que la haga notoria todavía.
+	if not ("cuesta un oro menos por cada oro que controles" in habilidad
+			or "reduce su coste en un oro por cada oro que controles" in habilidad):
 		return 0
 	var controller_id: int = card.get("controller_id") if card.get("controller_id") != null else 0
 	return GameState.get_oro_total(controller_id)
+
+
+func _conditional_boolean_discount(card: Node) -> int:
+	"""Descuentos intrínsecos de 1 Oro condicionados a un booleano del
+	tablero (2026-09-06) — a diferencia de _self_scaling_oro_discount()
+	(escala con una cantidad), acá el descuento es 0 o 1 según se cumpla o
+	no una condición puntual. Lista chica y explícita, mismo criterio que
+	el resto de detectores por texto de este archivo. 'jugaste este turno'
+	(Cetro Demoniaco) NO se evalúa — no existe todavía un registro
+	genérico de 'jugué un Arma este turno', solo se chequea la mitad
+	'controlas' de la condición."""
+	if card.get("card_data") == null:
+		return 0
+	var habilidad: String = str(card.card_data.get("habilidad", "")).to_lower()
+	var controller_id: int = card.get("controller_id") if card.get("controller_id") != null else 0
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return 0
+
+	# "Reduce su coste en un Oro si controlas o jugaste este turno Armas o
+	# a Lucifer" (Cetro Demoniaco) — solo la mitad 'controlas Armas o a
+	# Lucifer'.
+	if "reduce su coste en un oro si controlas o jugaste este turno armas o a lucifer" in habilidad:
+		var fields_a: Array = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo, main.player_gold] \
+			if controller_id == 0 else [main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo, main.opponent_gold]
+		for field in fields_a:
+			if not field:
+				continue
+			for c in field.get_children():
+				if not is_instance_valid(c):
+					continue
+				if c.get("card_type") == Constants.CardType.ARMA:
+					return 1
+				if str(c.get("card_name")).to_lower() == "lucifer":
+					return 1
+		return 0
+
+	# "Si controlas Dragones reduce su coste en un Oro" (Azi Raoiota).
+	if "si controlas dragones reduce su coste en un oro" in habilidad:
+		var fields_b: Array = [main.player_field, main.player_linea_ataque] if controller_id == 0 \
+			else [main.opponent_field, main.opponent_linea_ataque]
+		for field in fields_b:
+			if not field:
+				continue
+			for c in field.get_children():
+				if is_instance_valid(c) and c.get("card_type") == Constants.CardType.ALIADO \
+						and "drag" in str(c.get("card_raza")).to_lower():
+					return 1
+		return 0
+
+	# "Si no controlas Aliados de coste 1 o menos, reduce su coste en un
+	# Oro" (Jabberwocky).
+	if "si no controlas aliados de coste 1 o menos, reduce su coste en un oro" in habilidad:
+		var fields_c: Array = [main.player_field, main.player_linea_ataque] if controller_id == 0 \
+			else [main.opponent_field, main.opponent_linea_ataque]
+		for field in fields_c:
+			if not field:
+				continue
+			for c in field.get_children():
+				if is_instance_valid(c) and c.get("card_type") == Constants.CardType.ALIADO \
+						and int(calcular_coste_real(c)) <= 1:
+					return 0
+		return 1
+
+	return 0
 
 
 func add_named_surcharge_next_turn(card_name: String, target_turn: int) -> void:
@@ -407,6 +480,55 @@ func get_exhumar_cost(card_data: Dictionary) -> int:
 	"""Coste de jugar esta carta via Exhumar (normalmente el coste base,
 	salvo que la carta tenga un coste de Exhumar alternativo definido)."""
 	return _exhumar._calculate_exhumar_cost(card_data, card_data.get("coste", 0))
+
+
+func card_playable_from_exile(card_data: Dictionary) -> bool:
+	"""'Puedes jugar(lo/la) desde/de tu Destierro' (2026-09-04, a pedido del
+	usuario — p.ej. uriel, batallon de ovejas, cruzar el bosque) — usado
+	por ZoneViewerModule para marcar como clickeables las cartas del
+	Destierro propio jugables vía GoldManager.play_card_from_exile().
+	Lista chica y explícita (mismo criterio que card_has_exhumar()/
+	_ability_is_hand_usable()), no un permiso genérico por presencia de
+	'Destierro' en el texto (esa palabra aparece en muchísimas habilidades
+	sin relación con jugar desde ahí)."""
+	var text: String = str(card_data.get("habilidad", "")).to_lower()
+	if "puedes jugarlo de tu destierro pagando su coste" in text:
+		return true  # uriel
+	if "puedes jugarlo de tu destierro reduciendo su coste en un oro" in text:
+		# rafael: condicionado a controlar Sacerdotes
+		if "si controlas sacerdotes" in text:
+			var main = get_node_or_null("/root/Main")
+			if not main:
+				return false
+			for field in [main.player_field, main.player_linea_ataque, main.player_linea_apoyo]:
+				if not field:
+					continue
+				for c in field.get_children():
+					if c.get("card_type") == Constants.CardType.ALIADO and str(c.get("card_raza")).to_lower() == "sacerdote":
+						return true
+			return false
+		return true
+	if "puedes jugarlo desde tu destierro" in text:
+		# batallon de ovejas: condicionado a mano de 4 o menos
+		if "cuatro cartas o menos en tu mano" in text:
+			var main = get_node_or_null("/root/Main")
+			if main and main.player_hand:
+				return main.player_hand.cards.size() <= 4
+			return false
+		return true
+	if "puedes jugar esta carta desde tu destierro" in text:
+		return true  # cruzar el bosque
+	return false
+
+
+func get_exile_play_discount(card_data: Dictionary) -> int:
+	"""Descuento fijo al jugar desde el Destierro (2026-09-04, p.ej.
+	rafael: 'reduciendo su coste en un Oro') — 0 si no aplica (la mayoría,
+	p.ej. uriel/batallon de ovejas pagan el coste completo)."""
+	var text: String = str(card_data.get("habilidad", "")).to_lower()
+	if "puedes jugarlo de tu destierro reduciendo su coste en un oro" in text:
+		return 1
+	return 0
 
 
 # =============================================================================

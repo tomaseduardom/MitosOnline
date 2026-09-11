@@ -30,6 +30,7 @@ static func create_d20_node(radius: float = 0.78, is_player: bool = true) -> Nod
 
 	# Material PBR de Metal Forjado Envejecido (Oro Antiguo / Plata de Hierro Fundido)
 	var mat = StandardMaterial3D.new()
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	if is_player:
 		# Skin Oro Forjado Antiguo
 		mat.albedo_texture = TEX_ATLAS_GOLD
@@ -83,7 +84,7 @@ static func get_quaternion_for_value(d20_node: Node3D, target_value: int, target
 	var n_target: Vector3 = target_facing_dir.normalized()
 	var u_target: Vector3 = (world_up - n_target * world_up.dot(n_target)).normalized()
 	if u_target.length_squared() < 0.01:
-		u_target = Vector3.UP
+		u_target = Vector3.FORWARD if abs(n_target.y) > 0.9 else Vector3.UP
 	var r_target: Vector3 = u_target.cross(n_target).normalized()
 	u_target = n_target.cross(r_target).normalized()
 
@@ -169,6 +170,7 @@ static func _build_atlas_icosahedron(radius: float) -> Dictionary:
 		st.set_uv(uv2)
 		st.add_vertex(v2)
 
+	st.generate_tangents()
 	var mesh = st.commit()
 
 	return {

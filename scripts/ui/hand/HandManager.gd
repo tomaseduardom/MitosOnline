@@ -109,6 +109,8 @@ func add_card(card: Node, animate: bool = true) -> void:
 				card.rotation_degrees = t.rotation
 				card.scale = t.scale
 				card.z_index = t.z_index
+				if card.has_method("set_click_clip_right"):
+					card.set_click_clip_right(t.get("click_clip", -1.0))
 			card.modulate.a = 0.0
 			if card.has_signal("image_ready"):
 				card.image_ready.connect(_on_card_image_ready.bind(card), CONNECT_ONE_SHOT)
@@ -140,6 +142,8 @@ func remove_card(card: Node, destroy: bool = true) -> void:
 	if destroy:
 		card.queue_free()
 	else:
+		if card.has_method("set_click_clip_right"):
+			card.set_click_clip_right(-1.0)
 		remove_child(card)
 
 	_calculate_arc_positions()
@@ -248,12 +252,28 @@ func _calculate_arc_positions() -> void:
 		var curve_offset = curve_factor * arc_height
 		var pos_y = center_y - card_size.y / 2.0 - curve_offset
 
+		# Recorte del área de CLICK cuando esta carta queda tapada por la
+		# derecha por la siguiente (2026-09-03, mismo bug/fix que la
+		# Reserva de Oro — ver Card._has_point()/GoldManager._apply_gold_
+		# click_clip()): con min_visible_ratio<1 las cartas del arco se
+		# superponen SIEMPRE que effective_spacing < card_size.x, y la
+		# última carta de la mano (i == card_count-1) nunca está tapada.
+		# effective_spacing está en unidades YA escaladas (card_size usa
+		# card_base_scale) pero Card._has_point() recibe el punto en el
+		# espacio LOCAL sin escalar de la carta (Control.size se queda en
+		# 150, solo card.scale la transforma visualmente) — hay que
+		# deshacer la escala para el umbral de recorte.
+		var click_clip: float = -1.0
+		if i < card_count - 1 and effective_spacing < card_size.x and card_base_scale > 0.0:
+			click_clip = effective_spacing / card_base_scale
+
 		# Guardar target
 		_card_targets[card] = {
 			"position": Vector2(pos_x, pos_y),
 			"rotation": rotation,
 			"scale": Vector2(card_base_scale, card_base_scale),
-			"z_index": i
+			"z_index": i,
+			"click_clip": click_clip
 		}
 
 
@@ -264,6 +284,8 @@ func _apply_card_target(card: Node, animated: bool = true) -> void:
 
 	var target = _card_targets[card]
 	card.z_index = target.z_index
+	if card.has_method("set_click_clip_right"):
+		card.set_click_clip_right(target.get("click_clip", -1.0))
 
 	if animated:
 		_kill_tween(card)
@@ -309,6 +331,8 @@ func _animate_card_entry(card: Node) -> void:
 	card.scale = Vector2(0.5, 0.5)
 	card.modulate.a = 0.0
 	card.z_index = 100
+	if card.has_method("set_click_clip_right"):
+		card.set_click_clip_right(-1.0)
 
 	_kill_tween(card)
 	var tween = create_tween()
@@ -321,8 +345,12 @@ func _animate_card_entry(card: Node) -> void:
 	tween.parallel().tween_property(card, "rotation_degrees", target.rotation, animation_duration * 2).set_ease(Tween.EASE_OUT)
 	tween.parallel().tween_property(card, "scale", target.scale, animation_duration * 2).set_ease(Tween.EASE_OUT)
 
-	# Restaurar z-index al final
-	tween.tween_callback(func(): card.z_index = target.z_index)
+	# Restaurar z-index (y el recorte de click) al final
+	tween.tween_callback(func():
+		card.z_index = target.z_index
+		if card.has_method("set_click_clip_right"):
+			card.set_click_clip_right(target.get("click_clip", -1.0))
+	)
 
 	_tweens[card] = tween
 
@@ -343,8 +371,11 @@ func _on_card_hovered(card: Node) -> void:
 
 	var target = _card_targets[card]
 
-	# Elevar z-index
+	# Elevar z-index — y quitar el recorte de click (2026-09-03): al pasar
+	# a estar por encima de todas las vecinas, ya no hay nada que la tape.
 	card.z_index = 100
+	if card.has_method("set_click_clip_right"):
+		card.set_click_clip_right(-1.0)
 
 	var hover_pos = target.position + Vector2(0, -hover_lift)
 

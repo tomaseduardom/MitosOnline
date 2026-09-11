@@ -86,11 +86,14 @@ var _zone_viewer: ZoneViewerModule         = null
 var _selection: SelectionModule            = null
 var _zone_manager: ZoneManager             = null
 var _phase_flow: PhaseFlowController       = null
+var _easy_bot: EasyBotController           = null
 var _game_hud: GameHUDModule               = null
 var _bootstrap: GameBootstrap              = null
 var _card_interaction: CardInteractionModule = null
 var _scene_setup: SceneSetupModule         = null
 var _debug_input: DebugInputModule         = null
+var _remote_mirror: RemoteMirrorController  = null
+var _state_broadcaster: GameStateBroadcaster = null
 
 # =============================================================================
 # ESTADO
@@ -120,6 +123,36 @@ func _ready() -> void:
 
 	_zone_manager = ZoneManager.new(); _zone_manager.name = "ZoneManager"
 	add_child(_zone_manager); _zone_manager.setup(self)
+
+	# Multiplayer remoto (2026-09-11, Fase B — docs/plans/2026-09-09-
+	# multiplayer-remoto-design.md): si esta instancia es el Anfitrión de una
+	# sala de red activa, el jugador 1 lo controla una PERSONA real por
+	# network, no la IA. RemotePlayerController extiende EasyBotController y
+	# expone la misma superficie pública — ningún otro archivo que llama a
+	# _easy_bot.<método> necesitó cambiar.
+	if NetworkClient.room_code != "" and NetworkClient.is_host:
+		_easy_bot = RemotePlayerController.new()
+	else:
+		_easy_bot = EasyBotController.new()
+	_easy_bot.name = "EasyBotController"
+	add_child(_easy_bot); _easy_bot.setup(self)
+
+	# Multiplayer remoto — lado Remoto: si esta instancia es el Remoto de una
+	# sala de red activa, RemoteMirrorController es lo que le permite seguir
+	# jugando después de mandar su mazo (ver GameBootstrap._send_own_deck_
+	# and_wait_for_host()) — sin esto, se quedaría en la pantalla de espera
+	# para siempre. No hace nada si esta instancia es el Anfitrión o no hay
+	# sala de red activa (chequea NetworkClient en su propio setup()).
+	_remote_mirror = RemoteMirrorController.new(); _remote_mirror.name = "RemoteMirrorController"
+	add_child(_remote_mirror); _remote_mirror.setup(self)
+
+	# Multiplayer remoto — lado Anfitrión: traduce on_card_entered_play/
+	# on_card_left_play (señales que EffectController ya emite) a
+	# instrucciones de red para que RemoteMirrorController, del otro lado,
+	# pueda reflejar el tablero. Inerte si no hay sala de red activa o esta
+	# instancia no es el Anfitrión (chequea NetworkClient en su setup()).
+	_state_broadcaster = GameStateBroadcaster.new(); _state_broadcaster.name = "GameStateBroadcaster"
+	add_child(_state_broadcaster); _state_broadcaster.setup(self)
 
 	_phase_flow = PhaseFlowController.new(); _phase_flow.name = "PhaseFlowController"
 	add_child(_phase_flow); _phase_flow.setup(self)

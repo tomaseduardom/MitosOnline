@@ -5,6 +5,7 @@ class_name MulliganHand
 signal card_hovered(card: Node)
 signal card_unhovered(card: Node)
 signal card_clicked(card: Node)
+signal card_right_clicked(card: Node)
 
 # =============================================================================
 # CONFIGURACIÓN DEL ABANICO
@@ -18,7 +19,7 @@ signal card_clicked(card: Node)
 # =============================================================================
 @export var entry_duration: float = 0.4  # Duración de animación de entrada
 @export var entry_delay_per_card: float = 0.08  # Delay entre cada carta
-@export var hover_scale: float = 2.0  # Escala al hover (a pedido del usuario, 2026-08-22 — antes 1.12 apenas devolvía la carta a su tamaño base, casi no se notaba)
+@export var hover_scale: float = 1.18  # Escala moderada al hover; la inspección de cerca se hace con click derecho
 @export var hover_duration: float = 0.15  # Duración del hover
 
 # =============================================================================
@@ -52,13 +53,15 @@ func add_card(card: Node, animate: bool = true) -> void:
 	cards.append(card)
 	add_child(card)
 
-	# Conectar señales de hover
+	# Conectar señales de hover y clicks
 	if card.has_signal("card_hovered"):
 		card.card_hovered.connect(_on_card_hovered)
 	if card.has_signal("card_unhovered"):
 		card.card_unhovered.connect(_on_card_unhovered)
 	if card.has_signal("card_clicked"):
 		card.card_clicked.connect(_on_card_clicked)
+	if card.has_signal("card_right_clicked"):
+		card.card_right_clicked.connect(_on_card_right_clicked)
 
 	# Habilitar interacción para hover, pero no drag (el mulligan no usa drag)
 	card.can_interact = true
@@ -118,6 +121,8 @@ func add_cards_with_animation(card_list: Array, create_card_func: Callable) -> v
 			card.card_unhovered.connect(_on_card_unhovered)
 		if card.has_signal("card_clicked"):
 			card.card_clicked.connect(_on_card_clicked)
+		if card.has_signal("card_right_clicked"):
+			card.card_right_clicked.connect(_on_card_right_clicked)
 
 		card.can_interact = true
 		card.drag_enabled = false
@@ -153,6 +158,8 @@ func remove_card(card: Node) -> void:
 			card.card_unhovered.disconnect(_on_card_unhovered)
 		if card.card_clicked.is_connected(_on_card_clicked):
 			card.card_clicked.disconnect(_on_card_clicked)
+		if card.has_signal("card_right_clicked") and card.card_right_clicked.is_connected(_on_card_right_clicked):
+			card.card_right_clicked.disconnect(_on_card_right_clicked)
 		card.queue_free()
 		_calculate_fan_positions()
 		_arrange_cards(true)
@@ -332,8 +339,7 @@ func _on_card_hovered(card: Node) -> void:
 	var tween = create_tween()
 	tween.set_parallel(true)
 	tween.tween_property(card, "scale", target.scale * hover_scale, hover_duration).set_ease(Tween.EASE_OUT)
-	# Reducir rotación al hacer hover para mejor visibilidad
-	tween.tween_property(card, "rotation_degrees", target.rotation * 0.3, hover_duration).set_ease(Tween.EASE_OUT)
+	tween.tween_property(card, "position:y", target.position.y - 14.0, hover_duration).set_ease(Tween.EASE_OUT)
 	_tweens[card] = tween
 
 	emit_signal("card_hovered", card)
@@ -351,6 +357,11 @@ func _on_card_unhovered(card: Node) -> void:
 func _on_card_clicked(card: Node) -> void:
 	"""Cuando se hace click en una carta"""
 	emit_signal("card_clicked", card)
+
+
+func _on_card_right_clicked(card: Node) -> void:
+	"""Cuando se hace click derecho en una carta para inspección"""
+	emit_signal("card_right_clicked", card)
 
 
 # =============================================================================

@@ -56,10 +56,9 @@ func resolve_next_trigger() -> Dictionary:
 	# Esperar respuesta o timeout
 	var was_cancelled = await _wait_for_response_window()
 
-	_main.awaiting_response = false
-	_main.emit_signal("response_window_closed", trigger, was_cancelled)
-
 	if was_cancelled:
+		_main.awaiting_response = false
+		_main.emit_signal("response_window_closed", trigger, was_cancelled)
 		print("[TriggerSystem] %s fue CANCELADO" % trigger_type)
 		_main.emit_signal("trigger_cancelled", card, trigger_type, null)
 		return await resolve_next_trigger()
@@ -67,10 +66,24 @@ func resolve_next_trigger() -> Dictionary:
 	# === RESOLVER "EN MEDIDA DE LO POSIBLE" (DAR Sección 8) ===
 	print("[TriggerSystem] Resolviendo: %s de %s" % [trigger_type, card.card_name])
 
+	# awaiting_response sigue en true durante TODA la ejecución del efecto
+	# (2026-09-10, bug real reportado por el usuario: bucle en Fase Final con
+	# Biblioteca de Caballería, mismo patrón con Drácula en Vigilia) — la
+	# Pila de Respuesta Universal (open_response_window(), agregada hoy a
+	# ~40 patrones de trigger) abre una ventana de prioridad REAL desde
+	# DENTRO de _execute_trigger_effect(). Antes, awaiting_response se
+	# apagaba ACÁ ARRIBA, antes de ejecutar el efecto — así que esa ventana
+	# anidada quedaba fuera de la guardia que PhaseFlowController.
+	# _on_priority_both_passed_main() ya tenía para "no reacciones a una
+	# ventana anidada de un trigger, es suya" (comentario propio de ese
+	# archivo). El 'ambos pasaron' de la ventana nueva SÍ llegaba a la
+	# lógica de fin de fase, causando resoluciones dobles.
 	var result = await _execute_trigger_effect(card, trigger_type, event_data)
 	result["card"] = card
 	result["type"] = trigger_type
 
+	_main.awaiting_response = false
+	_main.emit_signal("response_window_closed", trigger, was_cancelled)
 	_main.emit_signal("trigger_resolved", card, trigger_type, result)
 
 	return trigger
@@ -190,7 +203,7 @@ func _resolve_look_and_play_patterns(card: Node, full_ability_text: String, isol
 	por la cola de triggers — 2026-08-27, a pedido del usuario: 'los
 	Talismanes no disparan, resuelven').
 	Returns: true si algo se ejecutó."""
-	if await _main._look_and_play.try_execute_look_pick_pattern(full_ability_text, controller_id):
+	if await _main._look_and_play.try_execute_look_pick_pattern(full_ability_text, controller_id, card):
 		return true
 	if await _main._look_and_play.try_execute_look_play_free_pattern(full_ability_text, card, controller_id):
 		return true
@@ -198,15 +211,135 @@ func _resolve_look_and_play_patterns(card: Node, full_ability_text: String, isol
 		return true
 	if await _main._look_and_play.try_execute_look_play_or_gold_pattern(full_ability_text, card, controller_id):
 		return true
-	if await _main._look_and_play.try_execute_look_dynamic_gold_count_pattern(full_ability_text, controller_id):
+	if await _main._look_and_play.try_execute_look_dynamic_gold_count_pattern(full_ability_text, controller_id, card):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_draw_gold_search_pattern(full_ability_text, controller_id):
+	if await _main._look_and_play.try_execute_look_two_hand_convert_gold_pattern(full_ability_text, card, controller_id):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_draw_reveal_talisman_gold_pattern(full_ability_text, controller_id):
+	if await _main._look_and_play.try_execute_shuffle_or_draw_choice_pattern(full_ability_text, controller_id, card):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_deck_top_or_bottom_to_hand_pattern(full_ability_text, controller_id):
+	if await _main._look_and_play.try_execute_convert_then_reveal_until_same_type_pattern(full_ability_text, card, controller_id):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_shuffle_exile_and_draw_pattern(full_ability_text, controller_id):
+	if await _main._look_and_play.try_execute_search_oro_castillo_or_cementerio_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_reveal_until_ally_and_gold_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_reveal_until_weapon_or_totem_and_ally_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_reveal_until_three_cost1_allies_play_one_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_banish_opponent_ally_search_ignis_titan_discount_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_play_cemetery_ally_free_or_draw_three_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_gain_control_ally_rename_titan_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_non_gold_or_draw_two_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_reveal_gold_weapon_totem_split_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_play_cemetery_ally_discounted_min1_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_gold_for_allies_or_weapons_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_search_each_castillo_two_to_cemetery_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_draw_then_discard_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_up_to_one_ally_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_reveal_until_ally_and_weapon_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_search_two_distinct_names_banish_or_cemetery_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_convert_gold_or_opponent_cost_max_draw_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_draw_or_raise_cemetery_ally_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_or_banish_opponent_cost_max_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_banish_cemeteries_then_destroy_or_draw_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_draw_discard_opponent_mill_exile_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_opponent_mill_four_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_annul_cost_max_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_reveal_gold_to_pagado_weapon_or_totem_to_hand_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_name_reveal_until_match_then_gold_to_pagado_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_convert_two_top_castillo_to_allies_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_banish_four_cemeteries_pattern(full_ability_text, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_search_castillo_or_cemetery_to_pagado_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_annul_non_ally_banish_or_cancel_ability_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_raise_opponent_cemetery_or_destroy_cost1_draw_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_any_cemetery_or_exile_into_castillo_then_draw_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_search_three_opponent_castillo_banish_draw_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_peek_hand_banish_search_castillo_cemetery_draw_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_raise_same_type_gold_and_search_banish_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_raise_up_to_one_ally_or_gold_from_cemetery_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_cost_max_two_draw_two_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_cost_max_three_pattern(full_ability_text, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_bubble_protection_and_schedule_final_phase_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_opponent_mill_six_exile_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_banish_opponent_castillo_by_titan_ignis_cost_draw_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_pay_x_banish_opponent_castillo_draw_per_talisman_totem_pattern(full_ability_text, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_shuffle_one_in_play_and_four_cemetery_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_banish_opponent_cost_sum_six_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_transformacion_pattern(full_ability_text, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_search_azi_ally_to_hand_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_opponent_hand_cost_max_to_bottom_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_titan_abismal_conditional_play_or_draw_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_annul_then_shuffle_hand_by_cost_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_banish_two_from_one_cemetery_then_draw_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_draw_or_search_ally_or_gold_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_optional_search_totem_castillo_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_malleus_name_lock_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_espiritu_maquina_conditional_gold_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_banish_cost_or_search_two_banish_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_look_opponent_hand_discard_then_search_ally_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_banish_opponent_non_gold_and_talisman_surcharge_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_each_player_discard_then_draw_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_draw_gold_search_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_draw_reveal_talisman_gold_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_deck_top_or_bottom_to_hand_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_shuffle_exile_and_draw_pattern(full_ability_text, controller_id, card):
 		return true
 	if await _main._draw_shuffle_resolver.try_execute_shuffle_hand_and_draw_plus_two_pattern(full_ability_text, controller_id):
 		return true
@@ -216,6 +349,10 @@ func _resolve_look_and_play_patterns(card: Node, full_ability_text: String, isol
 		return true
 	if await _main._draw_shuffle_resolver.try_execute_golpe_solar_pattern(full_ability_text, card, controller_id):
 		return true
+	if await _main._draw_shuffle_resolver.try_execute_shuffle_hand_then_draw_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_free_play_weapon_or_totem_cost1_hand_cemetery_pattern(full_ability_text, controller_id, card):
+		return true
 	# Estos dos, a diferencia de todos los de arriba, chequean sobre el texto
 	# YA AISLADO al bloque de este trigger en particular (no el texto
 	# completo de la carta) — 2026-08-29: una carta puede tener el MISMO
@@ -223,21 +360,43 @@ func _resolve_look_and_play_patterns(card: Node, full_ability_text: String, isol
 	# llama una vez POR BLOQUE; si estos dos chequearan full_ability_text
 	# (que no cambia entre llamadas) se dispararían dos veces, una por cada
 	# bloque de la carta.
-	if await _main._look_and_play.try_execute_reveal_until_distinct_cost_allies_pattern(isolated_ability_text, controller_id):
+	if await _main._look_and_play.try_execute_reveal_until_distinct_cost_allies_pattern(isolated_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_search_ally_castillo_or_cementerio_then_buff_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_search_ally_cost_max_free_play_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_cain_damage_shuffle_search_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_search_two_oros_split_destination_pattern(isolated_ability_text, card, controller_id):
 		return true
 	if await _main._convert_misc_resolver.try_execute_name_a_card_pattern(isolated_ability_text, card, controller_id):
 		return true
+	if await _main._convert_misc_resolver.try_execute_no_allies_convert_castillo_top_pattern(isolated_ability_text, card, controller_id):
+		return true
 	if await _main._convert_misc_resolver.try_execute_opponent_discard_and_draw_pattern(isolated_ability_text, card, controller_id):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_banish_from_cemeteries_and_draw_pattern(isolated_ability_text, controller_id):
+	if await _main._draw_shuffle_resolver.try_execute_banish_from_cemeteries_and_draw_pattern(isolated_ability_text, controller_id, card):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_weapon_count_banish_cemetery_pattern(isolated_ability_text, controller_id):
+	if await _main._draw_shuffle_resolver.try_execute_weapon_count_banish_cemetery_pattern(isolated_ability_text, controller_id, card):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_draw_and_shuffle_hand_pattern(isolated_ability_text, controller_id):
+	if await _main._draw_shuffle_resolver.try_execute_vigilia_or_final_banish_opponent_cemetery_pattern(isolated_ability_text, controller_id, card):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_draw_and_shuffle_opponent_card_pattern(isolated_ability_text, controller_id):
+	if await _main._draw_shuffle_resolver.try_execute_shuffle_up_to_n_cemeteries_pattern(isolated_ability_text, controller_id, card):
 		return true
-	if await _main._convert_misc_resolver.try_execute_banish_top_by_ally_count_and_draw_pattern(isolated_ability_text, controller_id):
+	if await _main._draw_shuffle_resolver.try_execute_shuffle_cemeteries_or_raise_ally_totem_pattern(isolated_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_banish_up_to_n_cemeteries_pattern(isolated_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_banish_cemeteries_equal_to_own_strength_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_banish_up_to_n_cemeteries_then_draw_pattern(isolated_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_draw_and_shuffle_hand_pattern(isolated_ability_text, controller_id, card):
+		return true
+	if await _main._draw_shuffle_resolver.try_execute_draw_and_shuffle_opponent_card_pattern(isolated_ability_text, controller_id, card):
+		return true
+	if await _main._convert_misc_resolver.try_execute_banish_top_by_ally_count_and_draw_pattern(isolated_ability_text, controller_id, card):
 		return true
 	var action := UniversalCardParser.extract_action(isolated_ability_text)
 	if action.get("matched", false):
@@ -341,11 +500,21 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 			# Holmes) es la misma cláusula que el disparador de entrada — no
 			# tiene 'cuando ataque' como substring literal.
 			var clause := _isolate_trigger_clause(ability_text, [
-				"cuando ataque", "cuando atac", "al atacar", "en juego o ataque"
+				"cuando ataque", "cuando atac", "al atacar", "en juego o ataque", "cuando el portador ataque"
 			])
 			if not clause.is_empty():
 				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
 				if await _main._convert_misc_resolver.try_execute_mill_convert_to_ally_pattern(clause, card, controller_id):
+					result["no_handler"] = false
+				elif await _main._look_and_play.try_execute_wielder_attack_gold_or_draw_pattern(clause, card, controller_id):
+					result["no_handler"] = false
+				elif await _main._look_and_play.try_execute_banish_opponent_non_gold_and_talisman_surcharge_pattern(ability_text, card, controller_id):
+					result["no_handler"] = false
+				elif await _main._look_and_play.try_execute_reveal_until_three_cost1_allies_play_one_pattern(ability_text, controller_id, card):
+					result["no_handler"] = false
+				elif await _main._look_and_play.try_execute_attacks_alone_draw_pattern(ability_text, controller_id, card):
+					result["no_handler"] = false
+				elif await _main._look_and_play.try_execute_banish_opponent_ally_search_ignis_titan_discount_pattern(ability_text, card, controller_id):
 					result["no_handler"] = false
 				else:
 					var action := UniversalCardParser.extract_action(clause)
@@ -373,6 +542,22 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 				var resolved := await _resolve_look_and_play_patterns(card, ability_text, clause, controller_id, event_data)
 				if resolved:
 					result["no_handler"] = false
+		elif trigger_type == "on_opponent_turn_end":
+			# 'En la Fase Final oponente' (2026-09-04, p.ej. Biblioteca de
+			# Caballería) — mismo aislamiento que on_turn_end, pero disparado
+			# por TriggerSystem.resolve_turn_end_triggers() sobre el campo del
+			# jugador CONTRARIO al que termina turno (ver ese método).
+			var ability_text: String = ""
+			if card.get("card_data") != null:
+				ability_text = card.card_data.get("habilidad", "")
+			var clause := _isolate_trigger_clause(ability_text, [
+				"en la fase final oponente", "en la fase final de tu oponente"
+			])
+			if not clause.is_empty():
+				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+				var resolved := await _resolve_look_and_play_patterns(card, ability_text, clause, controller_id, event_data)
+				if resolved:
+					result["no_handler"] = false
 		elif trigger_type == "on_agrupacion":
 			# 'En tu Agrupación' (2026-08-30, p.ej. Espada del Juicio: 'Cuando
 			# entra en juego y en tu Agrupación, Destierra...') — misma
@@ -386,6 +571,60 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 				ability_text = card.card_data.get("habilidad", "")
 			var clause := _isolate_trigger_clause(ability_text, [
 				"en tu agrupación", "en tu agrupacion"
+			])
+			if not clause.is_empty():
+				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+				var resolved := await _resolve_look_and_play_patterns(card, ability_text, clause, controller_id, event_data)
+				if resolved:
+					result["no_handler"] = false
+		elif trigger_type == "on_turn_start":
+			# 'Al comienzo del turno' (2026-09-04, a pedido del usuario —
+			# p.ej. manuel rodriguez: 'Al comienzo del turno, genera un Oro
+			# para Aliados o Baraja una carta de coste 3 o menos') — mismo
+			# aislamiento que on_agrupacion (disparado desde el mismo lugar
+			# real, ver TriggerSystem.resolve_agrupacion_triggers()).
+			var ability_text: String = ""
+			if card.get("card_data") != null:
+				ability_text = card.card_data.get("habilidad", "")
+			var clause := _isolate_trigger_clause(ability_text, [
+				"al comienzo del turno", "al inicio del turno", "al comienzo de tu turno"
+			])
+			if not clause.is_empty():
+				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+				if await _main._look_and_play.try_execute_gold_for_allies_or_shuffle_cost_max_pattern(clause, card, controller_id):
+					result["no_handler"] = false
+				else:
+					var resolved := await _resolve_look_and_play_patterns(card, ability_text, clause, controller_id, event_data)
+					if resolved:
+						result["no_handler"] = false
+		elif trigger_type == "on_ataque_start":
+			# 'Al comienzo del Ataque' (2026-09-04, a pedido del usuario —
+			# p.ej. almirante akari: 'Al comienzo del Ataque, genera un Oro
+			# por el turno para jugar Aliados o Armas').
+			var ability_text: String = ""
+			if card.get("card_data") != null:
+				ability_text = card.card_data.get("habilidad", "")
+			var clause := _isolate_trigger_clause(ability_text, [
+				"al comienzo del ataque"
+			])
+			if not clause.is_empty():
+				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+				var resolved := await _resolve_look_and_play_patterns(card, ability_text, clause, controller_id, event_data)
+				if resolved:
+					result["no_handler"] = false
+		elif trigger_type == "on_vigilia":
+			# 'Al comienzo de tu/la Vigilia' (2026-09-03, corregido — NO
+			# 'en tu vigilia' sola: esa es la ventana NORMAL de las
+			# habilidades activadas ('una vez por turno, puedes X'), así
+			# que por sí sola no implica disparador real. Ver la nota
+			# larga en Card.gd TRIGGER_KEYWORDS['on_vigilia']. 'en tu
+			# vigilia o fase final' queda aparte por Mariano Osorio,
+			# acotado a esa combinación exacta.
+			var ability_text: String = ""
+			if card.get("card_data") != null:
+				ability_text = card.card_data.get("habilidad", "")
+			var clause := _isolate_trigger_clause(ability_text, [
+				"al comienzo de tu vigilia", "al comienzo de la vigilia", "en tu vigilia o fase final"
 			])
 			if not clause.is_empty():
 				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
@@ -408,6 +647,8 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 			if not clause.is_empty():
 				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
 				if await _main._convert_misc_resolver.try_execute_convert_ally_to_gold_pattern(clause, card, controller_id):
+					result["no_handler"] = false
+				elif await _main._draw_shuffle_resolver.try_execute_banish_cemeteries_equal_to_own_strength_pattern(clause, card, controller_id):
 					result["no_handler"] = false
 				else:
 					var action := UniversalCardParser.extract_action(clause)

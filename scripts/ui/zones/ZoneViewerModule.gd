@@ -9,6 +9,10 @@ const SHADER_VIGNETTE := preload("res://assets/shaders/zone_modal_vignette.gdsha
 var _main: Node = null
 
 
+const FONT_TITLE := preload("res://assets/fonts/Cinzel-Bold.ttf")
+const FONT_BODY := preload("res://assets/fonts/Marcellus-Regular.ttf")
+
+
 func setup(main: Node) -> void:
 	_main = main
 	setup_public_zone_viewers()
@@ -41,6 +45,9 @@ func setup_public_zone_viewers() -> void:
 		tr.stretch_mode = TextureRect.STRETCH_SCALE
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		tr.visible = false
+		if pid == 1:
+			tr.pivot_offset = Vector2(50.0, 70.0)
+			tr.rotation_degrees = 180.0
 		panel.add_child(tr)
 		panel.move_child(tr, 0)  # Detrás de los otros hijos (count, label)
 
@@ -92,7 +99,7 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 	# Fondo oscuro exterior traslúcido — click fuera cierra
 	var bg = ColorRect.new()
 	bg.size = vp
-	bg.color = Color(0, 0, 0, 0.65)
+	bg.color = Color(0.01, 0.01, 0.02, 0.75)
 	bg.mouse_filter = Control.MOUSE_FILTER_STOP
 	bg.gui_input.connect(func(ev):
 		if ev is InputEventMouseButton and ev.pressed:
@@ -105,7 +112,7 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 
 	# Paleta y textura ilustrada temática generada
 	var bg_tex = TEX_CEMETERY_BG if is_cemetery else TEX_EXILE_BG
-	var title_color = Color(0.94, 0.92, 0.88, 1.0)
+	var title_color = Color(1.0, 0.90, 0.60, 1.0)
 	var tint_color = Color(0.01, 0.04, 0.04, 0.35) if is_cemetery else Color(0.04, 0.01, 0.05, 0.35)
 
 	# Dimensiones dinámicas adaptadas a la proporción real de cartas 1:1.4
@@ -119,10 +126,10 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 		var sep := 18.0
 		var content_w := float(n_cards) * card_w + float(n_cards - 1) * sep + 60.0
 		popup_w = clampf(content_w, 460.0, vp.x * 0.88)
-		popup_h = 310.0
+		popup_h = 320.0
 	else:
-		popup_w = minf(vp.x * 0.88, 860.0)
-		popup_h = minf(vp.y * 0.84, 560.0)
+		popup_w = minf(vp.x * 0.88, 880.0)
+		popup_h = minf(vp.y * 0.84, 580.0)
 
 	var panel = Panel.new()
 	panel.size = Vector2(popup_w, popup_h)
@@ -130,11 +137,13 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	panel.clip_contents = false
 
-	# Estilo con sombra ambiental profunda y esquinas redondeadas
+	# Estilo con borde biselado de oro envejecido y sombra profunda
 	var pstyle = StyleBoxFlat.new()
-	pstyle.bg_color = Color(0.02, 0.02, 0.04, 0.96)
-	pstyle.set_corner_radius_all(22)
-	pstyle.shadow_color = Color(0, 0, 0, 0.85)
+	pstyle.bg_color = Color(0.04, 0.03, 0.06, 0.98)
+	pstyle.border_color = Color(0.85, 0.72, 0.28, 0.95)
+	pstyle.set_border_width_all(2)
+	pstyle.set_corner_radius_all(18)
+	pstyle.shadow_color = Color(0, 0, 0, 0.90)
 	pstyle.shadow_size = 35
 	panel.add_theme_stylebox_override("panel", pstyle)
 	popup_canvas.add_child(panel)
@@ -150,7 +159,7 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 	var smat = ShaderMaterial.new()
 	smat.shader = SHADER_VIGNETTE
 	smat.set_shader_parameter("panel_size", Vector2(popup_w, popup_h))
-	smat.set_shader_parameter("corner_radius", 22.0)
+	smat.set_shader_parameter("corner_radius", 18.0)
 	smat.set_shader_parameter("vignette_amount", 0.72)
 	smat.set_shader_parameter("tint_color", tint_color)
 	smat.set_shader_parameter("edge_shadow_color", Color(0.01, 0.01, 0.02, 0.95))
@@ -160,53 +169,87 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 	# Layout interior
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	vbox.set_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 16)
-	vbox.add_theme_constant_override("separation", 10)
+	vbox.set_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 18)
+	vbox.add_theme_constant_override("separation", 12)
 	panel.add_child(vbox)
 
-	# Encabezado limpio y suave
+	# Encabezado con acabado de oro
 	var header_bar = PanelContainer.new()
 	var hb_style = StyleBoxFlat.new()
-	hb_style.bg_color = Color(0.02, 0.02, 0.03, 0.60)
+	hb_style.bg_color = Color(0.06, 0.05, 0.09, 0.85)
+	hb_style.border_color = Color(0.80, 0.68, 0.32, 0.50)
+	hb_style.border_width_bottom = 1
 	hb_style.set_corner_radius_all(10)
+	hb_style.content_margin_left = 14
+	hb_style.content_margin_right = 14
+	hb_style.content_margin_top = 8
+	hb_style.content_margin_bottom = 8
 	header_bar.add_theme_stylebox_override("panel", hb_style)
 	vbox.add_child(header_bar)
 
 	var header = HBoxContainer.new()
 	header.alignment = BoxContainer.ALIGNMENT_CENTER
+	header.add_theme_constant_override("separation", 14)
 	header_bar.add_child(header)
 
 	var title_lbl = Label.new()
 	title_lbl.text = "CEMENTERIO" if is_cemetery else "DESTIERRO"
 	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title_lbl.add_theme_font_size_override("font_size", 17)
+	title_lbl.add_theme_font_override("font", FONT_TITLE)
+	title_lbl.add_theme_font_size_override("font_size", 18)
 	title_lbl.add_theme_color_override("font_color", title_color)
 	title_lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
 	title_lbl.add_theme_constant_override("shadow_offset_x", 1)
-	title_lbl.add_theme_constant_override("shadow_offset_y", 1)
+	title_lbl.add_theme_constant_override("shadow_offset_y", 2)
 	header.add_child(title_lbl)
 
-	# Pastilla de contador suave
+	# Pastilla de contador heráldica con marco dorado
 	var gem_panel = PanelContainer.new()
 	var g_style = StyleBoxFlat.new()
-	g_style.bg_color = Color(0.08, 0.08, 0.12, 0.70)
+	g_style.bg_color = Color(0.10, 0.09, 0.14, 0.90)
+	g_style.border_color = Color(0.85, 0.72, 0.28, 0.80)
+	g_style.set_border_width_all(1)
 	g_style.set_corner_radius_all(8)
+	g_style.content_margin_left = 10
+	g_style.content_margin_right = 10
+	g_style.content_margin_top = 4
+	g_style.content_margin_bottom = 4
 	gem_panel.add_theme_stylebox_override("panel", g_style)
 	header.add_child(gem_panel)
 
 	var count_lbl = Label.new()
-	count_lbl.text = " %d %s " % [n_cards, "Carta" if n_cards == 1 else "Cartas"]
+	count_lbl.text = "%d %s" % [n_cards, "Carta" if n_cards == 1 else "Cartas"]
+	count_lbl.add_theme_font_override("font", FONT_TITLE)
 	count_lbl.add_theme_font_size_override("font_size", 12)
-	count_lbl.add_theme_color_override("font_color", Color(0.88, 0.88, 0.88, 1.0))
+	count_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.85, 1.0))
 	gem_panel.add_child(count_lbl)
 
 	var close_btn = Button.new()
-	close_btn.text = "  ✕  "
-	close_btn.flat = true
+	close_btn.text = "CERRAR"
+	close_btn.focus_mode = Control.FOCUS_NONE
 	close_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	close_btn.add_theme_font_size_override("font_size", 16)
-	close_btn.add_theme_color_override("font_color", Color(0.9, 0.7, 0.7))
+	close_btn.add_theme_font_override("font", FONT_TITLE)
+	close_btn.add_theme_font_size_override("font_size", 11)
+
+	var c_style = StyleBoxFlat.new()
+	c_style.bg_color = Color(0.18, 0.10, 0.10, 0.90)
+	c_style.border_color = Color(0.75, 0.40, 0.40, 0.85)
+	c_style.set_border_width_all(1)
+	c_style.set_corner_radius_all(6)
+	c_style.content_margin_left = 12
+	c_style.content_margin_right = 12
+	c_style.content_margin_top = 4
+	c_style.content_margin_bottom = 4
+	close_btn.add_theme_stylebox_override("normal", c_style)
+
+	var c_hover = c_style.duplicate()
+	c_hover.bg_color = Color(0.28, 0.14, 0.14, 1.0)
+	c_hover.border_color = Color(1.0, 0.55, 0.55, 1.0)
+	close_btn.add_theme_stylebox_override("hover", c_hover)
+
+	close_btn.add_theme_color_override("font_color", Color(1.0, 0.88, 0.88))
+	close_btn.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0))
 	close_btn.pressed.connect(func(): popup_canvas.queue_free())
 	header.add_child(close_btn)
 
@@ -216,12 +259,13 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 		empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		empty_lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		empty_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		empty_lbl.add_theme_font_size_override("font_size", 15)
-		empty_lbl.add_theme_color_override("font_color", Color(0.8, 0.8, 0.85))
+		empty_lbl.add_theme_font_override("font", FONT_BODY)
+		empty_lbl.add_theme_font_size_override("font_size", 16)
+		empty_lbl.add_theme_color_override("font_color", Color(0.85, 0.80, 0.75, 1.0))
 		vbox.add_child(empty_lbl)
 		return
 
-	var is_own_cemetery := player_id == 0 and zone_type == "cemetery"
+	var is_own_zone := player_id == 0
 
 	if n_cards <= 4:
 		var center_box = HBoxContainer.new()
@@ -232,7 +276,7 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 		vbox.add_child(center_box)
 
 		for card_data in cards_data:
-			_create_popup_card(card_data, player_id, zone_type, is_own_cemetery, popup_canvas, center_box, Vector2(0.933, 0.933))
+			_create_popup_card(card_data, player_id, zone_type, is_own_zone, popup_canvas, center_box, Vector2(0.933, 0.933))
 	else:
 		var scroll = ScrollContainer.new()
 		scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -248,14 +292,14 @@ func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
 		scroll.add_child(grid)
 
 		for card_data in cards_data:
-			_create_popup_card(card_data, player_id, zone_type, is_own_cemetery, popup_canvas, grid, Vector2(0.84, 0.84))
+			_create_popup_card(card_data, player_id, zone_type, is_own_zone, popup_canvas, grid, Vector2(0.84, 0.84))
 
 
-func _create_popup_card(card_data: Dictionary, player_id: int, zone_type: String, is_own_cemetery: bool, popup_canvas: CanvasLayer, container: Control, base_scale_val: Vector2) -> void:
+func _create_popup_card(card_data: Dictionary, player_id: int, zone_type: String, is_own_zone: bool, popup_canvas: CanvasLayer, container: Control, base_scale_val: Vector2) -> void:
 	# Wrapper con dimensiones fijas para evitar deformación por contenedores de Godot
-	var wrapper = Control.new()
 	var target_w := 150.0 * base_scale_val.x
 	var target_h := 210.0 * base_scale_val.y
+	var wrapper = Control.new()
 	wrapper.custom_minimum_size = Vector2(target_w, target_h)
 	wrapper.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	wrapper.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -271,19 +315,76 @@ func _create_popup_card(card_data: Dictionary, player_id: int, zone_type: String
 	card.scale = base_scale_val
 	card.base_scale = base_scale_val
 	card.position = Vector2.ZERO
-	card.pivot_offset = Vector2(75.0, 105.0)
+	card.pivot_offset = Vector2.ZERO
 
 	card.gui_input.connect(func(ev):
 		if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed:
 			_main._card_inspector.on_card_right_clicked(card)
 	)
 
-	if is_own_cemetery and PaymentManager.card_has_exhumar(card_data):
+	var is_exhumable := is_own_zone and zone_type == "cemetery" and PaymentManager.card_has_exhumar(card_data)
+	var is_exile_playable := is_own_zone and zone_type == "exile" and PaymentManager.card_playable_from_exile(card_data)
+
+	if is_exhumable or is_exile_playable:
 		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		card.gui_input.connect(func(ev):
-			if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT and ev.pressed:
-				_on_exhumar_card_clicked(card_data, popup_canvas)
-		)
+
+		# Borde pulsante esmeralda de acción legal disponible
+		var glow_panel = Panel.new()
+		glow_panel.name = "LegalActionGlow"
+		glow_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		glow_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+		var gstyle = StyleBoxFlat.new()
+		gstyle.bg_color = Color(0, 0, 0, 0)
+		gstyle.border_color = Color(0.35, 1.0, 0.55, 0.95)
+		gstyle.set_border_width_all(3)
+		gstyle.set_corner_radius_all(8)
+		gstyle.shadow_color = Color(0.20, 0.90, 0.40, 0.55)
+		gstyle.shadow_size = 8
+		glow_panel.add_theme_stylebox_override("panel", gstyle)
+		card.add_child(glow_panel)
+
+		var ptw = card.create_tween().set_loops()
+		ptw.tween_property(glow_panel, "modulate:a", 0.35, 0.6).set_ease(Tween.EASE_IN_OUT)
+		ptw.tween_property(glow_panel, "modulate:a", 1.0, 0.6).set_ease(Tween.EASE_IN_OUT)
+
+		# Pastilla heráldica inferior con texto limpio (sin emojis)
+		var action_badge = PanelContainer.new()
+		action_badge.name = "ActionBadge"
+		action_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		action_badge.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+		action_badge.offset_top = -28
+		action_badge.offset_bottom = -6
+		action_badge.offset_left = -48
+		action_badge.offset_right = 48
+		var ab_style = StyleBoxFlat.new()
+		ab_style.bg_color = Color(0.06, 0.22, 0.12, 0.95)
+		ab_style.border_color = Color(0.40, 1.0, 0.60, 1.0)
+		ab_style.set_border_width_all(1)
+		ab_style.set_corner_radius_all(6)
+		ab_style.content_margin_left = 6
+		ab_style.content_margin_right = 6
+		action_badge.add_theme_stylebox_override("panel", ab_style)
+
+		var action_lbl = Label.new()
+		action_lbl.text = "EXHUMAR" if is_exhumable else "JUGAR"
+		action_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		action_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		action_lbl.add_theme_font_override("font", FONT_TITLE)
+		action_lbl.add_theme_font_size_override("font_size", 10)
+		action_lbl.add_theme_color_override("font_color", Color(0.90, 1.0, 0.90, 1.0))
+		action_badge.add_child(action_lbl)
+		card.add_child(action_badge)
+
+		if is_exhumable:
+			card.gui_input.connect(func(ev):
+				if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT and ev.pressed:
+					_on_exhumar_card_clicked(card_data, popup_canvas)
+			)
+		elif is_exile_playable:
+			card.gui_input.connect(func(ev):
+				if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT and ev.pressed:
+					_on_exile_card_clicked(card_data, popup_canvas)
+			)
 
 	wrapper.add_child(card)
 	container.add_child(wrapper)
@@ -304,6 +405,21 @@ func _on_exhumar_card_clicked(card_data: Dictionary, popup_canvas: CanvasLayer) 
 	if popup_canvas and is_instance_valid(popup_canvas):
 		popup_canvas.queue_free()
 	await _main._gold_manager.play_card_from_cemetery(card_data)
+
+
+func _on_exile_card_clicked(card_data: Dictionary, popup_canvas: CanvasLayer) -> void:
+	"""Click en una carta jugable desde el Destierro propio dentro de su
+	popup (2026-09-04) — cierra el popup y la juega vía GoldManager.
+	play_card_from_exile() (paga el coste real, no un pago especial como
+	Exhumar). GoldManager.play_card_from_exile() ya valida fase/prioridad/
+	Oro disponible y avisa por _update_debug() si algo falla, así que acá
+	no hace falta duplicar esos chequeos."""
+	if not _main._gold_manager:
+		return
+	if popup_canvas and is_instance_valid(popup_canvas):
+		popup_canvas.queue_free()
+	var discount: int = PaymentManager.get_exile_play_discount(card_data)
+	await _main._gold_manager.play_card_from_exile(card_data, discount)
 
 
 func _on_zone_cemetery_changed(player_id: int, _count: int) -> void:

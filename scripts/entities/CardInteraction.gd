@@ -254,9 +254,6 @@ func return_to_hand() -> void:
 		Constants.Zone.RESERVA_ORO, Constants.Zone.ORO_PAGADO,
 		Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO
 	]
-	var effective_target_rotation: float = 180.0 if is_opp_in_play else _card.target_rotation
-	if _card.is_converted or (KeywordManager and KeywordManager.has_method("is_silenced") and KeywordManager.is_silenced(_card)):
-		effective_target_rotation = 180.0
 	if _card.current_zone in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 		# Carta del campo: mantener top_level=true y regresar a su posición guardada en su slot
 		_card.current_state = Card.CardState.IN_PLAY
@@ -265,9 +262,10 @@ func return_to_hand() -> void:
 		var tween = _card.create_tween()
 		tween.set_parallel(true)
 		tween.tween_property(_card, "global_position", return_pos, 0.2).set_ease(Tween.EASE_OUT)
-		tween.tween_property(_card, "rotation_degrees", effective_target_rotation, 0.2).set_ease(Tween.EASE_OUT)
+		tween.tween_property(_card, "rotation_degrees", 0.0, 0.2).set_ease(Tween.EASE_OUT)
 		tween.tween_property(_card, "scale", _card.base_scale, 0.2).set_ease(Tween.EASE_OUT)
 		await tween.finished
+		_card._refresh_disabled_rotation()
 	else:
 		# Carta de la mano: animar de vuelta a la posición guardada
 		_card.current_state = Card.CardState.IN_HAND
@@ -275,9 +273,10 @@ func return_to_hand() -> void:
 		var tween = _card.create_tween()
 		tween.set_parallel(true)
 		tween.tween_property(_card, "global_position", _card.original_position, 0.25).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-		tween.tween_property(_card, "rotation_degrees", effective_target_rotation, 0.25).set_ease(Tween.EASE_OUT)
+		tween.tween_property(_card, "rotation_degrees", _card.target_rotation, 0.25).set_ease(Tween.EASE_OUT)
 		tween.tween_property(_card, "scale", _card.base_scale, 0.25).set_ease(Tween.EASE_OUT)
 		await tween.finished
+		_card._refresh_disabled_rotation()
 
 	_card.z_index = _card.original_z_index
 

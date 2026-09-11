@@ -23,6 +23,22 @@ func setup(inspector: CardInspectionLayer) -> void:
 func _on_step_d_waiting(stack_obj: Dictionary, priority_player: int) -> void:
 	if _step_d_overlay and is_instance_valid(_step_d_overlay):
 		_step_d_overlay.queue_free()
+		_step_d_overlay = null
+
+	# Pila de Respuesta Universal (2026-09-09, Capa 1 — ver docs/plans/
+	# 2026-09-09-pila-respuesta-universal-design.md): con la migración de los
+	# patrones de trigger, esta ventana ya puede abrirse para CUALQUIERA de
+	# los dos jugadores (antes, en la práctica, priority_player siempre
+	# terminaba siendo el humano, porque nada disparado por el bot llegaba
+	# hasta acá). Si le toca al bot, todavía no tiene ninguna lógica real de
+	# "¿quiero responder con algo?" (Capa 2, pendiente) — pasa siempre, pero
+	# por el camino REAL de PriorityManager (no el auto-pase ciego de antes),
+	# para no romper la secuencia de "ambos pasan consecutivamente" que
+	# ActionPipeline espera.
+	if priority_player != 0:
+		_bot_pass_after(0.3)
+		return
+
 	var ability_name = stack_obj.get("name", "Habilidad")
 	var layer = CanvasLayer.new()
 	layer.layer = 90
@@ -54,7 +70,7 @@ func _on_step_d_waiting(stack_obj: Dictionary, priority_player: int) -> void:
 	name_lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
 	vbox.add_child(name_lbl)
 	var status_lbl = Label.new()
-	status_lbl.text = "El oponente puede responder..."
+	status_lbl.text = "¿Querés responder? (5s)"
 	status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	status_lbl.add_theme_font_size_override("font_size", 10)
 	status_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
@@ -86,13 +102,42 @@ func _on_step_d_waiting(stack_obj: Dictionary, priority_player: int) -> void:
 			)
 			btn_row.add_child(btn_signo)
 
-	_inspector.get_tree().create_timer(2.0).timeout.connect(func():
+	# Timer real de 5 segundos (2026-09-09, antes 2s ciegos que se auto-
+	# pasaban sin importar nada): el botón "Pasar" ya es clickeable desde el
+	# instante 0 arriba, así que esto es solo el límite superior de espera si
+	# el jugador no toca nada — no un retraso artificial en el camino feliz.
+	_inspector.get_tree().create_timer(5.0).timeout.connect(func():
 		if _step_d_overlay and is_instance_valid(_step_d_overlay):
 			_pass_both_priority(null)
 	)
 	panel.modulate.a = 0.0
 	var tw = _inspector.create_tween()
 	tw.tween_property(panel, "modulate:a", 1.0, 0.2)
+
+
+func _bot_pass_after(delay: float) -> void:
+	"""Capa 2 de la Pila de Respuesta Universal (2026-09-09): antes de pasar,
+	el bot intenta responder de verdad con una habilidad activada propia
+	(ver EasyBotController.try_respond_with_activated_ability(), alcance v1
+	documentado ahí) — Prevención se maneja aparte, en su propio choke point
+	(EffectController.offer_prevention_for_player()), no acá. Si usó algo,
+	ese objeto ya quedó en el tope de ActionPipeline y el propio loop de
+	StackStepResolver lo detecta solo como "hubo respuesta" — no corresponde
+	pasar. Si no, pasa por el camino REAL de PriorityManager (no un atajo
+	que ignore de quién es el turno), con un pequeño delay solo para que no
+	se sienta instantáneo/confuso en pantalla — sin ninguna intención de
+	ocultar información (el usuario confirmó que el timing contra el bot no
+	importa)."""
+	await _inspector.get_tree().create_timer(delay).timeout
+	if not PriorityManager.priority_window_active:
+		return
+	if _inspector._main._easy_bot and await _inspector._main._easy_bot.try_respond_with_activated_ability():
+		return
+	if PriorityManager.priority_window_active:
+		PriorityManager.pass_priority()
+		await _inspector.get_tree().create_timer(0.35).timeout
+		if PriorityManager.priority_window_active:
+			PriorityManager.pass_priority()
 
 
 func _qualifies_for_signo_amarillo(stack_obj: Dictionary) -> bool:

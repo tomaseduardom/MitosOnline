@@ -179,8 +179,7 @@ verificar que esa propiedad exista ahí.
   fuentes con predicados distintos coexisten sin mezclarse.
 - Orden de pago en `pagar_coste()`: restringido que aplica → genérico → físico (el
   restringido se gasta primero porque si no se usa se pierde igual al pasar de turno).
-- Tokens visuales en Reserva de Oro (`_spawn_gold_token`) — dorado para genérico, celeste
-  para restringido, escala `Constants.GOLD_CARD_SCALE`.
+- Tokens visuales en Reserva de Oro (`_spawn_gold_token`) — cartas de ficha temáticas dedicadas con marco rúnico e ilustración según restricción (`res://assets/ui/tokens/`), escala `Constants.GOLD_CARD_SCALE` con animación de disolución y elevación mágica al consumirse o expirar.
 - `PaymentManager.puede_jugar_carta()` delega en `GoldManager.puede_pagar()` (fix
   2026-08-28: antes leía `main.get("oros_virtuales")`, que siempre daba null/0 — el Oro
   Virtual nunca contaba para decidir si se podía *intentar* jugar una carta, aunque el

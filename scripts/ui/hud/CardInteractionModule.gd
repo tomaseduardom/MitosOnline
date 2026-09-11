@@ -91,7 +91,13 @@ func cancel_target_selection() -> void:
 
 func _resolve_target_selection(card: Node) -> void:
 	if _target_filter.is_valid() and not _target_filter.call(card):
-		_main._update_debug("Objetivo no válido — elige otra carta")
+		# 2026-09-06, bug reportado por el usuario: quedarse pegado
+		# clickeando la mano repetidamente sin saber que ESC cancela la
+		# selección (p.ej. Golpe Solar: 'Baraja hasta una carta rival...
+		# ESC para no barajar ninguna' — sin este recordatorio, cada click
+		# en la mano solo repetía este mensaje para siempre, sin pista de
+		# cómo salir). El mensaje ahora lo dice explícito.
+		_main._update_debug("Objetivo no válido — elige otra carta o presiona ESC para cancelar")
 		return
 	var callback = _target_callback
 	is_selecting_target = false
@@ -123,6 +129,17 @@ func _on_card_clicked(card: Node) -> void:
 		return
 	if is_placing_gold:
 		await _main._gold_manager._place_card_as_gold(card)
+		return
+	# Declarar bloqueador con un clic (2026-09-08, primera vez que se conecta
+	# GameManager.declare_blocker() a una UI real — existía desde antes pero
+	# sin ningún llamador, así que Bloqueo nunca dejaba hacer nada más que
+	# pasar prioridad, bug real reportado por el usuario: "no funcionó el
+	# sistema de bloqueos"). Solo el propio Aliado en Línea de Defensa del
+	# jugador humano — si el humano es quien ataca, sus Aliados están en
+	# Línea de Ataque, no Defensa, así que este bloque no interfiere.
+	if GameManager.current_phase == Constants.Phase.BLOQUEO and card.card_type == Constants.CardType.ALIADO \
+			and card.current_zone == Constants.Zone.LINEA_DEFENSA and card.controller_id == 0:
+		await _declare_blocker(card)
 		return
 	# Declarar atacante con un clic (2026-08-17): el arrastre se desactivó
 	# (Card.drag_enabled = false) por los bugs de posicionamiento que
@@ -201,7 +218,14 @@ func _on_card_double_clicked(card: Node) -> void:
 	# llegara a GoldManager.play_card(), así que un Arma con Lobo Sagrado en
 	# juego (o cualquier Talismán) en Guerra de Talismanes nunca alcanzaba a
 	# intentarse siquiera (2026-08-28, bug reportado por el usuario).
-	if GameManager.current_phase != Constants.Phase.VIGILIA and not _main._gold_manager.has_phase_exception(card.card_type):
+	# Talismanes de respuesta instantánea (Anula/Cancela) también quedan
+	# exceptuados acá, en CUALQUIER fase (2026-09-06) — mismo criterio que
+	# GoldManager.play_card()'s is_instant_response, este gateo de UI corre
+	# antes y los habría bloqueado igual sin este chequeo repetido.
+	var is_instant_response_talisman: bool = card.card_type == Constants.CardType.TALISMAN \
+		and _main._gold_manager._is_response_only_talisman(card)
+	if GameManager.current_phase != Constants.Phase.VIGILIA and not _main._gold_manager.has_phase_exception(card.card_type) \
+			and not is_instant_response_talisman:
 		_main._update_debug(_main._gold_manager.get_phase_rejection_reason(card.card_type))
 		return
 	if GameManager.active_player_id != 0:
@@ -372,6 +396,44 @@ func _declare_attacker(card: Node) -> void:
 	_declaring_attackers.erase(card)
 
 
+func _declare_blocker(card: Node) -> void:
+	"""Declara 'card' como bloqueador de un atacante (fase BLOQUEO, DAR
+	5.3.2). Si hay más de un atacante sin bloquear, pregunta cuál — con
+	exactamente uno, se asigna directo sin preguntar. Un segundo clic sobre
+	un bloqueador ya declarado no hace nada especial todavía (deselección/
+	reasignación queda fuera de alcance de este primer cableado real)."""
+	if not card or not is_instance_valid(card):
+		return
+	if card in GameManager.blockers.values():
+		var blocking_name: String = card.get("card_name") if card.get("card_name") else "Aliado"
+		_main._update_debug("%s ya está bloqueando" % blocking_name)
+		return
+
+	var unblocked_attackers: Array = []
+	for attacker in GameManager.attackers:
+		if is_instance_valid(attacker) and not GameManager.blockers.has(attacker):
+			unblocked_attackers.append(attacker)
+	if unblocked_attackers.is_empty():
+		_main._update_debug("No hay atacantes sin bloquear")
+		return
+
+	var attacker: Node = unblocked_attackers[0]
+	if unblocked_attackers.size() > 1:
+		var options: Array = []
+		for a in unblocked_attackers:
+			options.append(a.get("card_name") if a.get("card_name") else "Aliado")
+		var idx: int = await SelectionManager.await_choice(_main, "¿A cuál atacante bloquea?", options)
+		attacker = unblocked_attackers[idx]
+
+	GameManager.declare_blocker(card, attacker)
+	var card_name: String = card.get("card_name") if card.get("card_name") else "Aliado"
+	var attacker_name: String = attacker.get("card_name") if attacker.get("card_name") else "Aliado"
+	var tween = create_tween()
+	tween.tween_property(card, "modulate", Color(0.4, 0.7, 1.0, 1.0), 0.2)
+	_main._update_debug("%s bloquea a %s" % [card_name, attacker_name])
+	print("[CardInteraction] '%s' bloquea a '%s'" % [card_name, attacker_name])
+
+
 func _mark_card_as_attacker(card: Node) -> void:
 	"""Aspecto visual de 'atacando': tinte naranja."""
 	if not card or not is_instance_valid(card):
@@ -412,11 +474,8 @@ func _advance_card_to_attack_line(card: Node, ataque_container: HBoxContainer) -
 	card.top_level = true
 	card.global_position = start_pos
 
-	var direction_sign: float = signf(ataque_container.global_position.y - start_pos.y)
-	if direction_sign == 0.0:
-		direction_sign = -1.0
 	var card_height: float = (card.size.y * card.scale.y) if card.size.y > 0 else 210.0
-	var target_y: float = start_pos.y + direction_sign * card_height
+	var target_y: float = ataque_container.global_position.y + (ataque_container.size.y - card_height) / 2.0
 	var target_pos: Vector2 = Vector2(slot_x, target_y)
 	card.set_meta("field_slot_pos", target_pos)
 

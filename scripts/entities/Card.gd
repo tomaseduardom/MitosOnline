@@ -38,12 +38,14 @@ signal trigger_activated(card: Card, trigger_type: String, event_data: Dictionar
 			actualizar_aspecto()
 			# Si pasó de oculta a visible, cargar imagen
 			if was_hidden and not esta_oculta:
-				_load_card_image()
+				_image_loader._load_card_image()
 
 # Alias para compatibilidad
 var face_down: bool:
 	get: return esta_oculta
 	set(value): esta_oculta = value
+
+var _is_ready: bool = false
 
 # =============================================================================
 # REFERENCIAS A NODOS (se asignan en _ready)
@@ -53,31 +55,19 @@ var card_art: TextureRect
 var hover_effect: Panel
 var selection_effect: Panel
 var anim_player: AnimationPlayer
-var activatable_glow: Panel = null  # Indicador de "tiene una habilidad activada disponible ahora"
-var _activatable_tween: Tween = null
-var is_activatable: bool = false
-
-## Badge de Fuerza efectiva (2026-08-22) — el número impreso en el arte de
-## la carta es una imagen estática, no se puede editar; este Label se
-## superpone en la esquina para mostrar la Fuerza REAL (base + Armas/buffs),
-## p.ej. un Aliado de Fuerza 4 portando un Arma que da +2 debe mostrar "6".
-var strength_badge: Control = null
-## Badge de Coste efectivo (2026-08-30, mismo motivo que strength_badge:
-## el coste impreso es parte del arte, no se puede editar) — se superpone
-## en la esquina opuesta cuando un descuento/recargo lo cambia, p.ej.
-## Miguel (-1) o Tesoro de los Césares (+1 el turno siguiente).
-var cost_badge: Control = null
 
 var placeholder: VBoxContainer
 var placeholder_icon: Label
 var placeholder_name: Label
 var placeholder_cost: Label
 
-var _is_ready: bool = false
-
-## Módulos extraídos (Fase 4 de reestructuración)
+## Módulos extraídos (Fase 4 de reestructuración; CardTriggerRuntime/
+## CardBadges agregados 2026-09-06, "módulos gordos")
 var _interaction: CardInteraction
 var _animations: CardAnimations
+var _trigger_runtime: CardTriggerRuntime
+var _badges: CardBadges
+var _image_loader: CardImageLoader
 
 # =============================================================================
 # DATOS DE LA CARTA
@@ -182,6 +172,14 @@ var base_scale: Vector2 = Vector2.ONE
 ## sincronizado con owner_id — toda carta normal (nunca tocada por un
 ## efecto así) quedaba en controller_id=0 sin importar su dueño real.
 var controller_id: int = 0
+
+## 'Hace doble daño de combate al Destierro' (2026-09-04, a pedido del
+## usuario — p.ej. atenea en wonderland, manuel rodriguez): el daño de
+## combate que ESTA carta hace al Castillo se dobla y las cartas Botadas
+## por él van al Destierro en vez del Cementerio — ver BattleManager.
+## _accumulate_castle_damage(), consultado durante ASIGNACION_DANIO.
+var doubles_damage_to_exile: bool = false
+
 var _owner_id: int = 0
 var owner_id: int:
 	get: return _owner_id
@@ -217,24 +215,21 @@ var revert_to_data: Dictionary = {}
 
 
 func _refresh_disabled_rotation() -> void:
-	"""Gira la carta 180° desde su centro si es del oponente en juego (Oro, Aliado, Arma, Tótem),
+	"""Gira la carta 180° desde su centro si es del oponente en juego (Mano, Oro, Aliado, Arma, Tótem),
 	o si está silenciada o convertida."""
-	var is_opp: bool = (owner_id == 1 or controller_id == 1)
 	var parent_name: String = get_parent().name if get_parent() else ""
+	var parent_parent_name: String = get_parent().get_parent().name if (get_parent() and get_parent().get_parent()) else ""
+	var is_in_opp_container: bool = parent_name.begins_with("Opponent") or parent_parent_name == "OpponentArea"
+	var is_opp: bool = (owner_id == 1 or controller_id == 1 or is_in_opp_container)
 	var is_opp_in_play: bool = is_opp and (
-		current_zone in [
+		is_in_opp_container
+		or current_zone in [
+			Constants.Zone.MANO,
 			Constants.Zone.RESERVA_ORO,
 			Constants.Zone.ORO_PAGADO,
 			Constants.Zone.LINEA_DEFENSA,
 			Constants.Zone.LINEA_ATAQUE,
 			Constants.Zone.LINEA_APOYO
-		]
-		or parent_name in [
-			"OpponentField",
-			"OpponentReservaOro",
-			"OpponentOroPagado",
-			"OpponentLineaAtaque",
-			"OpponentLineaApoyo"
 		]
 	)
 
@@ -250,10 +245,16 @@ func _refresh_disabled_rotation() -> void:
 				should_rotate = false
 				break
 
-	var target_rot: float = 180.0 if should_rotate else target_rotation
+	var target_rot: float = 180.0 if should_rotate else 0.0
 	var card_size: Vector2 = size if (size.x > 0 and size.y > 0) else (custom_minimum_size if (custom_minimum_size.x > 0 and custom_minimum_size.y > 0) else Vector2(150, 210))
-	pivot_offset = card_size / 2.0
-	rotation_degrees = target_rot
+	var center_piv: Vector2 = card_size / 2.0
+	pivot_offset = center_piv
+	rotation_degrees = 0.0
+
+	# Aplicar sobre CardBase (nodo visual interno) de manera exclusiva para evitar suma de matrices (180° + 180° = 360°)
+	if card_base:
+		card_base.pivot_offset = center_piv
+		card_base.rotation_degrees = target_rot
 
 
 func _apply_frozen_weapon_transform(_t: float, weapon: Node, frozen_pos: Vector2, frozen_rot: float, base_self_rot: float) -> void:
@@ -277,12 +278,12 @@ func _apply_frozen_weapon_transform(_t: float, weapon: Node, frozen_pos: Vector2
 var entered_this_turn: bool = true
 
 # =============================================================================
-# SISTEMA DE TRIGGERS (DAR 7.2, 7.3, 7.4)
+# SISTEMA DE TRIGGERS (declaraciones — implementación en CardTriggerRuntime.gd)
 # =============================================================================
-## Triggers parseados del texto de habilidad
-var triggers: Array[Dictionary] = []
-
-## Tipos de trigger soportados y sus palabras clave
+## Tipos de trigger soportados y sus palabras clave. Queda acá (no en
+## CardTriggerRuntime.gd) porque TriggerResolution.gd lo lee de forma
+## ESTÁTICA vía la clase (Card.TRIGGER_KEYWORDS[...]), no sobre una
+## instancia — moverlo rompería ese acceso.
 const TRIGGER_KEYWORDS: Dictionary = {
 	"on_draw": ["cuando robes", "al robar", "cada vez que robes"],
 	"on_card_drawn": ["cuando robes una carta", "al robar una carta"],
@@ -295,28 +296,100 @@ const TRIGGER_KEYWORDS: Dictionary = {
 	# UNA sola cláusula con dos disparadores — "cuando ataque" no aparece
 	# como substring literal ahí ("cuando entra en juego O ataque"), así que
 	# necesita su propia frase para que has_trigger("on_attack") la detecte.
-	"on_attack": ["cuando ataque", "al atacar", "cuando entra en juego o ataque"],
+	# "cuando el portador ataque" (2026-09-06, bug real reportado por el
+	# usuario — p.ej. Garfio Pirata: 'Cuando el portador ataque, si es de
+	# coste 1 o más, genera un Oro o Roba una carta') — NINGUNA de las
+	# frases de abajo matchea 'el portador' insertado entre 'cuando' y
+	# 'ataque', así que _isolate_all_trigger_clauses() no cortaba ahí el
+	# bloque del ETB y esta oración se ejecutaba AL EQUIPARSE en vez de al
+	# atacar (mismo síntoma que el bug ya documentado de 2026-08-30, pero
+	# esta frase puntual seguía sin cubrir).
+	"on_attack": ["cuando ataque", "al atacar", "cuando entra en juego o ataque", "cuando el portador ataque"],
 	"on_block": ["cuando bloquee", "al bloquear"],
 	"on_damage_dealt": ["cuando haga daño de combate", "cuando haga daño", "si hizo daño"],
 	"on_damage_received": ["cuando fueras a recibir daño"],
-	"on_turn_start": ["al comienzo del turno", "al inicio del turno"],
+	"on_turn_start": ["al comienzo del turno", "al inicio del turno", "al comienzo de tu turno"],
 	# "en tu fase final" agregado (2026-08-30, p.ej. Espada de O'Higgins) —
 	# antes SOLO estaban las frases genéricas de "al final del turno", que
 	# ninguna carta real usa; "en tu Fase Final" es la frase real del DAR
 	# para este disparador y no matcheaba nada.
 	"on_turn_end": ["al final del turno", "al terminar el turno", "en tu fase final"],
+	# "en la Fase Final oponente" (2026-09-04, p.ej. Biblioteca de
+	# Caballería) — distinto de "en tu Fase Final" de arriba: dispara en la
+	# Fase Final del RIVAL, no la propia. Ver TriggerSystem.
+	# resolve_turn_end_triggers() para el disparo real (escanea el campo
+	# del jugador contrario cuando termina el turno de ESE jugador).
+	"on_opponent_turn_end": ["en la fase final oponente", "en la fase final de tu oponente"],
+	# "Al comienzo del Ataque" (2026-09-04, a pedido del usuario — p.ej.
+	# almirante akari) — fase Ataque, distinta de "al comienzo del turno"
+	# (on_turn_start, ligado a Agrupación).
+	"on_ataque_start": ["al comienzo del ataque"],
 	# "en tu Agrupación" (2026-08-30, p.ej. Espada del Juicio: "Cuando entra
 	# en juego y en tu Agrupación, Destierra..."). Sin/con tilde por las
 	# dudas — la API a veces trae mojibake en palabras acentuadas.
 	"on_agrupacion": ["en tu agrupación", "en tu agrupacion"],
+	# "Al comienzo de tu/la Vigilia" (2026-09-03, corregido a pedido del
+	# usuario — NO "en tu vigilia" sola: Vigilia es la ventana NORMAL de
+	# las habilidades activadas ("una vez por turno, puedes X"), así que
+	# "En tu Vigilia, X" sin más es casi siempre esa ventana, no un
+	# disparador. Solo "Al comienzo de tu/la Vigilia" es inequívocamente
+	# un disparador real (p.ej. Colmillo de Vampiro: "Al comienzo de la
+	# Vigilia, puedes Barajar..." — el "puedes" ahí es sobre el EFECTO
+	# ofrecido en ese momento, no sobre cuándo activarlo). Con solo
+	# "en tu vigilia" como frase, la PRIMERA habilidad de Espada de
+	# O'Higgins ("En tu Vigilia, una vez por turno, puedes Barajar...")
+	# se habría tratado como disparador automático por error, saltándose
+	# el "puedes"/cupo de una vez por turno. "en tu vigilia o fase final"
+	# se agrega aparte, acotado a esa combinación exacta (p.ej. Mariano
+	# Osorio) — Fase Final SÍ es siempre disparador (no es ventana de
+	# activadas), así que emparejada con Vigilia en la misma oración
+	# arrastra a Vigilia también, sin el riesgo de falso positivo de
+	# "en tu vigilia" sola.
+	"on_vigilia": ["al comienzo de tu vigilia", "al comienzo de la vigilia", "en tu vigilia o fase final"],
 	"on_ally_enters": ["cuando otro aliado entre", "cuando un aliado entre"],
 	"on_ally_dies": ["cuando otro aliado muera", "cuando un aliado sea destruido"],
 	"on_oro_placed": ["cuando pongas un oro", "al poner un oro"],
 	"on_card_played": ["cuando juegues", "al jugar"],
 }
 
-## Flag para evitar conectar signals múltiples veces
-var _triggers_connected: bool = false
+## Recorte del área de CLICK (no del área visual — ver _has_point() más
+## abajo), en X local, cuando esta carta está tapada por la derecha por
+## otra carta superpuesta de la MISMA fila (2026-09-03, bug reportado:
+## en la Reserva de Oro, con muchas cartas la separación del HBoxContainer
+## se vuelve negativa (GoldManager._update_container_gold_spacing(), hasta
+## -125px) para que quepan todas, así que cartas consecutivas se superponen
+## bastante — cada Card sigue siendo un Control de 150×210 completo aunque
+## visualmente la carta siguiente (añadida después, dibujada encima) tape
+## buena parte de su derecha. Sin este recorte, esa porción tapada seguía
+## siendo clicable en la carta de ABAJO — un click ahí (que visualmente
+## apunta a la carta de ARRIBA) se lo comía la de abajo en silencio, y
+## viceversa en las esquinas/bordes donde la superposición es parcial.
+## -1.0 = sin recorte (comportamiento normal, rect completo).
+var _click_clip_right: float = -1.0
+
+
+func set_click_clip_right(local_x: float) -> void:
+	"""Limita el área de click a 'local_x' px desde el borde izquierdo de
+	esta carta (coordenadas locales, antes de escala/rotación) — pasar -1.0
+	para quitar el recorte. Deliberadamente NO toca `size`/`custom_minimum_
+	size`: el arte (CardBase/CardArt) sigue anclado al rect completo, solo
+	cambia qué porción responde a gui_input."""
+	_click_clip_right = local_x
+
+
+func _has_point(point: Vector2) -> bool:
+	"""Override del hit-test nativo de Control (Godot llama esto ANTES de
+	despachar gui_input) — si el punto cae en la porción recortada,
+	devuelve false y Godot sigue buscando detrás de esta carta en vez de
+	consumir el click acá, dejando que la carta realmente visible en ese
+	punto (la que se dibujó encima) lo reciba."""
+	# En el campo de juego o zonas de mesa, las cartas NUNCA deben recortarse:
+	if current_zone in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
+		return Rect2(Vector2.ZERO, size).has_point(point)
+	if _click_clip_right >= 0.0 and point.x > _click_clip_right:
+		return false
+	return Rect2(Vector2.ZERO, size).has_point(point)
+
 
 # =============================================================================
 # INICIALIZACIÓN
@@ -327,6 +400,12 @@ func _ready() -> void:
 	_interaction.setup(self)
 	_animations = CardAnimations.new()
 	_animations.setup(self)
+	_trigger_runtime = CardTriggerRuntime.new()
+	_trigger_runtime.setup(self)
+	_badges = CardBadges.new()
+	_badges.setup(self)
+	_image_loader = CardImageLoader.new()
+	_image_loader.setup(self)
 
 	# Agregar al grupo de cartas para detección de drag
 	add_to_group("cards")
@@ -345,9 +424,9 @@ func _ready() -> void:
 	selection_effect = get_node_or_null("SelectionEffect")
 	anim_player = get_node_or_null("AnimationPlayer")
 
-	_create_activatable_glow()
-	_create_strength_badge()
-	_create_cost_badge()
+	_badges._create_activatable_glow()
+	_badges._create_strength_badge()
+	_badges._create_cost_badge()
 	if not ContinuousEffectManager.card_visual_update_required.is_connected(_on_strength_visual_update_required):
 		ContinuousEffectManager.card_visual_update_required.connect(_on_strength_visual_update_required)
 
@@ -398,77 +477,6 @@ func _ready() -> void:
 			card_art.visible = true
 			if placeholder:
 				placeholder.visible = false
-
-
-func _apply_pending_data() -> void:
-	"""Aplica los datos que se asignaron antes de _ready"""
-	_update_placeholder()
-	# Siempre mostrar dorso como estado inicial (nunca el bloque negro)
-	_show_loading_dorso()
-
-	if not card_image_path.is_empty() and card_image_path != "/dorso_default.webp":
-		# Hay imagen CDN: cargarla de forma asíncrona
-		_load_card_image()
-	else:
-		# Sin imagen CDN: el dorso ES el aspecto final → señalizar listo
-		if not _image_ready:
-			_image_ready = true
-			image_ready.emit()
-
-
-func _show_loading_dorso() -> void:
-	"""Muestra el dorso de la carta mientras se descarga el arte frontal."""
-	_show_placeholder(false)
-	if card_art:
-		var back_tex = GameSettings.get_card_back_texture(owner_id)
-		if back_tex:
-			card_art.texture = back_tex
-			card_art.visible = true
-			return
-	# Fallback: placeholder si no hay dorso configurado
-	_show_placeholder(true)
-
-
-func _update_placeholder() -> void:
-	"""Actualiza el contenido del placeholder"""
-	if not placeholder:
-		return
-
-	# Icono según tipo de carta
-	if placeholder_icon:
-		match card_type:
-			Constants.CardType.ORO:
-				placeholder_icon.text = "💰"
-				placeholder_icon.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
-			Constants.CardType.ALIADO:
-				placeholder_icon.text = "⚔"
-				placeholder_icon.add_theme_color_override("font_color", Color(0.7, 0.8, 0.9))
-			Constants.CardType.ARMA:
-				placeholder_icon.text = "🗡"
-				placeholder_icon.add_theme_color_override("font_color", Color(0.8, 0.5, 0.3))
-			Constants.CardType.TALISMAN:
-				placeholder_icon.text = "✨"
-				placeholder_icon.add_theme_color_override("font_color", Color(0.6, 0.4, 0.8))
-			Constants.CardType.TOTEM:
-				placeholder_icon.text = "🏛"
-				placeholder_icon.add_theme_color_override("font_color", Color(0.4, 0.7, 0.5))
-
-	# Nombre de la carta
-	if placeholder_name:
-		placeholder_name.text = _card_name if not _card_name.is_empty() else "???"
-
-	# Coste (solo si no es Oro)
-	if placeholder_cost:
-		if card_type == Constants.CardType.ORO:
-			placeholder_cost.text = "ORO"
-		else:
-			placeholder_cost.text = "Coste: %d" % _card_cost
-
-
-func _show_placeholder(show: bool) -> void:
-	"""Muestra u oculta el placeholder"""
-	if placeholder:
-		placeholder.visible = show
 
 
 func _setup_styles() -> void:
@@ -585,7 +593,7 @@ func actualizar_aspecto() -> void:
 	else:
 		# Mostrar frente
 		_setup_styles()
-		_apply_pending_data()  # ya llama _load_card_image() internamente
+		_image_loader._apply_pending_data()  # ya llama _load_card_image() internamente
 
 
 func voltear() -> void:
@@ -619,70 +627,6 @@ func load_from_id(id: String) -> void:
 		load_from_data(data)
 
 
-# =============================================================================
-# CARGA DE IMAGEN
-# =============================================================================
-var _image_signal_connected: bool = false
-
-func _load_card_image() -> void:
-	"""Carga la imagen de la carta desde CardDatabase"""
-	# No cargar imagen si la carta está oculta (ahorra recursos)
-	if esta_oculta:
-		return
-
-	# Sin imagen o imagen de dorso por defecto → el dorso ya está mostrado, nada que hacer
-	if card_id.is_empty() or card_image_path.is_empty() or card_image_path == "/dorso_default.webp":
-		return
-
-	print("[Card] Cargando imagen — id:%s path:%s" % [card_id, card_image_path])
-
-	# Verificar si ya está en cache
-	var texture = CardDatabase.get_card_image(card_id)
-	if texture:
-		_set_card_texture(texture)
-	else:
-		# Conectar señal para cuando se descargue
-		if not _image_signal_connected:
-			CardDatabase.card_image_loaded.connect(_on_card_image_loaded)
-			_image_signal_connected = true
-
-
-func _on_card_image_loaded(loaded_card_id: String, texture: Texture2D) -> void:
-	"""Callback cuando se carga una imagen (texture puede ser null si CDN falló)"""
-	if loaded_card_id == card_id:
-		if texture:
-			_set_card_texture(texture)
-		else:
-			# CDN falló: mostrar placeholder legible (nombre/coste) en vez del
-			# dorso, porque el dorso no deja identificar qué carta es la que
-			# no cargó — solo aplica si la carta está boca arriba.
-			if not esta_oculta:
-				_update_placeholder()
-				_show_placeholder(true)
-			if not _image_ready:
-				_image_ready = true
-				image_ready.emit()
-		_disconnect_image_signal()
-
-
-func _set_card_texture(texture: Texture2D) -> void:
-	"""Aplica la textura frontal de la carta y señaliza que está lista."""
-	if card_art and texture and not esta_oculta:
-		card_art.texture = texture
-		card_art.visible = true
-		_show_placeholder(false)
-	if not _image_ready:
-		_image_ready = true
-		image_ready.emit()
-
-
-func _disconnect_image_signal() -> void:
-	"""Desconecta la señal de carga de imagen"""
-	if _image_signal_connected and CardDatabase.card_image_loaded.is_connected(_on_card_image_loaded):
-		CardDatabase.card_image_loaded.disconnect(_on_card_image_loaded)
-		_image_signal_connected = false
-
-
 func _on_strength_visual_update_required(card: Node, stat: String, _base_value: int, _modified_value: int) -> void:
 	"""Refresca el badge correspondiente cuando ContinuousEffectManager
 	avisa que un modificador cambió el valor calculado de ESTA carta —
@@ -701,7 +645,7 @@ func _on_strength_visual_update_required(card: Node, stat: String, _base_value: 
 
 func _exit_tree() -> void:
 	"""Limpieza cuando la carta se elimina"""
-	_disconnect_image_signal()
+	_image_loader._disconnect_image_signal()
 	if ContinuousEffectManager.card_visual_update_required.is_connected(_on_strength_visual_update_required):
 		ContinuousEffectManager.card_visual_update_required.disconnect(_on_strength_visual_update_required)
 	# Si esta carta era FUENTE de algún modificador continuo (p.ej. un Arma
@@ -715,6 +659,19 @@ func _exit_tree() -> void:
 	# aunque la carta siguiera mostrando el badge ya calculado en verde).
 	if is_queued_for_deletion() and ContinuousEffectManager.has_method("remove_modifiers_from_source"):
 		ContinuousEffectManager.remove_modifiers_from_source(self)
+	# Invalidar el cache SIEMPRE que una carta sale de juego de verdad, no
+	# solo cuando ELLA MISMA era fuente de un modificador (2026-09-02, bug
+	# reportado por el usuario: Manuel Bulnes — 'Gana 1 de Fuerza por cada
+	# Arma que controles', un valor DINÁMICO recalculado con un Callable —
+	# seguía mostrando el bono aunque ya no quedara ningún Arma en juego).
+	# remove_modifiers_from_source() de arriba solo invalida el cache si
+	# ESTA carta tenía modificadores propios registrados; un Arma sin
+	# habilidad propia (sin 'El portador gana...') no tiene ninguno, así
+	# que destruirla nunca disparaba la invalidación — el valor de Manuel
+	# Bulnes quedaba pegado al último cálculo, sin importar cuántas Armas
+	# quedaran de verdad en el tablero.
+	if is_queued_for_deletion() and ContinuousEffectManager.has_method("_invalidate_cache"):
+		ContinuousEffectManager._invalidate_cache()
 	# Misma idea para modificadores de COSTE registrados por esta carta
 	# mientras estuvo en juego (p.ej. el impuesto de Bernardo O'Higgins a
 	# Talismanes/Tótems, 2026-08-26) — PaymentManager.cost_modifiers no se
@@ -775,198 +732,25 @@ func toggle_selection() -> void:
 # independiente del brillo amarillo de CardInspectionLayo (ese indica
 # "resolviéndose en la pila", no "disponible para activar").
 # =============================================================================
-func _create_activatable_glow() -> void:
-	"""Crea el panel de brillo celeste, oculto por defecto. Se construye por
-	código (no en el .tscn) para no tocar la escena de Card, igual que
-	hover_effect/selection_effect en espíritu pero como nodo nuevo."""
-	activatable_glow = Panel.new()
-	activatable_glow.name = "ActivatableGlow"
-	activatable_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	activatable_glow.set_anchors_preset(Control.PRESET_FULL_RECT)
-	activatable_glow.visible = false
-
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.3, 0.75, 1.0, 0.0)
-	style.border_color = Color(0.45, 0.85, 1.0, 1.0)
-	style.set_border_width_all(3)
-	style.set_corner_radius_all(10)
-	style.shadow_color = Color(0.45, 0.85, 1.0, 0.55)
-	style.shadow_size = 10
-	activatable_glow.add_theme_stylebox_override("panel", style)
-
-	add_child(activatable_glow)
-	move_child(activatable_glow, 0)  # detrás del arte de la carta
-
-
-func _create_strength_badge() -> void:
-	"""Crea el badge de Fuerza efectiva en la esquina superior izquierda (solo el número brillante, sin caja)."""
-	var lbl = Label.new()
-	lbl.name = "StrengthBadge"
-	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_override("font", preload("res://assets/fonts/Cinzel-Bold.ttf"))
-	lbl.add_theme_font_size_override("font_size", 22)
-	lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
-	lbl.add_theme_constant_override("shadow_offset_x", 2)
-	lbl.add_theme_constant_override("shadow_offset_y", 2)
-	lbl.add_theme_constant_override("shadow_outline_size", 4)
-	lbl.position = Vector2(6, 2)
-	lbl.size = Vector2(28, 28)
-	lbl.pivot_offset = Vector2(14, 14)
-	lbl.visible = false
-
-	strength_badge = lbl
-	add_child(strength_badge)
-	move_child(strength_badge, get_child_count() - 1)
-
-
-func _create_cost_badge() -> void:
-	"""Crea el badge de Coste efectivo en la esquina superior derecha (solo el número brillante, sin caja)."""
-	var lbl = Label.new()
-	lbl.name = "CostBadge"
-	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_override("font", preload("res://assets/fonts/Cinzel-Bold.ttf"))
-	lbl.add_theme_font_size_override("font_size", 22)
-	lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
-	lbl.add_theme_constant_override("shadow_offset_x", 2)
-	lbl.add_theme_constant_override("shadow_offset_y", 2)
-	lbl.add_theme_constant_override("shadow_outline_size", 4)
-	lbl.position = Vector2(custom_minimum_size.x - 32.0, 2)
-	lbl.size = Vector2(28, 28)
-	lbl.pivot_offset = Vector2(14, 14)
-	lbl.visible = false
-
-	cost_badge = lbl
-	add_child(cost_badge)
-	move_child(cost_badge, get_child_count() - 1)
-
-
+## Wrappers públicos (implementación en CardBadges.gd) — muchos managers
+## llaman refresh_strength_badge()/refresh_cost_badge()/set_activatable()
+## directo sobre la carta cada vez que un modificador continuo puede haber
+## cambiado el valor mostrado.
 func refresh_strength_badge(source_override: Node = null) -> void:
-	"""Recalcula y muestra la Fuerza efectiva AHORA (no espera al próximo
-	cambio de modificador) — llamar justo después de equipar/quitar un Arma
-	o cualquier acción que pueda afectar la Fuerza de esta carta."""
-	var effective := _card_strength
-	if ContinuousEffectManager.has_method("get_modified_strength"):
-		effective = ContinuousEffectManager.get_modified_strength(source_override if source_override else self)
-	_apply_strength_badge_text(effective)
-
-
-func _apply_strength_badge_text(value: int) -> void:
-	if not strength_badge:
-		return
-	if card_type != Constants.CardType.ALIADO or esta_oculta:
-		strength_badge.visible = false
-		return
-	if value == _card_strength:
-		strength_badge.visible = false
-		return
-
-	var is_buff := value > _card_strength
-	var lbl: Label = strength_badge as Label
-	if not lbl:
-		return
-
-	var prev_text := lbl.text
-	var new_text := str(value)
-	lbl.text = new_text
-
-	if is_buff:
-		lbl.add_theme_color_override("font_color", Color(0.25, 1.0, 0.40, 1.0))
-		lbl.add_theme_color_override("font_shadow_color", Color(0.02, 0.20, 0.05, 0.95))
-	else:
-		lbl.add_theme_color_override("font_color", Color(1.0, 0.35, 0.35, 1.0))
-		lbl.add_theme_color_override("font_shadow_color", Color(0.25, 0.02, 0.02, 0.95))
-
-	if not strength_badge.visible or prev_text != new_text:
-		strength_badge.visible = true
-		strength_badge.scale = Vector2(1.35, 1.35)
-		var tw = create_tween()
-		tw.tween_property(strength_badge, "scale", Vector2.ONE, 0.20).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-	else:
-		strength_badge.visible = true
+	_badges.refresh_strength_badge(source_override)
 
 
 func refresh_cost_badge(source_override: Node = null) -> void:
-	"""Recalcula y muestra el Coste efectivo AHORA (PaymentManager.
-	calcular_coste_real, que ya suma cost_modifiers/oros_mas_modifiers/
-	recargos por nombre) — llamar después de cualquier acción que pueda
-	cambiarlo: aplicar/quitar un modificador de coste, o al empezar un
-	turno nuevo (los recargos diferidos tipo Tesoro de los Césares recién
-	arrancan/expiran ahí)."""
-	var effective := _card_cost
-	if PaymentManager.has_method("calcular_coste_real"):
-		effective = PaymentManager.calcular_coste_real(source_override if source_override else self)
-	_apply_cost_badge_text(effective)
-
-
-func _apply_cost_badge_text(value: int) -> void:
-	if not cost_badge:
-		return
-	if esta_oculta:
-		cost_badge.visible = false
-		return
-	if value == _card_cost:
-		cost_badge.visible = false
-		return
-
-	var is_discount := value < _card_cost
-	var lbl: Label = cost_badge as Label
-	if not lbl:
-		return
-
-	var prev_text := lbl.text
-	var new_text := str(value)
-	lbl.text = new_text
-
-	if is_discount:
-		lbl.add_theme_color_override("font_color", Color(0.25, 1.0, 0.40, 1.0))
-		lbl.add_theme_color_override("font_shadow_color", Color(0.02, 0.20, 0.05, 0.95))
-	else:
-		lbl.add_theme_color_override("font_color", Color(1.0, 0.35, 0.35, 1.0))
-		lbl.add_theme_color_override("font_shadow_color", Color(0.25, 0.02, 0.02, 0.95))
-
-	if not cost_badge.visible or prev_text != new_text:
-		cost_badge.visible = true
-		cost_badge.scale = Vector2(1.35, 1.35)
-		var tw = create_tween()
-		tw.tween_property(cost_badge, "scale", Vector2.ONE, 0.20).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-	else:
-		cost_badge.visible = true
+	_badges.refresh_cost_badge(source_override)
 
 
 func set_activatable(value: bool) -> void:
-	"""Muestra u oculta el brillo celeste que indica 'tenés una habilidad
-	activable disponible ahora mismo' (distinto del brillo amarillo de
-	CardInspectionLayer, que indica 'resolviéndose en la pila') — llamado
-	desde CardInspectionLayer.refresh_activatable_glows()."""
-	if is_activatable == value:
-		return
-	is_activatable = value
-	if not activatable_glow:
-		return
-	if _activatable_tween and _activatable_tween.is_valid():
-		_activatable_tween.kill()
-	if value:
-		activatable_glow.visible = true
-		activatable_glow.modulate.a = 0.3
-		_activatable_tween = create_tween()
-		_activatable_tween.set_loops()
-		_activatable_tween.tween_property(activatable_glow, "modulate:a", 1.0, 0.6).set_ease(Tween.EASE_IN_OUT)
-		_activatable_tween.tween_property(activatable_glow, "modulate:a", 0.3, 0.6).set_ease(Tween.EASE_IN_OUT)
-	else:
-		activatable_glow.visible = false
+	_badges.set_activatable(value)
 
 
 # ANIMACIONES (implementación en CardAnimations.gd)
 func move_to(target_pos: Vector2, duration: float = 0.3) -> void:
 	_animations.move_to(target_pos, duration)
-
-
-func play_destroy_animation() -> void:
-	_animations.play_destroy_animation()
 
 
 func play_enter_animation() -> void:
@@ -1028,6 +812,8 @@ func can_block() -> bool:
 func set_zone(zone: int) -> void:
 	"""Cambia la zona de la carta"""
 	current_zone = zone
+	if zone != Constants.Zone.MANO:
+		set_click_clip_right(-1.0)
 
 	match zone:
 		Constants.Zone.MANO:
@@ -1046,171 +832,44 @@ func set_zone(zone: int) -> void:
 # =============================================================================
 # SISTEMA DE TRIGGERS (DAR 7.2, 7.3, 7.4)
 # =============================================================================
+## Wrappers públicos (implementación en CardTriggerRuntime.gd) — TriggerSystem/
+## ActionModule/ConvertAndMiscResolver llaman varios de estos directo sobre
+## la carta.
 func _connect_trigger_listeners() -> void:
-	"""Inicializa el sistema de triggers de la carta
-	Nota: TriggerSystem maneja la recolección global de eventos (DAR 7.4)
-	La carta solo expone has_trigger() y _trigger_conditions_met()
-	"""
-	_triggers_connected = true
+	_trigger_runtime._connect_trigger_listeners()
 
 
 func parse_triggers_from_ability() -> void:
-	"""Parsea el texto de habilidad para extraer triggers"""
-	triggers.clear()
-
-	if _card_ability.is_empty():
-		return
-
-	var ability_lower = _card_ability.to_lower()
-
-	for trigger_type in TRIGGER_KEYWORDS:
-		var keywords: Array = TRIGGER_KEYWORDS[trigger_type]
-		for keyword in keywords:
-			if ability_lower.contains(keyword):
-				triggers.append({
-					"type": trigger_type,
-					"keyword": keyword,
-					"ability_text": _card_ability
-				})
-				# Solo un trigger por tipo
-				break
-	# Nota (2026-08-27): los Talismanes NO se resuelven por acá — no
-	# "disparan" nada (DAR Sección 7.4 es para habilidades disparadas de
-	# permanentes). Su texto se resuelve directo al jugarlos, ver
-	# TriggerSystem.resolve_talisman() / GoldManager._trigger_enter_play().
+	_trigger_runtime.parse_triggers_from_ability()
 
 
 func is_in_play() -> bool:
-	"""Verifica si la carta está en una zona de juego"""
-	return current_zone in Constants.ZONES_IN_PLAY
+	return _trigger_runtime.is_in_play()
 
 
 func has_trigger(trigger_type: String) -> bool:
-	"""Verifica si la carta tiene un trigger específico"""
-	for trigger in triggers:
-		if trigger.type == trigger_type:
-			return true
-	return false
+	return _trigger_runtime.has_trigger(trigger_type)
 
 
 func _check_and_activate_trigger(trigger_type: String, event_data: Dictionary) -> void:
-	"""Verifica si el trigger aplica y lo registra con TriggerSystem"""
-	# Solo activar si está en juego
-	if not is_in_play():
-		return
-
-	# Verificar si tiene el trigger
-	if not has_trigger(trigger_type):
-		return
-
-	# Verificar condiciones adicionales (ej: "tu" vs "oponente")
-	if not _trigger_conditions_met(trigger_type, event_data):
-		return
-
-	print("[Card] Trigger detectado: %s en %s" % [trigger_type, _card_name])
-
-	# Registrar con TriggerSystem para gestión de cola (DAR 7.4)
-	TriggerSystem.register_trigger(self, trigger_type, event_data)
-
-	# También emitir señal local para conexiones directas
-	emit_signal("trigger_activated", self, trigger_type, event_data)
+	_trigger_runtime._check_and_activate_trigger(trigger_type, event_data)
 
 
 func _trigger_conditions_met(trigger_type: String, event_data: Dictionary) -> bool:
-	"""Verifica condiciones adicionales del trigger"""
-	var ability_lower = _card_ability.to_lower()
-
-	# Verificar si es "tu" o del "oponente"
-	var event_player = event_data.get("player_id", -1)
-
-	if ability_lower.contains("cuando tú") or ability_lower.contains("cuando robes"):
-		# Solo se activa si es nuestro evento
-		if event_player != controller_id:
-			return false
-
-	if ability_lower.contains("cuando tu oponente") or ability_lower.contains("cuando el oponente"):
-		# Solo se activa si es evento del oponente
-		if event_player == controller_id:
-			return false
-
-	# Verificar "otro aliado" (no esta carta)
-	if trigger_type == "on_ally_enters" or trigger_type == "on_ally_dies":
-		var event_card = event_data.get("card", null)
-		if event_card == self:
-			return false
-
-	return true
-
-
-# =============================================================================
-# EJECUCIÓN DE EFECTOS CON CALLABLE (Godot 4.6)
-# =============================================================================
-## Handlers de efectos personalizados por tipo de trigger
-var effect_handlers: Dictionary = {}
+	return _trigger_runtime._trigger_conditions_met(trigger_type, event_data)
 
 
 func register_effect_handler(trigger_type: String, handler: Callable) -> void:
-	"""Registra un handler personalizado para un tipo de trigger
-	Permite definir efectos específicos por carta
-	"""
-	effect_handlers[trigger_type] = handler
+	_trigger_runtime.register_effect_handler(trigger_type, handler)
 
 
 func _on_trigger_event(trigger_type: String, event_data: Dictionary) -> Dictionary:
-	"""Handler principal llamado por TriggerSystem cuando se resuelve un trigger
-	Usa Callable para ejecutar el efecto específico de la carta
-	Resuelve 'en medida de lo posible' (DAR Sección 8)
-	"""
-	var result = {
-		"success": true,
-		"partial": false,
-		"effects_applied": []
-	}
-
-	# Buscar handler específico registrado
-	if effect_handlers.has(trigger_type):
-		var handler: Callable = effect_handlers[trigger_type]
-		if handler.is_valid():
-			var handler_result = await handler.call(event_data)
-			if handler_result is Dictionary:
-				result.merge(handler_result, true)
-			return result
-
-	# Sin handler específico registrado (2026-08-22): NO usar
-	# _resolve_default_effect() acá — es un escaneo de palabras clave sobre
-	# el texto COMPLETO de la carta (sin aislar por oración), así que una
-	# carta con VARIAS habilidades en el mismo bloque (p.ej. Tyet: 'Cuando
-	# entra en juego, busca un Arma o un Oro...' + más adelante 'Robar dos
-	# cartas' de una habilidad de Oro completamente distinta) disparaba la
-	# frase equivocada — Tyet buscaba nada y robaba una carta en su lugar.
-	# TriggerSystem._execute_trigger_effect() ya tiene el parser bueno
-	# (aísla la oración correcta, reconoce SEARCH/DESTROY/BUFF/etc., no solo
-	# 'roba') y lo corre él mismo cuando este resultado no aplicó nada.
-	result["no_handler"] = true
-	return result
-
-
+	return await _trigger_runtime._on_trigger_event(trigger_type, event_data)
 
 
 func on_entered_play() -> void:
-	"""Llamado cuando la carta entra al juego
-	Vincula la carta al TriggerSystem con Callable
-	"""
-	# Parsear triggers de la habilidad
-	parse_triggers_from_ability()
-
-	# Registrar con TriggerSystem
-	TriggerSystem.bind_card_to_triggers(self)
-
-	print("[Card] %s entró al juego con %d triggers" % [_card_name, triggers.size()])
+	_trigger_runtime.on_entered_play()
 
 
 func on_left_play() -> void:
-	"""Llamado cuando la carta deja el juego
-	Limpia efectos continuos y handlers
-	"""
-	# Desregistrar efectos continuos
-	TriggerSystem.unregister_continuous_effect(self)
-
-	effect_handlers.clear()
-	print("[Card] %s dejó el juego" % _card_name)
+	_trigger_runtime.on_left_play()

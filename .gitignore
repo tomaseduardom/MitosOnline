@@ -17,3 +17,6 @@ Thumbs.db
 # Credenciales reales de la API externa de ShadowForge (tools/reload_card.ps1)
 # — nunca versionar, solo queda en el disco local.
 tools/shadowforge_credentials.local.ps1
+
+# Relay server (Node.js) — dependencias instaladas localmente
+relay-server/node_modules/

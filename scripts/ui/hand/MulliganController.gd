@@ -12,6 +12,12 @@ func setup(main: Node) -> void:
 	_main = main
 	_main.keep_hand_button.pressed.connect(on_keep_hand_pressed)
 	_main.mulligan_button.pressed.connect(on_mulligan_pressed)
+	_main.mulligan_hand.card_right_clicked.connect(_on_mulligan_card_right_clicked)
+
+
+func _on_mulligan_card_right_clicked(card: Node) -> void:
+	if _main and _main._card_inspector:
+		_main._card_inspector.on_card_right_clicked(card)
 
 
 func start_mulligan_phase() -> void:
@@ -56,11 +62,15 @@ func _update_mulligan_ui() -> void:
 
 
 func on_keep_hand_pressed() -> void:
+	if _main and _main._card_inspector:
+		_main._card_inspector.close_card_inspection()
 	print("[Mulligan] Jugador se queda con la mano de %d cartas" % mulligan_hand_data.size())
 	_end_mulligan_phase()
 
 
 func on_mulligan_pressed() -> void:
+	if _main and _main._card_inspector:
+		_main._card_inspector.close_card_inspection()
 	var next_hand_size = mulligan_hand_data.size() - 1
 	if next_hand_size <= 0:
 		return
@@ -89,12 +99,14 @@ func _end_mulligan_phase() -> void:
 		_main.player_hand.add_card(card)
 		_main._connect_card_signals(card)
 	mulligan_hand_data.clear()
-	await _main._zone_manager.draw_initial_hand(1, _main.INITIAL_HAND_SIZE)
-	# DEBUG TEMPORAL (2026-09-02, "solo por ahora" — ver el comentario
-	# completo en GameBootstrap._debug_spawn_opponent_test_allies()): 3
-	# Aliados rivales ya en juego para poder probar efectos "carta
-	# oponente" (Estaca, etc.) sin jugar una partida entera antes.
-	_main._bootstrap._debug_spawn_opponent_test_allies(3)
+	# Multiplayer remoto (2026-09-11, Fase B): si el jugador 1 es un Remoto
+	# conectado, corre un mulligan REAL (preguntando mantener/redibujar por
+	# red) en vez de robarle la mano directo sin ninguna decisión — que es
+	# lo único que existía hasta ahora para el "oponente".
+	if _main._easy_bot is RemotePlayerController:
+		await _main._easy_bot.run_mulligan(_main.INITIAL_HAND_SIZE)
+	else:
+		await _main._zone_manager.draw_initial_hand(1, _main.INITIAL_HAND_SIZE)
 	GameManager.start_game(_main._dice_winner)
 	CardManager.sync_from_main()
 	_main._gold_manager._update_gold_display()

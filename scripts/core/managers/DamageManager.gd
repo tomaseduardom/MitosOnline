@@ -462,6 +462,17 @@ func _apply_damage_prevention(player_id: int, damage: int, type: int, context: D
 	for i in range(_damage_preventions.size()):
 		var prevention = _damage_preventions[i]
 
+		# Prevenciones CONTINUAS ligadas a una fuente en juego (2026-09-06,
+		# p.ej. Cetro Demoniaco: "No puedes recibir daño" mientras esté en
+		# juego, one_shot=false, amount=-1) — sin este chequeo, una fuente
+		# que ya salió de juego seguía previniendo daño para siempre, porque
+		# el resto de esta función solo remueve entradas one_shot o con
+		# 'amount' agotado (amount=-1 nunca se agota).
+		var prevention_source = prevention.get("source")
+		if prevention_source != null and (not is_instance_valid(prevention_source) or not (prevention_source.get("current_zone") in Constants.ZONES_IN_PLAY)):
+			to_remove.append(i)
+			continue
+
 		# Verificar si aplica a este tipo de daño
 		if prevention.get("type") != -1 and prevention.get("type") != type:
 			continue

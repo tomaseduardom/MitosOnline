@@ -7,6 +7,7 @@ const GOLD_BRIGHT := Color(1.0, 0.88, 0.45, 1.0)
 
 const FONT_TITLE := preload("res://assets/fonts/Cinzel-Bold.ttf")
 const FONT_MEDIEVAL := preload("res://assets/fonts/Marcellus-Regular.ttf")
+const SpinnerDrawerScript = preload("res://scripts/ui/hud/SpinnerDrawer.gd")
 
 var _canvas_layer: CanvasLayer = null
 var _overlay: Control = null
@@ -148,34 +149,8 @@ func hide_loading(on_finish: Callable = Callable()) -> void:
 
 func _build_mystic_spinner() -> Control:
 	var root = Control.new()
-	# Círculo místico dibujado proceduralmente con runas y rayos dorados
 	var drawer = Node2D.new()
-	drawer.script = _SpinnerDrawerScript.new()
+	drawer.set_script(SpinnerDrawerScript)
 	root.add_child(drawer)
 	return root
-
-
-# Script interno para dibujar el spinner místico
-class _SpinnerDrawerScript extends GDScript:
-	func _init():
-		source_code = """
-extends Node2D
-
-func _draw() -> void:
-	var gold = Color(1.0, 0.86, 0.42, 0.95)
-	var dim = Color(0.7, 0.55, 0.25, 0.35)
-	# Anillo exterior punteado
-	draw_arc(Vector2.ZERO, 28, 0, TAU, 32, dim, 2.0)
-	# Arco brillante activo
-	draw_arc(Vector2.ZERO, 28, -PI * 0.5, PI * 0.7, 24, gold, 3.5)
-	# Runas / Rayos cardinales
-	for i in range(4):
-		var angle = i * (PI / 2.0)
-		var p1 = Vector2.from_angle(angle) * 14.0
-		var p2 = Vector2.from_angle(angle) * 23.0
-		draw_line(p1, p2, gold, 2.5)
-	# Núcleo brillante
-	draw_circle(Vector2.ZERO, 5.0, gold)
-"""
-		reload()
 

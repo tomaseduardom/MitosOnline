@@ -14,24 +14,40 @@ const SearchAbilityHandlerScript = preload("res://scripts/ui/inspection/SearchAb
 const PreventionAbilityHandlerScript = preload("res://scripts/ui/inspection/PreventionAbilityHandler.gd")
 const HandCementerioAbilityHandlerScript = preload("res://scripts/ui/inspection/HandCementerioAbilityHandler.gd")
 
+# Validación de habilidades ACTIVADAS + ciclo de vida del botón superpuesto,
+# y los 4 grupos (por posición en el archivo original) del if-chain de
+# patrones especiales de _build_ability_buttons() — extraídos de este mismo
+# archivo (2026-09-06, "módulos gordos", Fase 2 — ver
+# iterative-booping-abelson.md). Mismo motivo de preload() que arriba.
+const AbilityButtonSupportScript = preload("res://scripts/ui/inspection/AbilityButtonSupport.gd")
+const AbilityButtonPatternsAScript = preload("res://scripts/ui/inspection/AbilityButtonPatternsA.gd")
+const AbilityButtonPatternsBScript = preload("res://scripts/ui/inspection/AbilityButtonPatternsB.gd")
+const AbilityButtonPatternsCScript = preload("res://scripts/ui/inspection/AbilityButtonPatternsC.gd")
+const AbilityButtonPatternsDScript = preload("res://scripts/ui/inspection/AbilityButtonPatternsD.gd")
+
 # Caja de texto de habilidades en el arte impreso de la carta (medida sobre
-# las imágenes reales en cartas_descargadas/): banda inferior desde ~75%
-# hasta ~96.5% de la altura, dejando fuera el borde y el pie de crédito.
-const ABILITY_TEXT_TOP_RATIO := 0.725
-const ABILITY_TEXT_BOTTOM_RATIO := 0.915
+# las imágenes reales en cartas_descargadas/): marco inferior desde ~76.5%
+# hasta ~94.0% de la altura, dejando fuera el borde y el pie de crédito.
+const ABILITY_TEXT_TOP_RATIO := 0.765
+const ABILITY_TEXT_BOTTOM_RATIO := 0.940
 const ABILITY_TEXT_SIDE_MARGIN := 14.0
+const ABILITY_TEXT_RIGHT_MARGIN := 42.0  ## Margen derecho para no tapar el sello de la edición
 
 var _main: Node = null
 
 var inspected_card: Node = null
 var _ability_buttons_panel: Control = null
 var _inspected_source_card: Node = null
-var _glowing_cards: Dictionary = {}
 var _bernardo: BernardoAbilityHandler
 var _response_window: ResponseWindowHandler
 var _search_handler: RefCounted
 var _prevention_handler: RefCounted
 var _hand_cementerio_handler: RefCounted
+var _button_support: RefCounted
+var _pattern_group_a: RefCounted
+var _pattern_group_b: RefCounted
+var _pattern_group_c: RefCounted
+var _pattern_group_d: RefCounted
 
 
 func setup(main: Node) -> void:
@@ -46,12 +62,22 @@ func setup(main: Node) -> void:
 	_prevention_handler.setup(self)
 	_hand_cementerio_handler = HandCementerioAbilityHandlerScript.new()
 	_hand_cementerio_handler.setup(self)
+	_button_support = AbilityButtonSupportScript.new()
+	_button_support.setup(self)
+	_pattern_group_a = AbilityButtonPatternsAScript.new()
+	_pattern_group_a.setup(self)
+	_pattern_group_b = AbilityButtonPatternsBScript.new()
+	_pattern_group_b.setup(self)
+	_pattern_group_c = AbilityButtonPatternsCScript.new()
+	_pattern_group_c.setup(self)
+	_pattern_group_d = AbilityButtonPatternsDScript.new()
+	_pattern_group_d.setup(self)
 	if not ActionPipeline.step_d_waiting.is_connected(_response_window._on_step_d_waiting):
 		ActionPipeline.step_d_waiting.connect(_response_window._on_step_d_waiting)
 	if not ActionPipeline.step_d_completed.is_connected(_response_window._on_step_d_completed):
 		ActionPipeline.step_d_completed.connect(_response_window._on_step_d_completed)
-	if not ActionPipeline.stack_object_resolved.is_connected(_on_ability_glow_resolved):
-		ActionPipeline.stack_object_resolved.connect(_on_ability_glow_resolved)
+	if not ActionPipeline.stack_object_resolved.is_connected(_button_support._on_ability_glow_resolved):
+		ActionPipeline.stack_object_resolved.connect(_button_support._on_ability_glow_resolved)
 
 	if not PriorityManager.priority_changed.is_connected(_on_priority_changed_refresh_glows):
 		PriorityManager.priority_changed.connect(_on_priority_changed_refresh_glows)
@@ -137,7 +163,7 @@ func refresh_activatable_glows() -> void:
 			# aunque esté en la lista chica de _ability_is_hand_usable().
 			if _ability_is_hand_or_cementerio_only(str(ability.get("raw_text", ""))):
 				continue
-			if _validate_ability(ability, card).get("can", false):
+			if _button_support._validate_ability(ability, card).get("can", false):
 				can_activate_any = true
 				break
 		card.set_activatable(can_activate_any)
@@ -186,6 +212,8 @@ func _open_card_inspection(card: Node) -> void:
 	tween.chain().tween_callback(_build_ability_buttons.bind(card))
 	if not _main.inspection_blur.gui_input.is_connected(_on_inspection_blur_input):
 		_main.inspection_blur.gui_input.connect(_on_inspection_blur_input)
+	if not inspected_card.gui_input.is_connected(_on_inspection_blur_input):
+		inspected_card.gui_input.connect(_on_inspection_blur_input)
 
 
 func _on_inspection_blur_input(event: InputEvent) -> void:
@@ -224,6 +252,12 @@ func _ability_is_hand_usable(full_text: String) -> bool:
 		return true  # Drácula
 	if "barajar esta carta desde tu mano" in lower:
 		return true  # Sacrificio Solar
+	if "ponerlo en el fondo de tu castillo para reducir a cero el próximo daño" in lower:
+		return true  # Piruquina
+	if "puedes barajarla de tu mano para buscar un oro en tu castillo" in lower:
+		return true  # skofnung
+	if "puedes pagar un oro para desterrar este y otro aliado sacerdote de tu mano" in lower:
+		return true  # sandraudiga
 	return false
 
 
@@ -236,6 +270,8 @@ func _ability_is_cementerio_usable(full_text: String) -> bool:
 	var lower := full_text.to_lower()
 	if "desterrarla de tu cementerio" in lower or "desterrarlo de tu cementerio" in lower:
 		return true  # Espada del Juicio
+	if "para subir esta carta de tu cementerio a tu mano" in lower:
+		return true  # vision heroica
 	if "desterrarlo de tu mano o cementerio" in lower:
 		return true  # Drácula
 	return false
@@ -250,7 +286,17 @@ func _ability_is_hand_or_cementerio_only(full_text: String) -> bool:
 	tu mano en el fondo de tu Castillo', solo tiene sentido con Tyet
 	literalmente en la mano; o la de cancelar ataque de Drácula: 'de tu
 	mano o Cementerio', sin 'en juego'). Ramón Freire SÍ dice 'de tu mano o
-	EN JUEGO' explícito, así que esa sigue disponible en ambos casos."""
+	EN JUEGO' explícito, así que esa sigue disponible en ambos casos.
+
+	REVERTIDO (2026-09-09, a pedido explícito del usuario): entre el
+	2026-08-31 y el 2026-09-06 hubo un vaivén con la segunda habilidad de
+	Tyet ('esta y otra carta de tu mano en el fondo de tu Castillo') — se
+	restringió a solo-mano, después se abrió también a Reserva de Oro
+	razonando que 'esta' no implica zona. El usuario confirmó ahora que la
+	restricción original (solo-mano) es la correcta — Tyet YA EN JUEGO no
+	puede usar esta habilidad. Se sacó la excepción; vuelve a caer en la
+	regla general de abajo (está en _ability_is_hand_usable(), su texto no
+	dice 'en juego', así que da true = solo mano)."""
 	if not (_ability_is_hand_usable(full_text) or _ability_is_cementerio_usable(full_text)):
 		return false
 	return not ("en juego" in full_text.to_lower())
@@ -266,7 +312,7 @@ func _build_ability_buttons(source_card: Node) -> void:
 	# controller_id, no owner_id (2026-08-29, a pedido del usuario): quién
 	# puede activar la habilidad de una carta es quién la CONTROLA, no
 	# necesariamente su dueño — importa para poder usar habilidades de una
-	# carta ajena que controlás (p.ej. jugada por Miguel desde el Cementerio
+	# carta ajena que controlas (p.ej. jugada por Miguel desde el Cementerio
 	# rival). controller_id sigue a owner_id por defecto, así que para toda
 	# carta normal esto se comporta igual que antes.
 	var source_controller_id: int = source_card.controller_id if source_card.get("controller_id") != null else -1
@@ -339,7 +385,7 @@ func _build_ability_buttons(source_card: Node) -> void:
 			# ataque de Drácula) — esas solo tienen sentido con la carta
 			# literalmente en esa zona, no ya jugada.
 			continue
-		var validation = _validate_ability(ability, source_card)
+		var validation = _button_support._validate_ability(ability, source_card)
 		if validation.get("can", false):
 			usable_abilities.append({"ability": ability, "validation": validation})
 
@@ -349,34 +395,70 @@ func _build_ability_buttons(source_card: Node) -> void:
 	if not is_instance_valid(inspected_card):
 		return
 
-	# Ubica cada botón exactamente sobre el fragmento de texto donde está impresa esa
-	# habilidad en la carta, calculando la posición exacta dentro del texto completo
-	# (incluyendo palabras clave de arriba y pasivas de abajo para no taparlas).
+	# Ubica cada botón exactamente sobre las líneas donde está impresa esa habilidad
+	# en la carta, calculando las líneas visuales ocupadas por cada párrafo/palabra clave.
 	var card_size: Vector2 = inspected_card.custom_minimum_size
 	var zone_top: float = card_size.y * ABILITY_TEXT_TOP_RATIO
 	var zone_height: float = card_size.y * (ABILITY_TEXT_BOTTOM_RATIO - ABILITY_TEXT_TOP_RATIO)
-	var full_text_length: int = maxi(habilidad_text.strip_edges().length(), 1)
-	var h_lower: String = habilidad_text.to_lower()
-
+	
+	# Normalizar texto en líneas/párrafos
+	var lines_raw: PackedStringArray = habilidad_text.strip_edges().split("\n")
+	var visual_paragraphs: Array[Dictionary] = []
+	var total_visual_lines: float = 0.0
+	
+	for p in lines_raw:
+		var p_str = p.strip_edges()
+		if p_str.is_empty():
+			continue
+		# Caracteres aproximados por línea en la caja de texto (~42 caracteres por línea real)
+		var p_lines: float = maxf(1.0, roundf(float(p_str.length()) / 42.0 + 0.2))
+		visual_paragraphs.append({
+			"text": p_str,
+			"lower": p_str.to_lower(),
+			"lines": p_lines,
+			"line_start": total_visual_lines
+		})
+		total_visual_lines += p_lines
+	
+	if total_visual_lines <= 0.0:
+		total_visual_lines = 1.0
+	
+	var line_height_px: float = zone_height / total_visual_lines
 	var offsets_by_index: Dictionary = {}
+	
 	for a in all_parsed:
 		var raw_t: String = a.get("raw_text", "")
 		var idx: int = a.get("ability_index", -1)
-		var start_pos: int = -1
-		if not raw_t.is_empty():
-			var first_chunk: String = raw_t.split(".")[0].strip_edges().to_lower()
-			if first_chunk.length() > 6:
-				first_chunk = first_chunk.substr(0, 30)
-			start_pos = h_lower.find(first_chunk)
-		if start_pos < 0:
-			start_pos = 0
-		var len_a: int = maxi(raw_t.length(), 1)
-		var y0: float = zone_top + zone_height * (float(start_pos) / float(full_text_length))
-		var y1: float = zone_top + zone_height * (float(start_pos + len_a) / float(full_text_length))
-		y0 = clampf(y0, zone_top, zone_top + zone_height)
-		y1 = clampf(y1, zone_top, zone_top + zone_height)
-		if y1 - y0 < 18.0:
-			y1 = minf(y0 + 18.0, zone_top + zone_height)
+		var raw_lower: String = raw_t.to_lower().strip_edges()
+		var first_chunk: String = raw_lower.split(".")[0].strip_edges()
+		if first_chunk.length() > 6:
+			first_chunk = first_chunk.substr(0, 24)
+			
+		var match_p: Dictionary = {}
+		for p in visual_paragraphs:
+			if first_chunk in p["lower"] or p["lower"] in raw_lower:
+				match_p = p
+				break
+		
+		var a_line_start: float = 0.0
+		var a_lines_count: float = 1.0
+		if not match_p.is_empty():
+			a_line_start = match_p["line_start"]
+			a_lines_count = match_p["lines"]
+		else:
+			# Fallback proporcional
+			var h_lower: String = habilidad_text.to_lower()
+			var spos: int = h_lower.find(first_chunk) if not first_chunk.is_empty() else 0
+			if spos < 0:
+				spos = 0
+			var full_len: float = float(maxi(habilidad_text.length(), 1))
+			a_line_start = (float(spos) / full_len) * total_visual_lines
+			a_lines_count = maxf(1.0, (float(maxi(raw_t.length(), 1)) / full_len) * total_visual_lines)
+			
+		var y0: float = zone_top + a_line_start * line_height_px
+		var y1: float = y0 + a_lines_count * line_height_px
+		y0 = clampf(y0, zone_top, zone_top + zone_height - 10.0)
+		y1 = clampf(y1, y0 + 12.0, zone_top + zone_height)
 		offsets_by_index[idx] = Vector2(y0, y1)
 
 	var panel = Control.new()
@@ -385,6 +467,11 @@ func _build_ability_buttons(source_card: Node) -> void:
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	inspected_card.add_child(panel)
 	_ability_buttons_panel = panel
+
+	# Animación sutil de respiración mágica (modulate:a entre 0.82 y 1.0)
+	var pulse_tw = panel.create_tween().set_loops()
+	pulse_tw.tween_property(panel, "modulate:a", 0.82, 0.9).set_ease(Tween.EASE_IN_OUT)
+	pulse_tw.tween_property(panel, "modulate:a", 1.0, 0.9).set_ease(Tween.EASE_IN_OUT)
 
 	# source_card_node: se necesita la carta VIVA (no solo sus datos) para que
 	# ActionPipeline._resolve_ability() pueda ejecutar el efecto real vía
@@ -398,589 +485,50 @@ func _build_ability_buttons(source_card: Node) -> void:
 			continue
 		var y_range: Vector2 = offsets_by_index[idx]
 
-		var btn = _create_ability_overlay_button(ability, validation)
-		var btn_y: float = y_range.x + 2.0
-		var btn_h: float = maxi(16.0, (y_range.y - y_range.x) - 4.0)
+		var btn = _button_support._create_ability_overlay_button(ability, validation)
+		var btn_w: float = card_size.x - ABILITY_TEXT_SIDE_MARGIN - ABILITY_TEXT_RIGHT_MARGIN
+		var btn_y: float = y_range.x + 1.0
+		var btn_h: float = maxf(12.0, (y_range.y - y_range.x) - 2.0)
 		btn.position = Vector2(ABILITY_TEXT_SIDE_MARGIN, btn_y)
-		btn.size = Vector2(card_size.x - ABILITY_TEXT_SIDE_MARGIN * 2.0, btn_h)
+		btn.size = Vector2(btn_w, btn_h)
 		btn.mouse_filter = Control.MOUSE_FILTER_STOP
 
 		var captured           = ability.duplicate()
 		var captured_card_data = source_card.card_data.duplicate()
 		var card_for_glow      = source_card  # capturado antes del cierre
 
-		# Patrón especial de Bernardo O'Higgins (2026-08-26): coste alternativo
-		# (barajar un Arma/Aliado Caballero) + elegir entre dos efectos con
-		# objetivo (desterrar ≤3 / cancelar habilidad) — no encaja en el
-		# sistema genérico de costes/acciones de ActionPipeline (un solo tipo
-		# de coste, sin targeting), así que se resuelve aparte.
 		var ability_lower: String = str(captured.get("raw_text", "")).to_lower()
-		var is_bernardo_pattern: bool = ("barajar" in ability_lower and "caballero" in ability_lower
-			and ("desterrar" in ability_lower or "cancelar" in ability_lower))
-
-		if is_bernardo_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _bernardo._activate_bernardo_shuffle_removal(card_for_glow, captured)
-			)
-			panel.add_child(btn)
+		# Patrones especiales de habilidades activadas — extraídos a 4 archivos
+		# hermanos por posición en el archivo original (2026-09-06, "módulos
+		# gordos", Fase 2 — ver iterative-booping-abelson.md): cada grupo
+		# revisa el mismo tramo de condiciones que tenía acá, en el MISMO
+		# ORDEN relativo (A, luego B, luego C, luego D), así que el primer
+		# match sigue ganando exactamente igual que antes de la extracción.
+		# Ver AbilityButtonPatternsA.gd/_B.gd/_C.gd/_D.gd.
+		if _pattern_group_a.try_build(ability_lower, btn, panel, card_for_glow, captured):
 			continue
-
-		# Patrón especial de Padre de la Patria (2026-08-28): "genera un Oro
-		# para jugar X" es Oro Virtual RESTRINGIDO (GoldManager.
-		# restricted_gold_pools), un concepto que ActionPipeline no conoce —
-		# se genera directo acá, sin pasar por el pipeline genérico.
-		var is_padre_patria_gold_pattern: bool = ("genera" in ability_lower
-			and "para jugar" in ability_lower and "caballero" in ability_lower)
-		if is_padre_patria_gold_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				_search_handler._activate_padre_patria_gold(card_for_glow, captured)
-			)
-			panel.add_child(btn)
+		if _pattern_group_b.try_build(ability_lower, btn, panel, card_for_glow, captured):
 			continue
-
-		# Patrón especial de Legión Paladín (2026-08-28): "Puedes Desterrarlo
-		# para prevenir que un Aliado que controles salga del juego" — costo
-		# de auto-Destierro + Prevención (DAR - Utilizar Habilidades:
-		# EffectController._leave_play_preventions), un concepto que
-		# ActionPipeline tampoco conoce. 2026-08-29: la API de esta carta es
-		# inestable entre fetches — en un fetch devolvió 'salgan'/'hasta dos
-		# Aliados' (plural), en el fetch más reciente (usado ahora, y
-		# sincronizado al cache local) volvió a 'salga'/'un Aliado' (singular)
-		# — se dejan ambas formas en la detección por si vuelve a cambiar,
-		# pero la carga de Prevención que se agrega abajo sigue el texto
-		# actual (1, no 2).
-		var is_legion_paladin_prevention_pattern: bool = ("desterrarlo" in ability_lower
-			and "prevenir" in ability_lower
-			and ("salga del juego" in ability_lower or "salgan del juego" in ability_lower))
-		if is_legion_paladin_prevention_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				_prevention_handler._activate_legion_paladin_prevention(card_for_glow)
-			)
-			panel.add_child(btn)
+		if _pattern_group_c.try_build(ability_lower, btn, panel, card_for_glow, captured):
 			continue
-
-		# Patrón especial de Don de Amma (2026-08-29): "Una vez por turno,
-		# puedes Desterrar un Oro con habilidad de tu Reserva. Luego, busca
-		# un Oro en tu Castillo y ponlo en tu Reserva." — costo de Desterrar
-		# UNA carta elegida entre los Oros-con-habilidad propios en Reserva
-		# (no necesariamente esta misma), seguido de una búsqueda que no va
-		# a la mano — ActionPipeline no tiene ninguno de los dos conceptos.
-		var is_don_de_amma_pattern: bool = ("desterrar un oro" in ability_lower
-			and "con habilidad" in ability_lower and "busca un oro" in ability_lower)
-		if is_don_de_amma_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _search_handler._activate_don_de_amma(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Tesoro de los Césares (2026-08-29): "Una vez por
-		# turno, puedes Barajar una carta de tu mano para nombrar una carta.
-		# Esa carta cuesta un Oro adicional el próximo turno." — costo de
-		# Barajar (mano → mazo, no descarte) + nombrar una carta CUALQUIERA
-		# del juego (no un objeto en juego, un NOMBRE) con un recargo de
-		# coste que recién arranca el turno siguiente — ActionPipeline no
-		# tiene ninguno de los tres conceptos (costo Barajar, nombrar, tax
-		# diferido). Requiere el fix de parse_abilities() de esta misma
-		# sesión que une la segunda oración (sin coste/trigger propio) a la
-		# ACTIVADA anterior — sin eso 'cuesta un oro adicional' nunca
-		# aparecía en raw_text y este patrón no matcheaba nunca.
-		var is_tesoro_cesares_pattern: bool = ("barajar una carta de tu mano" in ability_lower
-			and "nombrar una carta" in ability_lower and "cuesta un oro adicional" in ability_lower)
-		if is_tesoro_cesares_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _search_handler._activate_tesoro_cesares_name_tax(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Miguel (2026-08-29): "Una vez en tu turno, juega
-		# una carta de tu mano o de un Cementerio reduciendo su coste en un
-		# Oro, hasta un mínimo de 0." — elegir entre mano Y Cementerio a la
-		# vez, con descuento de -1/piso 0 aplicado solo a esa carta, no es
-		# nada que ActionPipeline sepa hacer solo. Reusa GoldManager.
-		# play_card() completo (fases, portador de Armas, Talismanes) con el
-		# mismo mecanismo de descuento puntual que 'Muestra X para reducir
-		# el coste' (El Rey y el Verdugo, ya en GoldManager.play_card()).
-		var is_miguel_pattern: bool = ("juega una carta de tu mano" in ability_lower
-			and "cementerio" in ability_lower and "reduciendo su coste" in ability_lower)
-		if is_miguel_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _search_handler._activate_miguel_discount_play(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Tyet (2026-08-29): "Puedes pagar este Oro para
-		# que un Oro pierda su habilidad este turno y muévelo al Oro Pagado."
-		# Costo = esta misma carta (CostType.SELF_AS_GOLD, ActionPipeline no
-		# lo conoce). Efecto sobre OTRO Oro elegido: silencio temporal
-		# (KeywordManager.silence_card(..., "turn"), se autolimpia solo al
-		# empezar el próximo turno) + mover a Oro Pagado.
-		var is_tyet_pattern: bool = (("pagar este oro" in ability_lower or "puedes pagarlo" in ability_lower)
-			and "pierda su habilidad" in ability_lower and "oro pagado" in ability_lower)
-		if is_tyet_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _hand_cementerio_handler._activate_tyet_silence_and_pay(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Segundo patrón de Tyet (2026-08-30): "Puedes poner esta y otra
-		# carta de tu mano en el fondo de tu Castillo y Robar dos cartas." —
-		# usable DESDE LA MANO (ver _ability_is_hand_usable()). Costo:
-		# esta carta + otra elegida de la mano, ambas al fondo del mazo.
-		var is_tyet_mill_pattern: bool = ("esta y otra carta de tu mano" in ability_lower
-			and "fondo de tu castillo" in ability_lower)
-		if is_tyet_mill_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _hand_cementerio_handler._activate_tyet_mill_and_draw(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Ramón Freire (2026-08-30): "Si controlas
-		# Aliados de coste 2 o más, puedes Desterrarlo de tu mano o en
-		# juego para generar un Oro para jugar Armas." — usable DESDE LA
-		# MANO o ya en juego, con una condición previa (controlar un Aliado
-		# de coste ≥2) que ActionPipeline no sabe verificar.
-		var is_ramon_freire_pattern: bool = ("desterrarlo de tu mano o en juego" in ability_lower
-			and "generar un oro" in ability_lower)
-		if is_ramon_freire_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _hand_cementerio_handler._activate_ramon_freire_banish_for_gold(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Espada de O'Higgins (2026-08-30): "En tu Vigilia,
-		# una vez por turno, puedes Barajar una carta que no sea Oro o buscar
-		# un Oro en tu Castillo y ponerlo en tu mano." — elección A/B entre
-		# dos efectos que no comparten nada (Barajar de mano vs buscar en
-		# mazo), ActionPipeline solo resuelve un tipo de acción por
-		# habilidad, no una elección genérica entre dos.
-		var is_espada_ohiggins_vigilia_pattern: bool = ("barajar una carta que no sea oro" in ability_lower
-			and "buscar un oro en tu castillo" in ability_lower)
-		if is_espada_ohiggins_vigilia_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _search_handler._activate_espada_ohiggins_vigilia_choice(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Infernum Vox (2026-08-30): "Una vez por turno,
-		# puedes mirar seis cartas del tope de un Castillo y devolverlas en
-		# cualquier orden en el tope y/o fondo del Castillo." — puro
-		# reordenamiento (no es 'mirar y jugar/quedarte una', es 'mirar y
-		# repartir+ordenar TODAS'), un concepto que ActionPipeline no tiene.
-		var is_infernum_vox_pattern: bool = ("mirar" in ability_lower
-			and "cartas del tope de un castillo" in ability_lower
-			and "tope y/o fondo" in ability_lower)
-		if is_infernum_vox_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _search_handler._activate_infernum_vox_look_reorder(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Paladín Bestiarium — habilidad 1 (2026-08-30):
-		# "Una vez por turno, puedes Descartar una carta para jugar un Arma
-		# de tu mano reduciendo su coste en un Oro, hasta un mínimo de 0." —
-		# el costo (descartar CUALQUIER carta) y el efecto (jugar OTRA carta
-		# distinta con descuento) no coinciden, ActionPipeline solo sabe
-		# resolver costo+efecto sobre la MISMA carta.
-		var is_paladin_bestiarium_discard_pattern: bool = ("descartar una carta para jugar un arma" in ability_lower
-			and "reduciendo su coste" in ability_lower)
-		if is_paladin_bestiarium_discard_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _prevention_handler._activate_paladin_bestiarium_discard_weapon_discount(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Paladín Bestiarium — habilidad 2 (2026-08-30):
-		# "Una vez en tu turno, puedes Descartar o subir un Arma que
-		# controles a la mano para Anular una carta de coste 1 o menos." —
-		# costo con DOS mecanismos alternativos (descartar O devolver a la
-		# mano) sobre un Arma EN JUEGO (no la propia carta), más un
-		# objetivo con filtro de coste — nada de esto lo resuelve
-		# ActionPipeline solo.
-		var is_paladin_bestiarium_annul_pattern: bool = ("descartar o subir un arma que controles" in ability_lower
-			and "anular una carta de coste" in ability_lower)
-		if is_paladin_bestiarium_annul_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _prevention_handler._activate_paladin_bestiarium_weapon_annul(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Aho (2026-08-30): "Una vez por turno, Destierra
-		# un Aliado o Tótem y cinco cartas del tope de un Castillo." — dos
-		# destierros independientes (objetivo elegido + N del tope de un
-		# mazo a elección) unidos por 'y', ninguno de los dos conceptos lo
-		# resuelve ActionPipeline solo.
-		var is_aho_banish_pattern: bool = ("destierra un aliado o" in ability_lower
-			and "cartas del tope de un castillo" in ability_lower)
-		if is_aho_banish_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _search_handler._activate_aho_banish_ally_and_deck(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Chakram (2026-08-30): "Una vez por turno, puedes
-		# mirar la mano de tu oponente y elegir una carta de ahí que no sea
-		# Oro para que no pueda ser jugada hasta tu próximo turno y Roba una
-		# carta." — reveal privado de la mano rival + candado por carta
-		# puntual (GoldManager.lock_card_from_playing()), ningún concepto que
-		# ActionPipeline resuelva solo.
-		var is_chakram_pattern: bool = ("mirar la mano de tu oponente" in ability_lower
-			and "no pueda ser jugada" in ability_lower)
-		if is_chakram_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _search_handler._activate_chakram_look_and_lock(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Estaca (2026-08-30): "Una vez por turno, puedes
-		# Robar tres cartas, Barajar una carta oponente que no sea Oro y
-		# tantas cartas de tu mano como coste tenga." — la carta oponente no
-		# dice zona (EN JUEGO, ver [[project_no_zone_means_in_play]]) y la
-		# cantidad a barajar de la propia mano es DINÁMICA (el coste de la
-		# carta rival elegida), nada de esto lo resuelve ActionPipeline solo.
-		var is_estaca_pattern: bool = ("barajar una carta oponente que no sea oro" in ability_lower
-			and "tantas cartas de tu mano como coste tenga" in ability_lower)
-		if is_estaca_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _hand_cementerio_handler._activate_estaca_draw_and_shuffle(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Segundo patrón de Estaca (2026-08-30): "Puedes Desterrarla para
-		# prevenir que una carta sea afectada por un efecto oponente." —
-		# costo de autodesterrarse (femenino, 'Desterrarla' — ver el fix de
-		# UniversalCardParser.pays_self_banish) + elegir qué carta proteger.
-		var is_estaca_prevention_pattern: bool = ("desterrarla para prevenir" in ability_lower
-			and "efecto oponente" in ability_lower)
-		if is_estaca_prevention_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _prevention_handler._activate_estaca_banish_for_prevention(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Espada del Juicio (2026-08-30): "Puedes
-		# Desterrarla de tu Cementerio para que un Aliado gane o pierda 2
-		# de Fuerza permanentemente." — primera habilidad usable DESDE EL
-		# CEMENTERIO de esta sesión (ver _ability_is_cementerio_usable()),
-		# costo sobre el DATO real del Cementerio (no sobre este nodo de
-		# solo vista) + elegir Aliado y signo del bono.
-		var is_espada_juicio_pattern: bool = ("desterrarla de tu cementerio" in ability_lower
-			and "gane o pierda 2 de fuerza" in ability_lower)
-		if is_espada_juicio_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _hand_cementerio_handler._activate_espada_juicio_banish_cemetery_for_buff(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Drácula, tercera habilidad (2026-08-30): "Puedes
-		# convertirlo en un Oro sin habilidad para prevenir que una habilidad
-		# sea cancelada o un Aliado de coste 1 sea Anulado." — coste de
-		# autoconvertirse (is_converted=true sobre SÍ MISMO, sin elegir
-		# objetivo, a diferencia del Convertir de Capitán O'Brien), efecto de
-		# carga consumible sobre la pila (EffectController.
-		# try_consume_stack_annul_cancel_prevention(), consumida desde
-		# LinkedEffectRegistry._execute_cancel()/_execute_annul()).
-		var is_dracula_convert_pattern: bool = ("convertirlo en un oro sin habilidad" in ability_lower
-			and "prevenir" in ability_lower)
-		if is_dracula_convert_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				_prevention_handler._activate_dracula_convert_for_prevention(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Drácula, cuarta habilidad (2026-08-30): "Puedes
-		# Desterrarlo de tu mano o Cementerio para cancelar el ataque de
-		# hasta dos Aliados." — usable DESDE LA MANO o el CEMENTERIO (ver
-		# _ability_is_hand_usable()/_ability_is_cementerio_usable()), primera
-		# habilidad que cancela un ataque ya declarado (nuevo: sacar de
-		# GameManager.attackers + revertir el aspecto visual, sin pasar por
-		# undeclare_attacker() porque no requiere ser el propio turno del
-		# controlador de ese Aliado).
-		var is_dracula_cancel_attack_pattern: bool = ("desterrarlo de tu mano o cementerio" in ability_lower
-			and "cancelar el ataque" in ability_lower)
-		if is_dracula_cancel_attack_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _hand_cementerio_handler._activate_dracula_cancel_attacks(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Espíritu Kotaix, segunda habilidad (2026-09-02):
-		# "Una vez por turno, Roba dos cartas y Baraja una carta oponente que
-		# no sea Oro. Esta habilidad no puede ser cancelada." — mismo patrón
-		# que Estaca (Robo incondicional + Baraja de una carta rival en juego
-		# excluyendo Oro), sin el barajado adicional de la propia mano.
-		var is_kotaix_pattern: bool = "baraja una carta oponente que no sea oro" in ability_lower
-		if is_kotaix_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _search_handler._activate_kotaix_draw_and_shuffle_opponent(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de Sacrificio Solar (2026-09-02): "Puedes pagar un
-		# Oro y Barajar esta carta desde tu mano para Desterrar o Barajar
-		# una carta de coste 2 o menos y Robar una carta." — usable DESDE LA
-		# MANO (ver _ability_is_hand_usable()), costo de Oro + la propia
-		# carta (autobarajarse desde la mano, no destierro ni descarte —
-		# concepto que ActionPipeline no tiene) y elección Destierra/Baraja
-		# sobre el objetivo, algo que tampoco resuelve solo.
-		var is_sacrificio_solar_pattern: bool = "barajar esta carta desde tu mano" in ability_lower
-		if is_sacrificio_solar_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _hand_cementerio_handler._activate_sacrificio_solar_self_shuffle_banish_or_shuffle(card_for_glow, captured)
-			)
-			panel.add_child(btn)
-			continue
-
-		# Patrón especial de La Ouija (2026-08-31): "Una vez por turno, puedes
-		# jugar una carta de tu Cementerio o del tope de tu Castillo." — dos
-		# zonas de origen alternativas ('de tu Cementerio' Y 'del tope de tu
-		# Castillo', ambas con posesivo — solo las propias) que ActionPipeline
-		# no resuelve solo (solo sabe jugar la carta que ya tenés en mano).
-		var is_ouija_pattern: bool = ("jugar una carta de tu cementerio" in ability_lower
-			and "tope de tu castillo" in ability_lower)
-		if is_ouija_pattern:
-			btn.pressed.connect(func():
-				close_card_inspection()
-				await _hand_cementerio_handler._activate_ouija_play_from_cemetery_or_deck_top(card_for_glow, captured)
-			)
-			panel.add_child(btn)
+		if _pattern_group_d.try_build(ability_lower, btn, panel, card_for_glow, captured):
 			continue
 
 		# Un solo click: cerrar inspección → empujar a la Pila → Paso D automático
 		btn.pressed.connect(func():
 			close_card_inspection()
-			await _activate_ability_via_pipeline(card_for_glow, captured_card_data, captured, context)
+			await _button_support._activate_ability_via_pipeline(card_for_glow, captured_card_data, captured, context)
 		)
 		panel.add_child(btn)
 
-
-func _validate_ability(ability: Dictionary, source_card: Node) -> Dictionary:
-	"""Valida si una habilidad activada puede ejecutarse ahora.
-	Comprueba: prioridad, oro disponible, cartas en mano, carta girada, ActionPipeline."""
-	if PriorityManager.priority_window_active and not PriorityManager.can_act(0):
-		return {"can": false, "reason": "Sin prioridad ahora"}
-
-	# Silenciada (por instancia o por nombre, ver KeywordManager.is_silenced())
-	# = pierde TODAS sus habilidades, activadas incluidas — antes esto solo
-	# se chequeaba para triggers (TriggerSystem._check_trigger_conditions()),
-	# los botones de habilidad activada seguían mostrándose igual (2026-08-29).
-	if KeywordManager.is_silenced(source_card):
-		return {"can": false, "reason": "Sin habilidad (silenciada)"}
-
-	# Restricción de fase por texto propio de la carta (2026-08-30, p.ej.
-	# Espada de O'Higgins: "En tu Vigilia, una vez por turno, puedes...").
-	# _build_ability_buttons() ya permite el botón en Vigilia O en ventana
-	# de prioridad (genérico, para cartas sin restricción de fase) — esto
-	# cierra el caso más estricto de una carta que solo se puede usar en su
-	# propia Vigilia, ni siquiera con prioridad abierta en otra fase.
-	var raw_lower: String = str(ability.get("raw_text", "")).to_lower()
-	if "en tu vigilia" in raw_lower and GameManager.current_phase != Constants.Phase.VIGILIA:
-		return {"can": false, "reason": "Solo en tu Vigilia"}
-
-	var cost_type   = ability.get("cost_type",   UniversalCardParser.CostType.NONE)
-	var cost_amount = ability.get("cost_amount", 0)
-
-	match cost_type:
-		UniversalCardParser.CostType.GOLD:
-			if _main._gold_manager:
-				var available = _main._gold_manager.get_oro_disponible()
-				if not _main._gold_manager.puede_pagar(cost_amount):
-					return {"can": false, "reason": "Oro insuficiente (%d/%d)" % [available, cost_amount]}
-
-		UniversalCardParser.CostType.DISCARD:
-			var hand = _main.player_hand
-			var count = hand.cards.size() if hand and hand.get("cards") != null else hand.get_child_count() if hand else 0
-			if count == 0:
-				return {"can": false, "reason": "Mano vacía"}
-
-		UniversalCardParser.CostType.TAP:
-			if source_card.get("is_tapped") == true:
-				return {"can": false, "reason": "Carta ya girada"}
-
-		UniversalCardParser.CostType.ONCE_PER_TURN:
-			# instance_id, NO card_data.id (2026-08-30, corrección: card_data.id
-			# es el ID de la carta/impresión, compartido por TODAS las copias en
-			# juego — con 2 Aho en juego, usar uno marcaba el cupo también para
-			# el otro. Cada copia física necesita su propio cupo).
-			var card_id: String = str(source_card.get_instance_id())
-			var ability_idx: int = ability.get("ability_index", 0)
-			var turn: int = GameManager.current_turn
-			if UniversalCardParser.turn_registry.was_used(card_id, ability_idx, turn):
-				return {"can": false, "reason": "Ya usada este turno"}
-
-	# Flag once_per_turn desde parse_abilities() (puede venir sin cost_type ONCE_PER_TURN)
-	if ability.get("once_per_turn", false) and cost_type != UniversalCardParser.CostType.ONCE_PER_TURN:
-		var card_id: String = str(source_card.get_instance_id())
-		var ability_idx: int = ability.get("ability_index", 0)
-		var turn: int = GameManager.current_turn
-		if UniversalCardParser.turn_registry.was_used(card_id, ability_idx, turn):
-			return {"can": false, "reason": "Ya usada este turno"}
-
-	# Verificación adicional con ActionPipeline — source_card_node en el
-	# context (2026-08-30) para que can_activate_ability() también use el
-	# instance_id, no el id compartido entre copias.
-	var context = {"controller_id": 0, "source_card_node": source_card}
-	var check = ActionPipeline.can_activate_ability(source_card.card_data, ability, context)
-	if not check.get("can", true):
-		return {"can": false, "reason": check.get("reason", "No disponible")}
-
-	return {"can": true, "reason": ""}
-
-
-func _create_ability_overlay_button(ability: Dictionary, validation: Dictionary) -> Button:
-	"""Botón superpuesto sobre el párrafo de la carta donde está impresa esta
-	habilidad. No dibuja texto propio (la carta ya lo muestra); un
-	rectángulo de bordes curvos color celeste marca SIEMPRE qué habilidad se
-	puede activar y dónde clickear (2026-08-26, a pedido del usuario — antes
-	el borde solo aparecía al pasar el mouse, así que no había forma de
-	saber de antemano qué parte de la carta era clickeable). Al pasar el
-	mouse se resalta más fuerte, y lleva el costo y efecto como tooltip."""
-	var cost_type   = ability.get("cost_type",   UniversalCardParser.CostType.NONE)
-	var cost_amount = ability.get("cost_amount", 0)
-	var effect_text = ability.get("effect_text", ability.get("raw_text", ""))
-
-	var cost_label: String
-	match cost_type:
-		UniversalCardParser.CostType.GOLD:
-			cost_label = "Paga %d Oro" % cost_amount
-		UniversalCardParser.CostType.ONCE_PER_TURN:
-			cost_label = "Una vez por turno"
-		UniversalCardParser.CostType.DISCARD:
-			cost_label = "Descarta una carta"
-		UniversalCardParser.CostType.TAP:
-			cost_label = "Gira esta carta"
-		_:
-			cost_label = ability.get("cost_text", "")
-
-	var btn = Button.new()
-	btn.text = ""
-	btn.focus_mode = Control.FOCUS_NONE
-	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	btn.tooltip_text = ""  # Sin texto negro explicativo en hover
-
-	# Contorno celeste fino y fijo (1px siempre, sin expandirse al poner el mouse)
-	var style_normal = StyleBoxFlat.new()
-	style_normal.bg_color = Color(0.2, 0.65, 1.0, 0.04)
-	style_normal.set_border_width_all(1)
-	style_normal.border_color = Color(0.35, 0.80, 1.0, 0.75)
-	style_normal.set_corner_radius_all(6)
-	btn.add_theme_stylebox_override("normal", style_normal)
-	btn.add_theme_stylebox_override("focus", style_normal)
-
-	var style_hover = StyleBoxFlat.new()
-	style_hover.bg_color = Color(0.2, 0.65, 1.0, 0.12)
-	style_hover.set_border_width_all(1)
-	style_hover.border_color = Color(0.48, 0.86, 1.0, 0.92)
-	style_hover.set_corner_radius_all(6)
-	btn.add_theme_stylebox_override("hover", style_hover)
-
-	var style_pressed = StyleBoxFlat.new()
-	style_pressed.bg_color = Color(0.2, 0.65, 1.0, 0.18)
-	style_pressed.set_border_width_all(1)
-	style_pressed.border_color = Color(0.55, 0.90, 1.0, 1.0)
-	style_pressed.set_corner_radius_all(6)
-	btn.add_theme_stylebox_override("pressed", style_pressed)
-
-	return btn
-
-
-func _activate_ability_via_pipeline(card_node: Node, card_data: Dictionary, ability: Dictionary, context: Dictionary) -> void:
-	"""Envía la habilidad a la Pila LIFO y arranca el flujo Paso D.
-	ActionPipeline se encarga de: Paso B (pagar), Paso C (triggers), añadir a pila, Paso D (ventana respuesta)."""
-	print("[CardInspection] Activando habilidad '%s' vía Pila" % ability.get("cost_text", "?"))
-	var result = await ActionPipeline.activate_ability(card_data, ability, context)
-	if not result.get("success", false):
-		_main._update_debug("Habilidad no pudo activarse: %s" % result.get("reason", "?"))
-		return
-	# Brillo en la carta fuente mientras la habilidad está en la pila
-	if is_instance_valid(card_node):
-		_start_card_glow(card_node)
-
-
-func _activate_ability_with_glow(card_node: Node, card_data: Dictionary, ability: Dictionary, context: Dictionary) -> void:
-	# Alias mantenido por compatibilidad — delega al nuevo método
-	await _activate_ability_via_pipeline(card_node, card_data, ability, context)
-
+# Validación de habilidades ACTIVADAS + ciclo de vida del botón superpuesto
+# (creación visual, activación vía ActionPipeline, brillo de "habilidad en
+# la pila") se movieron a AbilityButtonSupport.gd (2026-09-06, "módulos
+# gordos", Fase 2) — ver _button_support, montado en setup().
 
 # El caso especial de Bernardo O'Higgins (coste alternativo + elección de
 # efecto con objetivo) se movió a BernardoAbilityHandler.gd (2026-08-28,
 # "módulos gordos") — ver _bernardo, montado en setup().
-
-
-func _start_card_glow(card_node: Node) -> void:
-	if not is_instance_valid(card_node):
-		return
-	if card_node in _glowing_cards:
-		_glowing_cards[card_node].kill()
-	var tween = create_tween().set_loops()
-	tween.tween_property(card_node, "modulate", Color(1.5, 1.2, 0.2, 1.0), 0.45)
-	tween.tween_property(card_node, "modulate", Color(1.0, 1.0, 1.0, 1.0), 0.45)
-	_glowing_cards[card_node] = tween
-
-
-func _stop_card_glow(card_node: Node) -> void:
-	if card_node in _glowing_cards:
-		_glowing_cards[card_node].kill()
-		_glowing_cards.erase(card_node)
-	if is_instance_valid(card_node):
-		var tw = create_tween()
-		tw.tween_property(card_node, "modulate", Color.WHITE, 0.25)
-
-
-func _on_ability_glow_resolved(stack_obj: Dictionary, _result: Dictionary) -> void:
-	if not stack_obj.get("card_data", {}).get("_is_activated_ability", false):
-		return
-	var source_id = stack_obj.get("card_data", {}).get("id", "")
-	if source_id.is_empty():
-		return
-	for card_node in _glowing_cards.keys():
-		if not is_instance_valid(card_node):
-			_glowing_cards.erase(card_node)
-			continue
-		var cd = card_node.get("card_data") if card_node.get("card_data") != null else {}
-		if cd.get("id", "") == source_id:
-			_stop_card_glow(card_node)
-			break
-
 
 # Ventanas de respuesta (Paso D genérico + Signo Amarillo) y
 # _show_puedes_confirm() (sin llamadores, código muerto) se movieron a

@@ -81,6 +81,9 @@ var validation_error: String = ""
 @onready var counter_label: Label = $Panel/CounterLabel
 
 
+const FONT_TITLE := preload("res://assets/fonts/Cinzel-Bold.ttf")
+const FONT_BODY := preload("res://assets/fonts/Marcellus-Regular.ttf")
+
 func _ready() -> void:
 	# Inicializar módulos extraídos
 	_filter_validator = CardFilterValidator.new()
@@ -89,6 +92,37 @@ func _ready() -> void:
 	_reorder.setup(self)
 	_reveal = SelectionReveal.new()
 	_reveal.setup(self)
+
+	# Estilos visuales Fantasy TCG
+	if panel:
+		var p_style := StyleBoxFlat.new()
+		p_style.bg_color = Color(0.04, 0.03, 0.06, 0.98)
+		p_style.border_color = Color(0.85, 0.72, 0.28, 0.95)
+		p_style.set_border_width_all(2)
+		p_style.set_corner_radius_all(18)
+		p_style.shadow_color = Color(0, 0, 0, 0.85)
+		p_style.shadow_size = 35
+		panel.add_theme_stylebox_override("panel", p_style)
+
+	if title_label:
+		title_label.add_theme_font_override("font", FONT_TITLE)
+		title_label.add_theme_font_size_override("font_size", 20)
+		title_label.add_theme_color_override("font_color", Color(1.0, 0.90, 0.60, 1.0))
+		title_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+		title_label.add_theme_constant_override("shadow_offset_x", 1)
+		title_label.add_theme_constant_override("shadow_offset_y", 2)
+
+	if instruction_label:
+		instruction_label.add_theme_font_override("font", FONT_BODY)
+		instruction_label.add_theme_font_size_override("font_size", 14)
+		instruction_label.add_theme_color_override("font_color", Color(0.88, 0.85, 0.78, 1.0))
+
+	if counter_label:
+		counter_label.add_theme_font_override("font", FONT_TITLE)
+		counter_label.add_theme_font_size_override("font_size", 15)
+		counter_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.75, 1.0))
+
+	_apply_button_styles()
 
 	# Ocultar al inicio
 	visible = false
@@ -101,6 +135,72 @@ func _ready() -> void:
 		cancel_button.pressed.connect(_on_cancel_pressed)
 	if fail_button:
 		fail_button.pressed.connect(_on_fail_pressed)
+
+
+func _apply_button_styles() -> void:
+	if confirm_button:
+		confirm_button.focus_mode = Control.FOCUS_NONE
+		confirm_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		confirm_button.add_theme_font_override("font", FONT_TITLE)
+		confirm_button.add_theme_font_size_override("font_size", 13)
+		var c_normal := StyleBoxFlat.new()
+		c_normal.bg_color = Color(0.06, 0.22, 0.12, 0.95)
+		c_normal.set_border_width_all(1)
+		c_normal.border_color = Color(0.40, 0.85, 0.50, 0.90)
+		c_normal.set_corner_radius_all(8)
+		c_normal.content_margin_left = 16
+		c_normal.content_margin_right = 16
+		confirm_button.add_theme_stylebox_override("normal", c_normal)
+		var c_hover := c_normal.duplicate()
+		c_hover.bg_color = Color(0.10, 0.32, 0.18, 1.0)
+		c_hover.set_border_width_all(2)
+		c_hover.border_color = Color(0.55, 1.0, 0.65, 1.0)
+		confirm_button.add_theme_stylebox_override("hover", c_hover)
+		var c_dis := c_normal.duplicate()
+		c_dis.bg_color = Color(0.08, 0.10, 0.09, 0.60)
+		c_dis.border_color = Color(0.25, 0.35, 0.28, 0.50)
+		confirm_button.add_theme_stylebox_override("disabled", c_dis)
+		confirm_button.add_theme_color_override("font_color", Color(0.90, 1.0, 0.90, 1.0))
+
+	if cancel_button:
+		cancel_button.focus_mode = Control.FOCUS_NONE
+		cancel_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		cancel_button.add_theme_font_override("font", FONT_TITLE)
+		cancel_button.add_theme_font_size_override("font_size", 13)
+		var can_normal := StyleBoxFlat.new()
+		can_normal.bg_color = Color(0.20, 0.08, 0.08, 0.95)
+		can_normal.set_border_width_all(1)
+		can_normal.border_color = Color(0.80, 0.35, 0.35, 0.85)
+		can_normal.set_corner_radius_all(8)
+		can_normal.content_margin_left = 16
+		can_normal.content_margin_right = 16
+		cancel_button.add_theme_stylebox_override("normal", can_normal)
+		var can_hover := can_normal.duplicate()
+		can_hover.bg_color = Color(0.30, 0.12, 0.12, 1.0)
+		can_hover.set_border_width_all(2)
+		can_hover.border_color = Color(1.0, 0.50, 0.50, 1.0)
+		cancel_button.add_theme_stylebox_override("hover", can_hover)
+		cancel_button.add_theme_color_override("font_color", Color(1.0, 0.88, 0.88, 1.0))
+
+	if fail_button:
+		fail_button.focus_mode = Control.FOCUS_NONE
+		fail_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		fail_button.add_theme_font_override("font", FONT_TITLE)
+		fail_button.add_theme_font_size_override("font_size", 13)
+		var f_normal := StyleBoxFlat.new()
+		f_normal.bg_color = Color(0.16, 0.14, 0.09, 0.95)
+		f_normal.set_border_width_all(1)
+		f_normal.border_color = Color(0.75, 0.62, 0.30, 0.85)
+		f_normal.set_corner_radius_all(8)
+		f_normal.content_margin_left = 16
+		f_normal.content_margin_right = 16
+		fail_button.add_theme_stylebox_override("normal", f_normal)
+		var f_hover := f_normal.duplicate()
+		f_hover.bg_color = Color(0.24, 0.20, 0.12, 1.0)
+		f_hover.set_border_width_all(2)
+		f_hover.border_color = Color(1.0, 0.85, 0.45, 1.0)
+		fail_button.add_theme_stylebox_override("hover", f_hover)
+		fail_button.add_theme_color_override("font_color", Color(0.95, 0.90, 0.80, 1.0))
 
 
 # =============================================================================
@@ -346,17 +446,13 @@ func _display_cards(cards: Array) -> void:
 
 
 func _create_card_display(card: Node) -> Control:
-	"""Crea un control visual para una carta en la selección
-
-	DAR Sección 1.D: Muestra íconos de tipo para validación visual
-	"""
-	# Verificar si la carta es válida según el filtro
+	"""Crea un control visual para una carta en la selección (sin emojis, estilo Fantasy TCG)"""
 	var is_valid = _filter_validator.card_passes_filter(card, selection_filter)
 
 	# Crear contenedor clickeable
 	var display = Button.new()
-	display.custom_minimum_size = Vector2(120, 180)
-	display.toggle_mode = not is_reorder_mode  # Toggle para selección, no para reorder
+	display.custom_minimum_size = Vector2(130, 195)
+	display.toggle_mode = not is_reorder_mode
 
 	# Estilo según validez
 	if is_valid or selection_filter.is_empty():
@@ -364,25 +460,26 @@ func _create_card_display(card: Node) -> Control:
 		display.add_theme_stylebox_override("pressed", _create_card_style(true))
 		display.add_theme_stylebox_override("hover", _create_card_style(false, true))
 	else:
-		# Estilo para carta inválida
 		display.add_theme_stylebox_override("normal", _create_invalid_card_style())
 		display.add_theme_stylebox_override("pressed", _create_invalid_card_style())
 		display.add_theme_stylebox_override("hover", _create_invalid_card_style())
 		display.disabled = true
 		display.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN
-		display.modulate = Color(0.6, 0.6, 0.6, 0.8)
+		display.modulate = Color(0.5, 0.5, 0.5, 0.7)
 
-	# Guardar referencia a la carta y estado de validez
 	display.set_meta("card", card)
 	display.set_meta("is_valid", is_valid)
 
-	# Contenedor interno para layout vertical
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	vbox.add_theme_constant_override("separation", 2)
+	vbox.offset_left = 6
+	vbox.offset_right = -6
+	vbox.offset_top = 6
+	vbox.offset_bottom = -6
+	vbox.add_theme_constant_override("separation", 3)
 	display.add_child(vbox)
 
-	# ===== ÍCONO DE TIPO (DAR Sección 1.D) =====
+	# Encabezado de Tipo y Validez (sin emojis)
 	var type_container = HBoxContainer.new()
 	type_container.alignment = BoxContainer.ALIGNMENT_CENTER
 	vbox.add_child(type_container)
@@ -390,60 +487,59 @@ func _create_card_display(card: Node) -> Control:
 	var type_icon = _create_type_icon(card)
 	type_container.add_child(type_icon)
 
-	# Indicador de validez junto al ícono de tipo
 	if not selection_filter.is_empty():
 		var validity_icon = Label.new()
-		validity_icon.add_theme_font_size_override("font_size", 14)
-
+		validity_icon.add_theme_font_override("font", FONT_TITLE)
+		validity_icon.add_theme_font_size_override("font_size", 10)
 		if is_valid:
-			validity_icon.text = " ✓"
-			validity_icon.modulate = Color(0.2, 0.9, 0.2, 1)  # Verde
+			validity_icon.text = " [OK]"
+			validity_icon.modulate = Color(0.35, 1.0, 0.55, 1.0)
 		else:
-			validity_icon.text = " ✗"
-			validity_icon.modulate = Color(0.9, 0.2, 0.2, 1)  # Rojo
-
+			validity_icon.text = " [X]"
+			validity_icon.modulate = Color(1.0, 0.40, 0.40, 1.0)
 		type_container.add_child(validity_icon)
 
-	# ===== IMAGEN DE CARTA =====
+	# Imagen de carta
 	if card.get("card_texture"):
 		var tex_rect = TextureRect.new()
 		tex_rect.texture = card.card_texture
 		tex_rect.expand_mode = TextureRect.EXPAND_FIT_WIDTH
 		tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		tex_rect.custom_minimum_size = Vector2(100, 120)
+		tex_rect.custom_minimum_size = Vector2(100, 115)
 		vbox.add_child(tex_rect)
 	else:
-		# Placeholder si no hay textura
 		var placeholder = ColorRect.new()
-		placeholder.color = Color(0.2, 0.2, 0.25, 0.8)
-		placeholder.custom_minimum_size = Vector2(100, 120)
+		placeholder.color = Color(0.12, 0.10, 0.16, 0.9)
+		placeholder.custom_minimum_size = Vector2(100, 115)
 		vbox.add_child(placeholder)
 
-	# ===== NOMBRE DE CARTA =====
+	# Nombre de carta
 	var name_label = Label.new()
 	name_label.text = card.card_name if card.get("card_name") else "Carta"
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	name_label.add_theme_font_override("font", FONT_TITLE)
 	name_label.add_theme_font_size_override("font_size", 11)
-	name_label.custom_minimum_size.y = 25
+	name_label.add_theme_color_override("font_color", Color(0.95, 0.90, 0.78, 1.0))
+	name_label.custom_minimum_size.y = 24
 	vbox.add_child(name_label)
 
-	# ===== INFO ADICIONAL (coste, stats) =====
+	# Info adicional (coste, stats)
 	var info_label = Label.new()
 	info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	info_label.add_theme_font_size_override("font_size", 9)
-	info_label.modulate = Color(0.7, 0.7, 0.7, 1)
+	info_label.add_theme_font_override("font", FONT_BODY)
+	info_label.add_theme_font_size_override("font_size", 10)
+	info_label.modulate = Color(0.85, 0.80, 0.70, 1.0)
 
 	var info_parts: Array = []
 	if card.get("card_cost") != null:
-		info_parts.append("⚜%d" % card.card_cost)
+		info_parts.append("Coste %d" % card.card_cost)
 	if card.get("card_attack") != null and card.get("card_defense") != null:
-		info_parts.append("⚔%d/%d" % [card.card_attack, card.card_defense])
+		info_parts.append("Fza %d/%d" % [card.card_attack, card.card_defense])
 
-	info_label.text = " ".join(info_parts)
+	info_label.text = " • ".join(info_parts)
 	vbox.add_child(info_label)
 
-	# Conectar señales (solo si es válida)
 	if is_reorder_mode:
 		display.gui_input.connect(_reorder.on_card_gui_input.bind(display, card))
 	elif is_valid or selection_filter.is_empty():
@@ -453,95 +549,66 @@ func _create_card_display(card: Node) -> Control:
 
 
 func _create_type_icon(card: Node) -> Control:
-	"""Crea un ícono visual del tipo de carta (DAR Sección 1.D)
-
-	Cada tipo de carta tiene un ícono distintivo para fácil identificación
-	"""
+	"""Etiqueta de tipo de carta (estilo limpio sin emojis)"""
 	var container = HBoxContainer.new()
 	container.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	var icon_label = Label.new()
-	icon_label.add_theme_font_size_override("font_size", 14)
-
 	var type_label = Label.new()
+	type_label.add_theme_font_override("font", FONT_TITLE)
 	type_label.add_theme_font_size_override("font_size", 10)
 
 	var card_type = card.card_type if card.get("card_type") != null else -1
 
-	# Asignar ícono y color según tipo (DAR Sección 1.D)
 	match card_type:
 		Constants.CardType.ALIADO:
-			icon_label.text = "⚔"
-			icon_label.modulate = Color(0.9, 0.7, 0.3, 1)  # Dorado
-			type_label.text = "Aliado"
-			type_label.modulate = Color(0.9, 0.7, 0.3, 1)
+			type_label.text = "ALIADO"
+			type_label.modulate = Color(1.0, 0.85, 0.45, 1.0)
 
 		Constants.CardType.TALISMAN:
-			icon_label.text = "✦"
-			icon_label.modulate = Color(0.5, 0.7, 1.0, 1)  # Azul
-			type_label.text = "Talismán"
-			type_label.modulate = Color(0.5, 0.7, 1.0, 1)
+			type_label.text = "TALISMAN"
+			type_label.modulate = Color(0.65, 0.82, 1.0, 1.0)
 
 		Constants.CardType.TOTEM:
-			icon_label.text = "◆"
-			icon_label.modulate = Color(0.6, 0.9, 0.5, 1)  # Verde
-			type_label.text = "Tótem"
-			type_label.modulate = Color(0.6, 0.9, 0.5, 1)
+			type_label.text = "TOTEM"
+			type_label.modulate = Color(0.55, 0.95, 0.65, 1.0)
 
 		Constants.CardType.ARMA:
-			icon_label.text = "⚔"
-			icon_label.modulate = Color(0.8, 0.8, 0.8, 1)  # Gris metálico
-			type_label.text = "Arma"
-			type_label.modulate = Color(0.8, 0.8, 0.8, 1)
+			type_label.text = "ARMA"
+			type_label.modulate = Color(0.85, 0.85, 0.90, 1.0)
 
 		Constants.CardType.ORO:
-			icon_label.text = "●"
-			icon_label.modulate = Color(1.0, 0.85, 0.0, 1)  # Oro brillante
-			type_label.text = "Oro"
-			type_label.modulate = Color(1.0, 0.85, 0.0, 1)
+			type_label.text = "ORO"
+			type_label.modulate = Color(1.0, 0.90, 0.30, 1.0)
 
 		_:
-			icon_label.text = "?"
-			icon_label.modulate = Color(0.5, 0.5, 0.5, 1)
-			type_label.text = "Desconocido"
-			type_label.modulate = Color(0.5, 0.5, 0.5, 1)
+			type_label.text = "CARTA"
+			type_label.modulate = Color(0.7, 0.7, 0.7, 1.0)
 
-	container.add_child(icon_label)
 	container.add_child(type_label)
-
 	return container
 
 
 func _create_card_style(selected: bool, hover: bool = false) -> StyleBoxFlat:
 	"""Crea estilo visual para carta"""
 	var style = StyleBoxFlat.new()
+	style.set_corner_radius_all(8)
 
 	if selected:
-		style.bg_color = Color(0.2, 0.6, 0.9, 0.9)  # Azul seleccionado
-		style.border_color = Color(1, 1, 0, 1)  # Borde amarillo
-		style.border_width_bottom = 3
-		style.border_width_top = 3
-		style.border_width_left = 3
-		style.border_width_right = 3
+		style.bg_color = Color(0.18, 0.16, 0.10, 0.98)
+		style.border_color = Color(1.0, 0.88, 0.40, 1.0)
+		style.set_border_width_all(3)
+		style.shadow_color = Color(1.0, 0.80, 0.30, 0.60)
+		style.shadow_size = 12
 	elif hover:
-		style.bg_color = Color(0.3, 0.3, 0.4, 0.8)
-		style.border_color = Color(0.7, 0.7, 0.8, 1)
-		style.border_width_bottom = 2
-		style.border_width_top = 2
-		style.border_width_left = 2
-		style.border_width_right = 2
+		style.bg_color = Color(0.12, 0.13, 0.18, 0.95)
+		style.border_color = Color(0.95, 0.82, 0.42, 0.95)
+		style.set_border_width_all(2)
+		style.shadow_color = Color(0, 0, 0, 0.6)
+		style.shadow_size = 6
 	else:
-		style.bg_color = Color(0.2, 0.2, 0.3, 0.8)
-		style.border_color = Color(0.5, 0.5, 0.6, 1)
-		style.border_width_bottom = 1
-		style.border_width_top = 1
-		style.border_width_left = 1
-		style.border_width_right = 1
-
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
+		style.bg_color = Color(0.06, 0.06, 0.09, 0.92)
+		style.border_color = Color(0.55, 0.45, 0.25, 0.65)
+		style.set_border_width_all(1)
 
 	return style
 
@@ -549,19 +616,10 @@ func _create_card_style(selected: bool, hover: bool = false) -> StyleBoxFlat:
 func _create_invalid_card_style() -> StyleBoxFlat:
 	"""Crea estilo visual para carta que NO cumple el filtro"""
 	var style = StyleBoxFlat.new()
-
-	style.bg_color = Color(0.15, 0.15, 0.15, 0.6)  # Gris oscuro
-	style.border_color = Color(0.5, 0.2, 0.2, 0.8)  # Borde rojo apagado
-	style.border_width_bottom = 2
-	style.border_width_top = 2
-	style.border_width_left = 2
-	style.border_width_right = 2
-
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
-
+	style.bg_color = Color(0.04, 0.04, 0.05, 0.70)
+	style.border_color = Color(0.45, 0.18, 0.18, 0.60)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(8)
 	return style
 
 

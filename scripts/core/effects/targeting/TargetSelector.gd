@@ -820,7 +820,7 @@ func has_linked_effect(response_stack_id: int) -> bool:
 
 
 func execute_linked_effect(response_stack_id: int) -> bool:
-	return _linked_registry.execute_linked_effect(response_stack_id)
+	return await _linked_registry.execute_linked_effect(response_stack_id)
 
 
 func remove_linked_effect(response_stack_id: int) -> void:

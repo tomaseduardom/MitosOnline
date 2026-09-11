@@ -1,0 +1,95 @@
+[gd_scene format=3 uid="uid://online_connect_001"]
+
+[ext_resource type="Script" path="res://scripts/menu/OnlineConnect.gd" id="1_script"]
+
+[node name="OnlineConnect" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_script")
+
+[node name="DarkBackground" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.05, 0.05, 0.08, 1)
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -220.0
+offset_right = 220.0
+offset_bottom = 220.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 14
+
+[node name="TitleLabel" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+theme_override_colors/font_color = Color(1, 0.9, 0.6, 1)
+text = "Jugar en línea"
+horizontal_alignment = 1
+
+[node name="RelayUrlEdit" type="LineEdit" parent="VBoxContainer"]
+layout_mode = 2
+placeholder_text = "ws://localhost:8080"
+
+[node name="HostSection" type="VBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="CreateRoomButton" type="Button" parent="VBoxContainer/HostSection"]
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "Crear sala (Anfitrión)"
+
+[node name="RoomCodeLabel" type="Label" parent="VBoxContainer/HostSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.95, 1, 1)
+autowrap_mode = 2
+text = ""
+
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="JoinSection" type="VBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="CodeEdit" type="LineEdit" parent="VBoxContainer/JoinSection"]
+layout_mode = 2
+placeholder_text = "Código de sala"
+max_length = 8
+
+[node name="JoinRoomButton" type="Button" parent="VBoxContainer/JoinSection"]
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "Unirse (Remoto)"
+
+[node name="StatusLabel" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.85, 0.6, 1)
+autowrap_mode = 2
+text = ""
+
+[node name="ContinueButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "Continuar"
+
+[node name="BackButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+mouse_default_cursor_shape = 2
+text = "Volver"

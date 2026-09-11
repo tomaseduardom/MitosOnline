@@ -1,4 +1,4 @@
-extends RefCounted
+﻿extends RefCounted
 ## ConvertAndMiscResolver — Patrones compuestos de Convertir/transformar
 ## cartas (Sherlock Holmes, Jormundgander), destierro por cantidad dinámica
 ## de Aliados (Espada del Juicio), descarte+robo del oponente (Miguel) y
@@ -25,27 +25,35 @@ func setup(executor: TargetedEffectExecutor) -> void:
 # =============================================================================
 func try_execute_mill_convert_to_ally_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
 	"""Detecta el patrón único de Sherlock Holmes (2026-08-29, verificado
-	contra la API — 2 reimpresiones idénticas, y corregido a pedido del
-	usuario contra la lectura literal inicial): las cartas 'convertidas' NO
+	contra la API — 2 reimpresiones idénticas). Las cartas 'convertidas' NO
 	se juegan ni se pagan, aparecen directo en juego bajo el control del
-	jugador del efecto sin importar de qué Castillo salieron.
+	jugador del efecto.
 
-	2026-08-29, correcciones del usuario sobre la primera versión:
-	- El Castillo es zona OCULTA/aleatoria — se toman las 2 cartas del tope
-	  SIEMPRE, sin filtrar por tipo (aunque sean Oro). 'que no sean Oro' no
-	  se aplica como filtro de selección acá.
-	- Es el Convertir real de DAR Sección 8 (is_converted + KeywordManager.
-	  silence_card — mismo mecanismo que Capitán O'Brien/Signo Amarillo,
-	  giro visual de 180° 'dadas vuelta'), NO un token con datos en blanco
-	  armado a mano. Conservan coste. Al ser Aliados de verdad pueden portar
-	  Armas, ser desterrados, etc. — nada especial que hacer ahí, ya lo
-	  cubre el resto del motor con solo estar en player_field.
-	- La Fuerza 3 se aplica como un modificador CONTINUO (Continuous
-	  EffectManager, capa LAYER_7A_CHAR_SETTING, operación 'set', sin
-	  source real — permanente de verdad, no atado a que Sherlock siga en
-	  juego) para que el badge de Fuerza muestre el valor EFECTIVO (3)
-	  aunque la carta impresa diga otra cosa (p.ej. una carta de Fuerza 2
-	  impresa termina mostrando 3 en el badge, no reescribe el dato base).
+	2026-09-06, a pedido del usuario — relectura de 'convierte hasta dos
+	cartas que no sean Oro O del tope de un Castillo': el 'o' separa DOS
+	fuentes alternativas (elección del jugador), no es un filtro de tipo
+	sobre una sola fuente como se había asumido el 2026-08-29:
+	- 'cartas en juego que no sean Oro': el jugador elige a mano hasta N
+	  cartas YA EN JUEGO (de cualquier lado, sin posesivo — ver
+	  [[project_no_zone_means_in_play]]) para convertir in-place.
+	- 'del tope de un Castillo': comportamiento original — se sacan a
+	  ciegas del tope del mazo elegido, sin filtrar por tipo.
+	SIN preguntar antes cuál (a pedido del usuario, 2026-09-06): ambas
+	fuentes quedan clickeables A LA VEZ — una carta en juego (no Oro) o
+	cualquiera de los dos Paneles de Castillo — y el PRIMER click real
+	decide la fuente para el resto de la resolución; la otra deja de ser
+	clickeable en cuanto se resuelve la carrera (SelectionManager.
+	start_castillo_pick()/cancel_castillo_pick() en carrera contra
+	CardInteractionModule.start_target_selection()/cancel_target_selection(),
+	mismo split ya usado por await_target()/await_castillo_pick()).
+
+	Ambas ramas terminan en el mismo Convertir real de DAR Sección 8
+	(is_converted + KeywordManager.silence_card — mismo mecanismo que
+	Capitán O'Brien/Signo Amarillo, giro visual 180°) y la misma Fuerza fija
+	como modificador CONTINUO (ContinuousEffectManager, capa
+	LAYER_7A_CHAR_SETTING, operación 'set', sin source real — permanente de
+	verdad, no atado a que Sherlock siga en juego) para que el badge de
+	Fuerza muestre el valor EFECTIVO aunque la carta impresa diga otra cosa.
 	Returns: true si el patrón aplicaba."""
 	var lower := ability_text.to_lower()
 	if not ("del tope de un castillo" in lower and "gana su control" in lower):
@@ -72,39 +80,17 @@ func try_execute_mill_convert_to_ally_pattern(ability_text: String, card: Node, 
 	var draw_amount: int = UniversalCardParser._parse_amount(m_draw.get_string(1)) if m_draw else 0
 
 	var grants_immunity := "no pueden salir del juego" in lower
-
-	# Dueño del Castillo — ambiguo ('un Castillo', sin posesivo), el
-	# jugador elige (mismo patrón que _execute_targeted_search()).
-	var zone_owner: int = await _executor._choose_search_zone_owner(controller_id, Constants.Zone.CASTILLO)
-
-	var deck: Array = CardManager.get_deck(zone_owner)
 	var converted := 0
-	while converted < max_amount and not deck.is_empty():
-		var top_data: Dictionary = deck.pop_front()
-		var new_data: Dictionary = top_data.duplicate()
-		new_data["tipo"] = Constants.CardType.ALIADO  # Puede venir de cualquier tipo no-Oro original; acá SIEMPRE se fuerza a Aliado
-		new_data["esta_oculta"] = false
-		var token_node = main._create_card(new_data, false)
-		token_node.owner_id = controller_id
-		main._connect_card_signals(token_node)
-		var target_field: HBoxContainer = main.player_field if controller_id == 0 else main.opponent_field
-		target_field.add_child(token_node)
-		token_node.can_interact = (controller_id == 0)
-		token_node.set_zone(Constants.Zone.LINEA_DEFENSA)
 
-		# Convertir de verdad (DAR Sección 8): pierde su habilidad, giro
-		# visual 180° — mismo mecanismo que el resto del proyecto, no un
-		# camino aparte.
-		token_node.is_converted = true
-		KeywordManager.silence_card(token_node, card, "permanent")
-
+	var _apply_conversion := func(target_node: Node) -> void:
+		target_node.is_converted = true
+		await KeywordManager.silence_card(target_node, card, "permanent")
 		# Fuerza EFECTIVA fijada en token_strength, sin tocar el dato base
 		# impreso — el badge de Fuerza (Card._apply_strength_badge_text())
-		# solo se muestra cuando el valor efectivo difiere del impreso, que
-		# es justo el caso de una carta original de, digamos, Fuerza 2.
+		# solo se muestra cuando el valor efectivo difiere del impreso.
 		ContinuousEffectManager.register_modifier({
 			"source": null,
-			"target": token_node,
+			"target": target_node,
 			"type": ContinuousEffectManager.ModifierType.STRENGTH,
 			"stat": "strength",
 			"value": token_strength,
@@ -113,13 +99,107 @@ func try_execute_mill_convert_to_ally_pattern(ability_text: String, card: Node, 
 			"layer": ContinuousEffectManager.ModifierLayer.LAYER_7A_CHAR_SETTING,
 			"description": "Sherlock Holmes: Fuerza fijada en %d" % token_strength,
 		})
-		token_node.refresh_strength_badge()
+		target_node.refresh_strength_badge()
 
-		if CardFactory and CardFactory.has_method("on_card_enters_play"):
-			CardFactory.on_card_enters_play(token_node)  # enfermedad de invocación, igual que cualquier Aliado
-		if token_node.has_method("play_enter_animation"):
-			token_node.play_enter_animation()
-		converted += 1
+	if not main._card_interaction:
+		return true
+
+	var picked: Array = []
+	var filter := func(c: Node) -> bool:
+		# Autorreferenciable (2026-09-06, a pedido del usuario: las cartas de
+		# Imperio SÍ pueden targetear/afectarse a sí mismas salvo que digan lo
+		# contrario) — Sherlock puede convertirse a sí mismo.
+		return c.get("card_type") != Constants.CardType.ORO and not (c in picked)
+
+	# Carrera: castillo activo en paralelo mientras se espera el primer
+	# click de carta. El que resuelva primero cancela al otro.
+	var race_done := false
+	var castillo_picked_own: bool = true
+	SelectionManager.start_castillo_pick(main, card.card_name if card.get("card_name") else "Sherlock Holmes",
+		func(picked_own: bool) -> void:
+			if race_done:
+				return
+			race_done = true
+			castillo_picked_own = picked_own
+			main._card_interaction.cancel_target_selection())
+
+	var first_target: Node = null
+	while not race_done:
+		var card_state := {"done": false, "chosen": null}
+		main._card_interaction.start_target_selection(
+			"Elige una carta en juego (no Oro) o un Castillo para Convertir", filter,
+			func(c: Node) -> void:
+				card_state.chosen = c
+				card_state.done = true)
+		while not card_state.done and not race_done:
+			await main.get_tree().process_frame
+		if race_done:
+			break
+		if card_state.chosen:
+			first_target = card_state.chosen
+			race_done = true
+			SelectionManager.cancel_castillo_pick()
+		# Si card_state.chosen es null (ESC), se vuelve a armar el listener
+		# de cartas mientras el Castillo sigue esperando en paralelo — la
+		# habilidad no es 'puedes', tiene que resolverse por una fuente u otra.
+
+	if first_target:
+		picked.append(first_target)
+		while picked.size() < max_amount:
+			var target: Node = await main._card_interaction.await_target(
+				"Elige otra carta en juego (no Oro) para Convertir — ESC para terminar", filter)
+			if not target or not is_instance_valid(target):
+				break
+			picked.append(target)
+
+		# Ya se declaró todo (los hasta max_amount objetivos elegidos) — acá
+		# corresponde la ventana, antes de convertir ninguno.
+		if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
+			return true
+		var target_field: HBoxContainer = main.player_field if controller_id == 0 else main.opponent_field
+		for target_node in picked:
+			if not is_instance_valid(target_node):
+				continue
+			var old_parent = target_node.get_parent()
+			if old_parent and old_parent != target_field:
+				old_parent.remove_child(target_node)
+				target_field.add_child(target_node)
+			target_node.card_type = Constants.CardType.ALIADO
+			target_node.controller_id = controller_id
+			target_node.can_interact = (controller_id == 0)
+			target_node.set_zone(Constants.Zone.LINEA_DEFENSA)
+			await _apply_conversion.call(target_node)
+			converted += 1
+	else:
+		# Castillo ya elegido por el propio click que ganó la carrera
+		# (castillo_picked_own) — sin preguntar aparte.
+		var zone_owner: int = controller_id if castillo_picked_own else (1 - controller_id)
+		var deck: Array = CardManager.get_deck(zone_owner)
+		# Sin objetivos puntuales que declarar acá (salen del tope, en el
+		# orden del mazo, no elegidos) — la ventana va antes de empezar a
+		# revelar/convertir, gate de toda la secuencia.
+		if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
+			return true
+		while converted < max_amount and not deck.is_empty():
+			var top_data: Dictionary = deck.pop_front()
+			var new_data: Dictionary = top_data.duplicate()
+			new_data["tipo"] = Constants.CardType.ALIADO  # Puede venir de cualquier tipo no-Oro original; acá SIEMPRE se fuerza a Aliado
+			new_data["esta_oculta"] = false
+			var token_node = main._create_card(new_data, false)
+			token_node.owner_id = controller_id
+			main._connect_card_signals(token_node)
+			var target_field: HBoxContainer = main.player_field if controller_id == 0 else main.opponent_field
+			target_field.add_child(token_node)
+			token_node.can_interact = (controller_id == 0)
+			token_node.set_zone(Constants.Zone.LINEA_DEFENSA)
+			await _apply_conversion.call(token_node)
+
+			if CardFactory and CardFactory.has_method("on_card_enters_play"):
+				CardFactory.on_card_enters_play(token_node)  # enfermedad de invocación, igual que cualquier Aliado
+			if token_node.has_method("play_enter_animation"):
+				token_node.play_enter_animation()
+			converted += 1
+
 	if converted > 0 and main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 
@@ -169,25 +249,113 @@ func try_execute_convert_ally_to_gold_pattern(ability_text: String, card: Node, 
 		confirm_btn.visible = true
 	if accepted.is_empty():
 		return true
+	if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
+		return true
 
 	await _executor._main._gold_manager.convert_ally_to_gold_in_pagado(card)
 	return true
 
 
-func try_execute_banish_top_by_ally_count_and_draw_pattern(ability_text: String, controller_id: int) -> bool:
-	"""Detecta 'Destierra tantas cartas del tope de un Castillo como
-	Aliados controles y Roba una carta' (2026-08-30, p.ej. Espada del
-	Juicio — dispara tanto en 'Cuando entra en juego' como 'en tu
-	Agrupación'). Cantidad DINÁMICA (= Aliados que controla quien activa
-	el efecto); 'un Castillo' sin posesivo = a elección (mismo criterio ya
-	confirmado para 'un Cementerio' de Miguel). El 'Roba una carta' es
-	independiente y siempre ocurre, incluso si la cantidad a desterrar da 0
-	(cero Aliados controlados es una resolución completa, no parcial).
-	Returns: true si el patrón aplicaba."""
+func try_execute_no_allies_convert_castillo_top_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	"""'En la Fase Final oponente, si no controlas Aliados o si en tu turno
+	anterior un Aliado fue Anulado o su habilidad fue cancelada, Roba una
+	carta y pon bajo tu control la primera carta de un Castillo como un
+	Aliado de Fuerza 2 sin habilidad' (Biblioteca de Caballería, 2026-09-04).
+
+	LIMITACIÓN CONOCIDA: solo se implementa la mitad 'si no controlas
+	Aliados' de la condición. La otra mitad ('en tu turno anterior un Aliado
+	fue Anulado o su habilidad fue cancelada') exigiría un historial de
+	eventos por turno que el motor no tiene todavía — no hay ningún registro
+	de 'a este jugador le anularon/cancelaron un Aliado el turno pasado' en
+	ninguna parte del código. Mientras no exista, esa rama del 'o' nunca se
+	evalúa como verdadera; el efecto solo dispara con el campo propio vacío
+	de Aliados.
+
+	Reusa el mecanismo de conversión real de try_execute_mill_convert_to_
+	ally_pattern (Sherlock Holmes): is_converted + KeywordManager.
+	silence_card + Fuerza fijada por modificador CONTINUO (LAYER_7A_CHAR_
+	SETTING, 'set'), no un token de datos en blanco."""
 	var lower := ability_text.to_lower()
-	if not ("destierra tantas cartas del tope de un castillo" in lower
-			and "como aliados controles" in lower):
+	if not ("si no controlas aliados" in lower and "pon bajo tu control la primera carta de un castillo" in lower):
 		return false
+	if controller_id != 0 or not is_instance_valid(card):
+		return true
+
+	if _executor._count_allies_in_play(controller_id) > 0:
+		return true  # condición no cumplida (falta la otra mitad del 'o', ver docstring)
+
+	var main := _executor._main.get_node_or_null("/root/Main")
+	if not main:
+		return true
+	# Ventana única para todo el efecto (robar + convertir) — sin objetivo
+	# puntual que declarar antes (la carta convertida sale del tope, en el
+	# orden del mazo).
+	if await TriggerSystem.open_response_window(card, str(card.get("card_name")), controller_id):
+		return true
+
+	await ActionModule.draw(controller_id, 1, "final_phase_trigger", true)
+
+	var zone_owner: int = await _executor._choose_search_zone_owner(controller_id, Constants.Zone.CASTILLO, "convertir")
+	var deck: Array = CardManager.get_deck(zone_owner)
+	if deck.is_empty():
+		return true
+	# Sin ventana genérica acá (2026-09-09): silence_card() (más abajo) ya
+	# consulta Prevención adentro por su cuenta.
+	var top_data: Dictionary = deck.pop_front()
+	var new_data: Dictionary = top_data.duplicate()
+	new_data["tipo"] = Constants.CardType.ALIADO
+	new_data["esta_oculta"] = false
+	var token_node = main._create_card(new_data, false)
+	token_node.owner_id = controller_id
+	main._connect_card_signals(token_node)
+	var target_field: HBoxContainer = main.player_field if controller_id == 0 else main.opponent_field
+	target_field.add_child(token_node)
+	token_node.can_interact = (controller_id == 0)
+	token_node.set_zone(Constants.Zone.LINEA_DEFENSA)
+
+	token_node.is_converted = true
+	await KeywordManager.silence_card(token_node, card, "permanent")
+
+	ContinuousEffectManager.register_modifier({
+		"source": null,
+		"target": token_node,
+		"type": ContinuousEffectManager.ModifierType.STRENGTH,
+		"stat": "strength",
+		"value": 2,
+		"operation": "set",
+		"duration": ContinuousEffectManager.ModifierDuration.PERMANENT,
+		"layer": ContinuousEffectManager.ModifierLayer.LAYER_7A_CHAR_SETTING,
+		"description": "Biblioteca de Caballería: Fuerza fijada en 2",
+	})
+	token_node.refresh_strength_badge()
+
+	if CardFactory and CardFactory.has_method("on_card_enters_play"):
+		CardFactory.on_card_enters_play(token_node)
+	if token_node.has_method("play_enter_animation"):
+		token_node.play_enter_animation()
+	if main.get("_zone_manager"):
+		main._zone_manager._update_castillo_counts()
+	return true
+
+
+func try_execute_banish_top_by_ally_count_and_draw_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
+	"""Detecta 'Destierra N cartas del tope de un Castillo y Roba una
+	carta' (Espada del Juicio — dispara tanto en 'Cuando entra en juego'
+	como 'en tu Agrupación'). Cantidad FIJA, parseada del texto (2026-09-06,
+	a pedido del usuario: la carta real dice 'tantas cartas... como
+	Aliados controles' — cantidad dinámica —, pero se simplificó a un
+	número fijo para esta partida; ver [[feedback_api_is_source_of_truth]]
+	para el texto real si se revierte este cambio). 'un Castillo' sin
+	posesivo = a elección (mismo criterio ya confirmado para 'un
+	Cementerio' de Miguel). El 'Roba una carta' es independiente y
+	siempre ocurre.
+	Returns: true si el patrón aplicaba."""
+	var amount_rx := RegEx.new()
+	amount_rx.compile("(?i)destierra (\\w+) cartas? del tope de un castillo")
+	var m_amount := amount_rx.search(ability_text)
+	if not m_amount:
+		return false
+	var banish_amount: int = UniversalCardParser._parse_amount(m_amount.get_string(1))
 
 	var main := _executor._main.get_node_or_null("/root/Main")
 	if not main:
@@ -198,23 +366,17 @@ func try_execute_banish_top_by_ally_count_and_draw_pattern(ability_text: String,
 	var m_draw := draw_rx.search(ability_text)
 	var draw_amount: int = UniversalCardParser._parse_amount(m_draw.get_string(1)) if m_draw else 0
 
-	var ally_fields: Array = [main.player_field, main.player_linea_ataque] if controller_id == 0 \
-		else [main.opponent_field, main.opponent_linea_ataque]
-	var ally_count := 0
-	for field in ally_fields:
-		if not field:
-			continue
-		for c in field.get_children():
-			if is_instance_valid(c) and c.get("card_type") == Constants.CardType.ALIADO:
-				ally_count += 1
+	var deck_owner: int = controller_id
+	if banish_amount > 0 and controller_id == 0:
+		var look_own: bool = await SelectionManager.await_castillo_pick(main, "Espada del Juicio — destierra del tope")
+		deck_owner = controller_id if look_own else (1 - controller_id)
 
-	if ally_count > 0:
-		var deck_owner: int = controller_id
-		if controller_id == 0:
-			var look_own: bool = await SelectionManager.await_castillo_pick(main, "Espada del Juicio — destierra del tope")
-			deck_owner = controller_id if look_own else (1 - controller_id)
+	if await TriggerSystem.open_response_window(card, "Espada del Juicio", controller_id):
+		return true
+
+	if banish_amount > 0:
 		var deck: Array = CardManager.get_deck(deck_owner)
-		var amount: int = mini(ally_count, deck.size())
+		var amount: int = mini(banish_amount, deck.size())
 		for i in range(amount):
 			var card_data: Dictionary = deck.pop_front()
 			CardManager.add_to_exile(deck_owner, card_data)
@@ -250,7 +412,11 @@ func try_execute_opponent_discard_and_draw_pattern(ability_text: String, card: N
 	var draw_amount: int = UniversalCardParser._parse_amount(m_draw.get_string(1)) if m_draw else 0
 
 	await _executor._execute_targeted_discard(card, controller_id, discard_amount)
+	# El descarte ya abrió su propia ventana adentro (_execute_targeted_
+	# discard) — el Robo es un efecto aparte, sin cobertura propia todavía.
 	if draw_amount > 0:
+		if await TriggerSystem.open_response_window(card, str(card.get("card_name")), controller_id):
+			return true
 		await ActionModule.draw(controller_id, draw_amount, "etb_trigger", true)
 	return true
 
@@ -279,6 +445,8 @@ func try_execute_name_a_card_pattern(ability_text: String, card: Node, _controll
 
 	var picked_name: String = str(picked.get("nombre", ""))
 	if picked_name.is_empty():
+		return true
+	if await TriggerSystem.open_response_window(card, str(card.card_name), _controller_id):
 		return true
 
 	KeywordManager.lock_ability_by_name(picked_name, card)

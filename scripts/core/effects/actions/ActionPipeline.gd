@@ -302,7 +302,85 @@ func add_triggered_ability_to_stack(ability_data: Dictionary, source_card: Dicti
 
 	emit_signal("stack_object_added", stack_obj)
 
+	# (2026-09-09, bug real encontrado al preparar la migración de la Pila de
+	# Respuesta Universal): esta función NUNCA arrancaba _process_stack() por
+	# su cuenta — solo activate_ability() lo hacía. El único llamador real de
+	# hasta ahora (SelectionModule._on_exhume_card_selected(), Exhumar) quedaba
+	# esperando un stack_object_resolved que jamás llegaba salvo que otra
+	# habilidad activada ya estuviera procesándose al mismo tiempo por
+	# coincidencia. Mismo guard que activate_ability() ya usa.
+	if not _is_resolving:
+		_process_stack()
+
 	return stack_obj.id
+
+
+func add_triggered_ability_to_stack_and_await(ability_data: Dictionary, source_card: Dictionary, context: Dictionary = {}) -> Dictionary:
+	"""Como add_triggered_ability_to_stack(), pero espera a que ESE objeto
+	puntual (no la pila entera — puede haber respuestas anidadas encima que
+	tarden más) termine de resolver/anularse/cancelarse/fizzlear, para que el
+	llamador (un patrón de trigger en TriggerSystem/LookAndPlayResolver/etc.,
+	Sección "Pila de Respuesta Universal") sepa si debe seguir ejecutando su
+	propio efecto o abortar. Filtra las señales por stack_id — si mientras
+	tanto se apilan respuestas encima, esas resuelven primero y esta función
+	sigue esperando hasta que le toque el turno a ESTE objeto en particular.
+
+	Returns: {resolved: bool, annulled: bool, cancelled: bool, fizzled: bool}
+	— como máximo uno de los cuatro es true."""
+	var stack_id: int = add_triggered_ability_to_stack(ability_data, source_card, context)
+
+	var outcome: Dictionary = {"resolved": false, "annulled": false, "cancelled": false, "fizzled": false}
+	var done: bool = false
+
+	var on_resolved := func(obj: Dictionary, _result: Dictionary) -> void:
+		if obj.get("id", -1) == stack_id:
+			outcome.resolved = true
+			done = true
+	var on_annulled := func(obj: Dictionary, _annuller) -> void:
+		if obj.get("id", -1) == stack_id:
+			outcome.annulled = true
+			done = true
+	var on_cancelled := func(obj: Dictionary) -> void:
+		if obj.get("id", -1) == stack_id:
+			outcome.cancelled = true
+			done = true
+	var on_fizzled := func(obj: Dictionary) -> void:
+		if obj.get("id", -1) == stack_id:
+			outcome.fizzled = true
+			done = true
+
+	stack_object_resolved.connect(on_resolved)
+	object_annulled.connect(on_annulled)
+	object_cancelled.connect(on_cancelled)
+	object_fizzled.connect(on_fizzled)
+
+	# Salvaguarda con timeout (2026-09-11, bug real reportado por el usuario:
+	# el juego quedaba congelado para siempre en Fase Final, sin ningún log
+	# posterior — TriggerSystem.awaiting_response/is_resolving atascados,
+	# consistente con que este objeto puntual NUNCA llegó a recibir su Paso
+	# D/E, probablemente porque _process_stack() no se relanzó cuando hacía
+	# falta). Sin una salida de emergencia, cualquier causa que impida que
+	# ESTE objeto puntual resuelva deja el juego entero sin poder avanzar —
+	# mismo criterio de "no fricción, seguir igual" que ya usa
+	# _wait_for_response_window() (Signo Amarillo, timeout de 8s) en vez de
+	# arriesgar un cuelgue permanente. Si esto se dispara, es evidencia real
+	# de un bug más profundo por perseguir después — el push_warning deja
+	# rastro concreto (antes no había NINGÚN log en este punto de cuelgue).
+	var waited := 0.0
+	while not done and waited < 8.0:
+		await get_tree().process_frame
+		waited += get_process_delta_time()
+	if not done:
+		push_warning("[ActionPipeline] add_triggered_ability_to_stack_and_await() atascado >8s para stack_id=%d (_is_resolving=%s, tamaño de pila=%d) — forzando continuación sin anular/cancelar" % [
+			stack_id, str(_is_resolving), _stack.size()
+		])
+
+	stack_object_resolved.disconnect(on_resolved)
+	object_annulled.disconnect(on_annulled)
+	object_cancelled.disconnect(on_cancelled)
+	object_fizzled.disconnect(on_fizzled)
+
+	return outcome
 
 
 # =============================================================================
@@ -349,12 +427,25 @@ func activate_ability(source_card_data: Dictionary, ability_data: Dictionary, co
 	var source_card_node = context.get("source_card_node")
 	match cost_type:
 		UniversalCardParser.CostType.GOLD:
-			if not main_ref or not main_ref._gold_manager:
-				return {"success": false, "reason": "GoldManager no disponible"}
-			var paid: bool = await main_ref._gold_manager.pagar_coste(cost_amount)
-			if not paid:
-				return {"success": false, "reason": "Oro insuficiente"}
+			if controller_id == 0:
+				if not main_ref or not main_ref._gold_manager:
+					return {"success": false, "reason": "GoldManager no disponible"}
+				var paid: bool = await main_ref._gold_manager.pagar_coste(cost_amount)
+				if not paid:
+					return {"success": false, "reason": "Oro insuficiente"}
+			else:
+				# El bot no tiene Oro Virtual/restringido (esos pools solo
+				# existen del lado humano) — paga siempre Oro físico real vía
+				# el mismo helper que ya usa para jugar cartas (2026-09-09).
+				if not main_ref or not main_ref._easy_bot or not GameState.puede_pagar(controller_id, cost_amount):
+					return {"success": false, "reason": "Oro insuficiente"}
+				main_ref._easy_bot._pay_oro_for_bot(cost_amount)
 		UniversalCardParser.CostType.DISCARD:
+			if controller_id != 0:
+				# El bot no tiene mano representada como Nodos todavía
+				# (2026-09-09) — este tipo de costo queda fuera de su alcance
+				# hasta que exista esa representación.
+				return {"success": false, "reason": "El bot no puede descartar todavía"}
 			if not main_ref or not main_ref.player_hand:
 				return {"success": false, "reason": "No se pudo descartar"}
 			var hand_cards: Array = main_ref.player_hand.cards.duplicate()
@@ -438,8 +529,11 @@ func can_activate_ability(source_card_data: Dictionary, ability_data: Dictionary
 	var phase_ok: bool = phase == Constants.Phase.VIGILIA or (phase == Constants.Phase.GUERRA_TALISMANES and not vigilia_only)
 	if not phase_ok:
 		return {"can": false, "reason": "Fuera de fase Vigilia" if vigilia_only else "Solo en Vigilia o Guerra de Talismanes"}
-	if GameManager.active_player_id != controller_id:
-		return {"can": false, "reason": "No es tu turno"}
+	# NO se exige 'active_player_id == controller_id' (2026-09-10, corregido):
+	# el DAR permite activar habilidades instantáneas en Vigilia/Guerra de
+	# Talismanes seas o no el jugador activo — es justo lo que hace falta
+	# para responder dentro de la Pila de Respuesta Universal en el turno
+	# rival. El chequeo viejo bloqueaba esto tanto al humano como al bot.
 
 	# Una vez por turno: verificar en _ability_usage y en TurnRegistry del parser
 	if cost_type == UniversalCardParser.CostType.ONCE_PER_TURN or ability_data.get("once_per_turn", false):
@@ -450,17 +544,21 @@ func can_activate_ability(source_card_data: Dictionary, ability_data: Dictionary
 		if in_local or in_registry:
 			return {"can": false, "reason": "Ya usada este turno"}
 
-	# Oro: verificar si el jugador tiene suficiente — vía GoldManager (real),
-	# la misma fuente que CardInspectionLayer._validate_ability() ya usa.
+	# Oro: verificar si el jugador tiene suficiente — vía GoldManager (real,
+	# solo jugador 0, con sus pools de Oro Virtual/restringido) o vía
+	# GameState (bot, Oro físico simple) — misma distinción que Paso B.
 	if cost_type == UniversalCardParser.CostType.GOLD and cost_amount > 0:
-		var main_check := get_node_or_null("/root/Main")
-		var available := 0
-		if main_check and main_check._gold_manager:
-			available = main_check._gold_manager.get_oro_disponible()
-			if not main_check._gold_manager.puede_pagar(cost_amount):
-				return {"can": false, "reason": "Necesitas %d Oro (tienes %d)" % [cost_amount, available]}
+		if controller_id == 0:
+			var main_check := get_node_or_null("/root/Main")
+			if main_check and main_check._gold_manager:
+				var available: int = main_check._gold_manager.get_oro_disponible()
+				if not main_check._gold_manager.puede_pagar(cost_amount):
+					return {"can": false, "reason": "Necesitas %d Oro (tienes %d)" % [cost_amount, available]}
+			else:
+				return {"can": false, "reason": "GoldManager no disponible"}
 		else:
-			return {"can": false, "reason": "GoldManager no disponible"}
+			if not GameState.puede_pagar(controller_id, cost_amount):
+				return {"can": false, "reason": "Necesitas %d Oro (tienes %d)" % [cost_amount, GameState.get_oro_reserva(controller_id)]}
 
 	return {"can": true, "reason": ""}
 

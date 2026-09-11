@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## EffectController - Procesa efectos de cartas sobre el mazo
 ## Implementa validación "En medida de lo posible" (DAR - regla general)
 ##
@@ -52,6 +52,7 @@ func _ready() -> void:
 		GameManager.connect("game_board_ready", _on_game_board_ready)
 		if GameManager.game_board:
 			game_board = GameManager.game_board
+	_build_prevention_registry()
 
 
 func _on_game_board_ready(board: Node) -> void:
@@ -303,14 +304,23 @@ func _mill_cards_fallback(player_id: int, amount: int, destination: int) -> Dict
 # =============================================================================
 # 8. DESTRUIR CARTA (DAR 7.3 - Triggers de destrucción)
 # =============================================================================
-func destroy_card(player_id: int, card: Node) -> bool:
+func destroy_card(player_id: int, card: Node, is_being_destroyed: bool = true, source: Node = null) -> bool:
 	"""Destruye una carta, enviándola al Cementerio (o al Destierro si fue
 	exhumada, regla que respeta CardManager.destroy_card()).
 	Emite on_card_left_play y on_card_destroyed.
 
+	is_being_destroyed (2026-09-04, bug reportado: 'el texto de la consola
+	de los Talismanes, estas no se destruyen') — GoldManager._play_talisman()
+	reusa esta función para mandar un Talismán ya resuelto a su Cementerio
+	por defecto (mismo camino real de salida de juego, mismos contadores/
+	señales), pero un Talismán resolviendo NO es una 'destrucción' en
+	términos DAR — pasar false solo cambia el texto de consola a algo
+	preciso, sin tocar prevención de salida de juego ni las señales (que
+	siguen siendo el mismo choke point real para ambos casos).
+
 	Returns: true si se destruyó
 	"""
-	if _try_consume_leave_play_prevention(player_id, card):
+	if await _try_consume_leave_play_prevention(player_id, card, source):
 		return false
 
 	# Guardar zona origen
@@ -348,7 +358,10 @@ func destroy_card(player_id: int, card: Node) -> bool:
 	emit_signal("on_card_destroyed", player_id, card)
 
 	var card_name = card.card_name if card.get("card_name") else "Carta"
-	print("[EffectController] %s fue destruida" % card_name)
+	if is_being_destroyed:
+		print("[EffectController] %s fue destruida" % card_name)
+	else:
+		print("[EffectController] %s resuelve su efecto y va al Cementerio" % card_name)
 
 	return true
 
@@ -356,7 +369,7 @@ func destroy_card(player_id: int, card: Node) -> bool:
 # =============================================================================
 # 9. DESTERRAR CARTA (DAR - Destierro)
 # =============================================================================
-func exile_card(player_id: int, card: Node, bypass_prevention: bool = false) -> bool:
+func exile_card(player_id: int, card: Node, bypass_prevention: bool = false, source: Node = null) -> bool:
 	"""Destierra una carta, enviándola al Destierro
 	Emite on_card_left_play (si estaba en juego) y on_card_exiled
 
@@ -369,7 +382,7 @@ func exile_card(player_id: int, card: Node, bypass_prevention: bool = false) -> 
 
 	Returns: true si se desterró
 	"""
-	if not bypass_prevention and _try_consume_leave_play_prevention(player_id, card):
+	if not bypass_prevention and await _try_consume_leave_play_prevention(player_id, card, source):
 		return false
 
 	var from_zone = card.current_zone if card.get("current_zone") != null else -1
@@ -435,28 +448,11 @@ func clear_conversion_on_leave(card: Node) -> void:
 # Legión Paladín: "Puedes Desterrarlo para prevenir que un Aliado que
 # controles salga del juego", 2026-08-28)
 # =============================================================================
-## Cargas de Prevención por jugador — "prevenir" en el DAR no es una
-## keyword fija (no existe "Escudo" como término del juego): es el mismo
-## verbo que se usa para prevenir daño (DamageManager.add_damage_prevention)
-## o prevenir que un efecto afecte a un Aliado, aplicado acá a "salir del
-## juego". destroy_card()/exile_card() son el único choke point real de
-## "salir del juego" en todo el proyecto (todo camino de remoción, incluido
-## combate vía BattleManager y ActionModule.destroy(), termina llamando
-## acá — verificado 2026-08-28), así que interceptar acá cubre TODOS los
-## casos sin tener que tocar cada uno.
-var _leave_play_preventions: Dictionary = {0: 0, 1: 0}
-
-
-func add_leave_play_prevention(player_id: int, amount: int = 1) -> void:
-	_leave_play_preventions[player_id] = _leave_play_preventions.get(player_id, 0) + amount
-	print("[EffectController] Prevención 'sale del juego' +%d para J%d (total: %d)" % [
-		amount, player_id + 1, _leave_play_preventions[player_id]
-	])
-
-
 ## Inmunidad TEMPORAL de "no pueden salir del juego" para TODOS los Aliados
 ## de un jugador, con vencimiento por TURNO (no por carga) — distinto de
-## _leave_play_preventions (cargas consumibles una por una). 2026-08-29,
+## Legión Paladín (Prevención reactiva real por carta, ver
+## offer_prevention()/_prevention_registry más abajo): esto es una
+## inmunidad OTORGADA por otro efecto, no una carta de Prevención. 2026-08-29,
 ## p.ej. Sherlock Holmes: "los Aliados que controlas no pueden salir del
 ## juego hasta tu próximo turno" — protege a TODOS a la vez, sin límite de
 ## cantidad, hasta que vuelva a empezar el turno de ese jugador.
@@ -512,15 +508,13 @@ func add_single_card_leave_play_immunity(card: Node, player_id: int) -> void:
 	GameManager.turn_started.connect(clear_it)
 
 
-func _try_consume_leave_play_prevention(player_id: int, card: Node) -> bool:
-	"""Solo previene la salida de Aliados (texto literal de Legión Paladín/
-	Sherlock Holmes/Garfio Pirata). La inmunidad temporal en bloque (blanket)
-	y la puntual por carta se revisan PRIMERO y no consumen nada — solo
-	bloquean mientras estén activas. Si ninguna aplica, cae a las cargas de
-	Prevención (_leave_play_preventions), que sí se consumen una por una.
-	Cancela la salida del juego por completo — la carta queda exactamente
-	como estaba, sin pasar por ningún otro paso de destroy_card/exile_card
-	(on_left_play, limpieza de keywords, cambio de zona, etc.)."""
+func _try_consume_leave_play_prevention(player_id: int, card: Node, source: Node = null) -> bool:
+	"""Solo previene la salida de Aliados. La inmunidad temporal en bloque
+	(blanket, Sherlock Holmes) y la puntual por carta (Garfio Pirata) se
+	revisan PRIMERO y no consumen nada — son inmunidades OTORGADAS por otro
+	efecto, no cartas de Prevención, así que no pasan por el registro
+	reactivo. Si ninguna aplica, ofrece Prevención reactiva real (Legión
+	Paladín — ver offer_prevention(), tag 'leave_play')."""
 	if not is_instance_valid(card) or card.get("card_type") != Constants.CardType.ALIADO:
 		return false
 	if _blanket_leave_play_immunity.get(player_id, false):
@@ -537,97 +531,495 @@ func _try_consume_leave_play_prevention(player_id: int, card: Node) -> bool:
 		if main1:
 			main1._update_debug("%s: no puede salir del juego este turno" % card_name1)
 		return true
-	if _leave_play_preventions.get(player_id, 0) <= 0:
-		return false
-	_leave_play_preventions[player_id] -= 1
-	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else "Aliado"
-	print("[EffectController] Prevención consumida: %s no sale del juego (quedan %d para J%d)" % [
-		card_name, _leave_play_preventions[player_id], player_id + 1
-	])
+	return await offer_prevention(card, source, "leave_play")
+
+
+# =============================================================================
+# PREVENCIÓN REACTIVA (DAR — Utilizar Habilidades: Prevenir), 2026-09-09
+# =============================================================================
+## Registro genérico de cartas de Prevención — reemplaza los 3 mecanismos de
+## "carga previa" que existían antes (uno por Estaca, otro por Legión
+## Paladín, otro por Drácula/Ángel Redentor) por UN solo punto de entrada
+## reactivo: se pregunta al jugador EN EL MOMENTO en que el efecto está por
+## resolverse, no antes (diseño validado en docs/plans/2026-09-02-
+## prevention-response-window-design.md, roster real re-auditado 2026-09-09
+## contra la API — Paladín Bestiarium NO es una carta de Prevención, estaba
+## en la lista original por error; Almirante Akari queda fuera a propósito,
+## su costo compartido con una segunda habilidad (Anular) no encaja limpio
+## en este registro todavía).
+##
+## Cada entry: {name, detect: Callable(text)->bool, effect_tags:
+## Array[String], opponent_only: bool, applies: Callable(target)->bool
+## (target puede ser Node o Dictionary o null — ver Drácula), is_available:
+## Callable(card)->bool, on_used: Callable(card) -> (awaitable)}.
+## No hace falta un contador de cargas separado: la disponibilidad de cada
+## carta es simplemente "¿sigue existiendo sin usar en una zona de juego?" —
+## las 4 se autoconsumen (destierro o conversión) al usarse, salvo Ángel
+## Redentor (sin costo), que usa el turn_registry ya existente para su
+## candado real de "una vez por turno".
+var _prevention_registry: Array[Dictionary] = []
+
+
+func _build_prevention_registry() -> void:
+	_prevention_registry = [
+		{
+			"name": "Estaca",
+			"detect": func(text: String) -> bool:
+				return "desterrarla para prevenir que una carta sea afectada por un efecto oponente" in text.to_lower(),
+			# OJO: NO incluye "leave_play" — destroy_card()/exile_card() son el
+			# funnel final por el que TAMBIÉN pasa cualquier "destroy"/"exile"
+			# ya resuelto por ActionDestroy/ActionBanish más arriba en la
+			# pila; si Estaca tuviera "leave_play" acá, preguntaría DOS veces
+			# por la misma acción (una vez como "destroy"/"exile", otra como
+			# "leave_play" al llegar a destroy_card()/exile_card()). Legión
+			# 2026-09-09, corregido a pedido del usuario: Estaca SÍ cubre
+			# "barajar de vuelta al mazo" — su alcance real es "cualquier
+			# efecto oponente que afecte a una carta", no una lista cerrada
+			# de verbos. Con "leave_play" en su lista, ambas cartas (Estaca
+			# y Legión Paladín) quedan candidatas en destroy_card()/
+			# exile_card()/return_to_deck() — pero eso NO duplica la
+			# pregunta para un Destruir/Desterrar normal: esos ya se
+			# resuelven en el paso "destroy"/"exile" de ActionDestroy/
+			# ActionBanish, que NO pasa 'source' al llamar a destroy_card()/
+			# exile_card() después — sin 'source' real, el chequeo
+			# opponent_only de Estaca no puede confirmarse y no vuelve a
+			# preguntar ahí. Solo return_to_deck() (nuevo choke point,
+			# 2026-09-09) llama con 'source' real desde varios call sites,
+			# así que ahí Estaca sí puede ofrecerse de verdad.
+			"effect_tags": ["destroy", "exile", "leave_play", "debuff", "strength_change", "silence"],
+			"opponent_only": true,
+			"applies": Callable(),
+			"is_available": func(_card: Node) -> bool: return true,
+			"on_used": func(card: Node) -> bool:
+				var owner_id: int = card.owner_id if card.get("owner_id") != null else 0
+				var wielder = card.get_parent()
+				if wielder and wielder.get("equipped_weapons") is Array:
+					wielder.equipped_weapons.erase(card)
+				await exile_card(owner_id, card, true)
+				return true,
+		},
+		{
+			"name": "Legión Paladín",
+			"detect": func(text: String) -> bool:
+				return "desterrarlo para prevenir que un aliado que controles salga del juego" in text.to_lower(),
+			"effect_tags": ["leave_play"],
+			"opponent_only": false,
+			# Su texto es específico de "un Aliado" (2026-09-09, corregido —
+			# se filtraba antes SOLO en _try_consume_leave_play_prevention(),
+			# que no cubre el choke point nuevo de return_to_deck(); ahora
+			# vive acá, en el registro mismo, así que aplica sin importar
+			# desde dónde se llame offer_prevention()).
+			"applies": func(target) -> bool:
+				if target == null:
+					return true
+				var tipo = target.get("tipo") if target is Dictionary else target.get("card_type")
+				return tipo == null or int(tipo) == Constants.CardType.ALIADO,
+			"is_available": func(_card: Node) -> bool: return true,
+			"on_used": func(card: Node) -> bool:
+				var owner_id: int = card.owner_id if card.get("owner_id") != null else 0
+				await exile_card(owner_id, card, true)
+				return true,
+		},
+		{
+			"name": "Drácula",
+			"detect": func(text: String) -> bool:
+				return "convertirlo en un oro sin habilidad para prevenir que una habilidad sea cancelada" in text.to_lower(),
+			# opponent_only=false (2026-09-09, corregido): el texto real de
+			# Drácula no dice "oponente" en ningún lado ("prevenir que una
+			# habilidad sea cancelada o un Aliado de coste 1 sea Anulado"),
+			# a diferencia de Estaca que sí lo dice explícito.
+			"effect_tags": ["cancel", "annul"],
+			"opponent_only": false,
+			# "un Aliado de coste 1 sea Anulado" — solo cubre coste 1 exacto.
+			# 'target' puede ser Node (annul directo en juego) o Dictionary
+			# (annul en la pila, LinkedEffectRegistry — card_data crudo) o
+			# null (tag 'cancel', que no tiene target de carta puntual).
+			"applies": func(target) -> bool:
+				if target == null:
+					return true  # tag "cancel" — no hay carta puntual con coste que revisar
+				var tipo = target.get("tipo") if target is Dictionary else target.get("card_type")
+				if tipo != null and int(tipo) != Constants.CardType.ALIADO:
+					return false
+				var cost = target.get("coste") if target is Dictionary else target.get("card_cost")
+				return cost == null or int(cost) == 1,
+			"is_available": func(card: Node) -> bool: return not card.is_converted,
+			"on_used": func(card: Node) -> bool:
+				card.is_converted = true
+				await KeywordManager.silence_card(card, card, "permanent")
+				return true,
+		},
+		{
+			"name": "Ángel Redentor",
+			"detect": func(text: String) -> bool:
+				return "puedes prevenir que una carta sea anulada" in text.to_lower(),
+			"effect_tags": ["annul", "cancel"],
+			"opponent_only": false,
+			"applies": Callable(),
+			"is_available": func(card: Node) -> bool:
+				return not UniversalCardParser.turn_registry.was_used(str(card.get_instance_id()), 0, GameManager.current_turn),
+			"on_used": func(card: Node) -> bool:
+				UniversalCardParser.turn_registry.register(str(card.get_instance_id()), 0, GameManager.current_turn)
+				return true,
+		},
+		{
+			# 'Una vez por turno, puedes Barajar una carta de tu mano o que
+			# controles para Anular una carta de coste 2 o menos o prevenir
+			# que un Aliado sea afectado por un efecto oponente' (Almirante
+			# Akari, 2026-09-04) — reactiva de verdad (2026-09-09, corregido
+			# a pedido del usuario): SIN botón de activación, dos disparadores
+			# reactivos distintos que comparten un único candado de una vez
+			# por turno y un único costo (barajar 1 carta propia) pagado
+			# recién al confirmar cuál de los dos usa. La mitad "Prevenir"
+			# entra acá (mismo registro que Estaca, pero solo Aliados); la
+			# mitad "Anular cuando el rival juega una carta" vive en
+			# offer_counter_annul() más abajo — comparte is_available/costo
+			# vía el mismo helper _pay_akari_shuffle_cost().
+			"name": "Almirante Akari",
+			"detect": func(text: String) -> bool:
+				return "prevenir que un aliado sea afectado por un efecto oponente" in text.to_lower(),
+			"effect_tags": ["destroy", "exile", "debuff", "strength_change", "silence"],
+			"opponent_only": true,
+			"applies": func(target) -> bool:
+				if target == null:
+					return true
+				var tipo = target.get("tipo") if target is Dictionary else target.get("card_type")
+				return tipo == null or int(tipo) == Constants.CardType.ALIADO,
+			"is_available": func(card: Node) -> bool:
+				return not UniversalCardParser.turn_registry.was_used(str(card.get_instance_id()), 0, GameManager.current_turn),
+			"on_used": func(card: Node) -> bool:
+				var paid: bool = await _pay_akari_shuffle_cost(card)
+				if not paid:
+					return false
+				UniversalCardParser.turn_registry.register(str(card.get_instance_id()), 0, GameManager.current_turn)
+				return true,
+		},
+	]
+
+
+## Costo compartido de Almirante Akari (barajar 1 carta propia, de la mano o
+## en juego) — pagado recién al confirmar cuál de sus 2 respuestas usa
+## (Prevenir u offer_counter_annul()). Returns false si el jugador canceló
+## la selección (no se paga nada, la respuesta de Akari se aborta entera).
+func _pay_akari_shuffle_cost(source_card: Node) -> bool:
 	var main := get_node_or_null("/root/Main")
-	if main:
-		main._update_debug("%s: se previno que saliera del juego" % card_name)
+	if not main:
+		return false
+	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
+
+	var cost_candidates: Array = []
+	if main.player_hand:
+		for c in main.player_hand.cards:
+			cost_candidates.append(c)
+	for field in [main.player_field, main.player_linea_ataque, main.player_linea_apoyo]:
+		if field:
+			cost_candidates.append_array(field.get_children())
+	if cost_candidates.is_empty():
+		main._update_debug("Almirante Akari: no tienes ninguna carta en tu mano o en juego para Barajar")
+		return false
+
+	var cost_data_list: Array = []
+	for c in cost_candidates:
+		cost_data_list.append(c.card_data)
+	var picked_cost: Dictionary = await SelectionManager.await_single_pick(
+		cost_data_list, "Almirante Akari: elige una carta de tu mano o que controles para Barajar (costo)")
+	if picked_cost.is_empty():
+		return false
+	var cost_node: Node = null
+	for c in cost_candidates:
+		if c.card_data == picked_cost:
+			cost_node = c
+			break
+	if not cost_node:
+		return false
+
+	if main.player_hand and main.player_hand.cards.has(cost_node):
+		var cost_data: Dictionary = cost_node.card_data.duplicate()
+		main.player_hand.remove_card(cost_node, true)
+		CardManager.get_deck(owner_id).append(cost_data)
+	else:
+		var cost_owner: int = cost_node.controller_id if cost_node.get("controller_id") != null else owner_id
+		await ActionModule.return_to_deck(cost_node, cost_owner, true, source_card)
+	CardManager.shuffle_deck(owner_id)
 	return true
 
 
-## "Puedes Desterrarla para prevenir que una carta sea afectada por un
-## efecto oponente" (2026-08-30, Estaca) — cargas de protección POR CARTA
-## puntual (no por jugador, a diferencia de _leave_play_preventions),
-## consumibles una por una contra el PRÓXIMO efecto CON OBJETIVO de un
-## jugador distinto al controlador de la carta protegida (anular, destruir,
-## desterrar, debuff, silenciar — alcance confirmado por el usuario,
-## 2026-08-30: NO cubre daño de combate normal ni auras pasivas).
+## Mitad "Anular" de Almirante Akari — disparador DISTINTO al registro de
+## arriba (reacciona a "tu oponente juega una carta", no a "un efecto
+## oponente afecta a un Aliado"). Llamar justo después de que 'played_card'
+## termine de entrar en juego, del lado de QUIEN LA JUGÓ (ver GoldManager.
+## _trigger_enter_play()/EasyBotController._play_ally()) — comprueba si el
+## RIVAL de quien jugó controla un Akari disponible y la carta jugada cuesta
+## 2 o menos; si el jugador confirma, paga el mismo costo compartido
+## (_pay_akari_shuffle_cost) y Anula (destruye) la carta recién jugada.
+func offer_counter_annul(played_card: Node) -> void:
+	if not is_instance_valid(played_card):
+		return
+	var played_owner: int = played_card.controller_id if played_card.get("controller_id") != null else 0
+	var defender_id: int = 1 - played_owner
+	if defender_id != 0:
+		return  # el bot no responde todavía
+	var cost = played_card.get("card_cost")
+	if cost == null or int(cost) > 2:
+		return
+
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return
+	var fields: Array = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
+		main.player_gold, main.player_oro_pagado]
+	var akari: Node = null
+	for field in fields:
+		if not field:
+			continue
+		for card in field.get_children():
+			if not is_instance_valid(card):
+				continue
+			var ability_text: String = str(card.card_ability) if card.get("card_ability") != null else ""
+			if "anular una carta de coste 2 o menos" in ability_text.to_lower() \
+					and not UniversalCardParser.turn_registry.was_used(str(card.get_instance_id()), 0, GameManager.current_turn):
+				akari = card
+				break
+		if akari:
+			break
+	if not akari:
+		return
+
+	var use_it: bool = await SelectionManager.await_two_choice(
+		main, "¿Usar Almirante Akari para Anular a %s?" % str(played_card.get("card_name")), "Sí", "No")
+	if not use_it:
+		return
+	var paid: bool = await _pay_akari_shuffle_cost(akari)
+	if not paid:
+		return
+	UniversalCardParser.turn_registry.register(str(akari.get_instance_id()), 0, GameManager.current_turn)
+	if not is_instance_valid(played_card):
+		return
+	await ActionModule.destroy([played_card], akari, true, true)
+
+
+## Versión "por player_id" — algunos choke points (LinkedEffectRegistry,
+## que opera sobre OBJETOS DE LA PILA de ActionPipeline, card_data
+## Dictionary, no un Aliado ya en juego) no tienen un Node afectado real
+## para leer su controller_id. 'applies_arg' se le pasa tal cual a cada
+## entry.applies() — puede ser un Node, un Dictionary, o null.
+func offer_prevention_for_player(target_owner_id: int, effect_source: Node, effect_tag: String, applies_arg = null) -> bool:
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return false
+
+	var source_owner: int = -2
+	if effect_source and is_instance_valid(effect_source):
+		source_owner = effect_source.controller_id if effect_source.get("controller_id") != null else -2
+
+	var fields: Array = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
+		main.player_gold, main.player_oro_pagado] if target_owner_id == 0 \
+		else [main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo,
+			main.opponent_gold, main.opponent_oro_pagado]
+
+	var candidates: Array = []  # [{entry, card}]
+	for field in fields:
+		if not field:
+			continue
+		for card in field.get_children():
+			if not is_instance_valid(card):
+				continue
+			var card_controller: int = card.controller_id if card.get("controller_id") != null else -1
+			if card_controller != target_owner_id:
+				continue
+			var ability_text: String = str(card.card_ability) if card.get("card_ability") != null else ""
+			if ability_text.is_empty():
+				continue
+			for entry in _prevention_registry:
+				if not (effect_tag in entry.effect_tags):
+					continue
+				if entry.opponent_only and source_owner != 1 - target_owner_id:
+					continue
+				if not entry.detect.call(ability_text):
+					continue
+				if entry.applies.is_valid() and not entry.applies.call(applies_arg):
+					continue
+				if not entry.is_available.call(card):
+					continue
+				candidates.append({"entry": entry, "card": card})
+
+	if candidates.is_empty():
+		return false
+
+	if target_owner_id != 0:
+		# Capa 2 de la Pila de Respuesta Universal (2026-09-09): el bot ya
+		# puede usar Prevención de verdad — sin diálogo, decide solo, al azar
+		# entre usar una de las candidatas disponibles o no usar ninguna
+		# (mismo criterio simple que el resto de las decisiones de
+		# EasyBotController — no hay heurística de "conviene o no", solo la
+		# posibilidad real de reaccionar en vez de nunca hacerlo).
+		if randf() < 0.5:
+			return false
+		var bot_chosen: Dictionary = candidates[randi() % candidates.size()]
+		return await bot_chosen.entry.on_used.call(bot_chosen.card)
+
+	# Fusión con la Pila de Respuesta Universal (2026-09-09): un solo panel
+	# visual para "responder a algo" en todo el juego — mismo título/timer/
+	# 'Pasar' que ResponseWindowHandler usa para la ventana genérica, en vez
+	# del diálogo aparte (await_two_choice/await_single_pick) que Prevención
+	# tenía antes. No pasa por ActionPipeline (esto es una pregunta puntual
+	# con N candidatas + Pasar, no un objeto de pila que pueda ser anulado a
+	# su vez), pero se ve y se siente igual para el jugador.
+	var chosen: Dictionary = await _ask_prevention_panel(candidates)
+	if chosen.is_empty():
+		return false
+
+	return await chosen.entry.on_used.call(chosen.card)
+
+
+func _ask_prevention_panel(candidates: Array) -> Dictionary:
+	"""Panel de "ventana de respuesta" para Prevención — mismo estilo visual
+	que ResponseWindowHandler._on_step_d_waiting() (título, tamaño, timer de
+	5 segundos, "Pasar" clickeable desde el instante 0), pero construido acá
+	directo porque EffectController no tiene una referencia al
+	CardInspectionLayer/ResponseWindowHandler del humano (son módulos de UI
+	separados, ver arquitectura). Un botón por candidata + "Pasar".
+	Returns: {} si pasó o venció el tiempo, {entry, card} si usó una."""
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return {}
+
+	var layer := CanvasLayer.new()
+	layer.layer = 90
+	main.add_child(layer)
+	var panel := PanelContainer.new()
+	panel.set_anchor(SIDE_LEFT, 0.5)
+	panel.set_anchor(SIDE_TOP, 0.0)
+	panel.set_anchor(SIDE_RIGHT, 0.5)
+	panel.set_anchor(SIDE_BOTTOM, 0.0)
+	panel.set_offset(SIDE_LEFT, -210)
+	panel.set_offset(SIDE_TOP, 8)
+	panel.set_offset(SIDE_RIGHT, 210)
+	panel.set_offset(SIDE_BOTTOM, 88)
+	layer.add_child(panel)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	panel.add_child(vbox)
+	var title := Label.new()
+	title.text = "⏸ Ventana de Respuesta"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
+	title.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(title)
+	var status_lbl := Label.new()
+	status_lbl.text = "¿Prevenir esto? (5s)"
+	status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status_lbl.add_theme_font_size_override("font_size", 10)
+	status_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	vbox.add_child(status_lbl)
+	var btn_row := HBoxContainer.new()
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_row.add_theme_constant_override("separation", 12)
+	vbox.add_child(btn_row)
+
+	var state := {"done": false, "chosen": {}}
+	var btn_pass := Button.new()
+	btn_pass.text = "Pasar ▶"
+	btn_pass.pressed.connect(func(): state.done = true)
+	btn_row.add_child(btn_pass)
+
+	for c in candidates:
+		var btn := Button.new()
+		btn.text = "Usar %s" % str(c.entry.name)
+		btn.pressed.connect(func():
+			state.chosen = c
+			state.done = true
+		)
+		btn_row.add_child(btn)
+
+	panel.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, 0.2)
+
+	var elapsed := 0.0
+	while not state.done and elapsed < 5.0:
+		await get_tree().process_frame
+		elapsed += get_process_delta_time()
+
+	layer.queue_free()
+	return state.chosen
+
+
+## Wrapper para los choke points que sí tienen un Node afectado real (la
+## mayoría — destroy/exile/silence/debuff/leave_play/annul directo).
+func offer_prevention(affected_card: Node, effect_source: Node, effect_tag: String) -> bool:
+	if not is_instance_valid(affected_card):
+		return false
+	if try_consume_legacy_targeted_prevention(affected_card):
+		return true
+	if affected_card.get("current_zone") == null or not (affected_card.current_zone in Constants.ZONES_IN_PLAY):
+		return false
+	var owner_id: int = affected_card.controller_id if affected_card.get("controller_id") != null else 0
+	return await offer_prevention_for_player(owner_id, effect_source, effect_tag, affected_card)
+
+
+## Puente temporal (2026-09-09) — para cartas con el modelo VIEJO de carga
+## previa que quedaron fuera de este rediseño (Fisión Nuclear/Transformación,
+## MiscUniquePatterns.gd: aproximan una protección "burbuja"/repartida con
+## una carga por carta, sin pregunta reactiva — no encajan en el registro de
+## _prevention_registry, que asume UNA carta de Prevención real detectada
+## por texto). Almirante Akari YA NO usa este puente (ver
+## _prevention_registry/offer_counter_annul() — se pasó a reactivo de
+## verdad). Aislado del registro reactivo a propósito, se consulta primero
+## en offer_prevention().
 ## {card_instance_id: count}
-var _opponent_effect_preventions: Dictionary = {}
+var _legacy_targeted_preventions: Dictionary = {}
 
 
-func add_opponent_effect_prevention(card: Node) -> void:
+func add_legacy_targeted_prevention(card: Node, amount: int = 1) -> void:
 	if not is_instance_valid(card):
 		return
 	var id := card.get_instance_id()
-	_opponent_effect_preventions[id] = _opponent_effect_preventions.get(id, 0) + 1
-	print("[EffectController] Protección contra efecto rival +1 para %s (total: %d)" % [
-		str(card.get("card_name")) if card.get("card_name") != null else "Carta",
-		_opponent_effect_preventions[id]
-	])
+	_legacy_targeted_preventions[id] = _legacy_targeted_preventions.get(id, 0) + amount
 
 
-func try_consume_opponent_effect_prevention(target: Node, source: Node) -> bool:
-	"""Consume una carga de protección de 'target' si 'source' pertenece a
-	un jugador distinto al controlador de 'target' — un efecto propio NUNCA
-	gasta la protección. Returns true si bloqueó el efecto (el llamador
-	debe abortar la acción sobre ESTE target puntual, sin afectar otros
-	targets de la misma resolución)."""
-	if not is_instance_valid(target):
+func try_consume_legacy_targeted_prevention(card: Node) -> bool:
+	if not is_instance_valid(card):
 		return false
-	var id := target.get_instance_id()
-	var charges: int = _opponent_effect_preventions.get(id, 0)
+	var id := card.get_instance_id()
+	var charges: int = _legacy_targeted_preventions.get(id, 0)
 	if charges <= 0:
 		return false
-	var target_controller: int = target.controller_id if target.get("controller_id") != null else -1
-	var source_controller: int = -2
-	if source and is_instance_valid(source):
-		source_controller = source.controller_id if source.get("controller_id") != null else -2
-	if source_controller == target_controller:
-		return false
-	_opponent_effect_preventions[id] = charges - 1
-	var card_name: String = str(target.get("card_name")) if target.get("card_name") != null else "Carta"
-	print("[EffectController] Protección consumida: %s no fue afectada por el efecto rival (quedan %d)" % [
-		card_name, _opponent_effect_preventions[id]
-	])
+	_legacy_targeted_preventions[id] = charges - 1
+	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else "Carta"
 	var main := get_node_or_null("/root/Main")
 	if main:
-		main._update_debug("%s: protegida de un efecto rival" % card_name)
+		main._update_debug("%s: protegida (Almirante Akari)" % card_name)
 	return true
 
 
-## "Puedes convertirlo en un Oro sin habilidad para prevenir que una
-## habilidad sea cancelada o un Aliado de coste 1 sea Anulado" (2026-08-30,
-## Drácula) — carga POR JUGADOR (no por carta puntual, a diferencia de
-## _opponent_effect_preventions: Drácula protege cualquier habilidad/Aliado
-## propio, no una carta elegida de antemano), consumible contra CUALQUIERA
-## de las dos amenazas, lo que ocurra primero. Opera sobre la pila
-## (ActionPipeline/LinkedEffectRegistry), no sobre Nodos en juego, así que
-## no puede reusar _opponent_effect_preventions (keyed por instance_id de
-## Node).
-var _stack_annul_cancel_preventions: Dictionary = {0: 0, 1: 0}
+## Efectos suspendidos que resuelven en la PRÓXIMA Fase Final de un jugador
+## puntual, de una sola vez (2026-09-06, a pedido del usuario — p.ej. Fisión
+## Nuclear: 'En la próxima Fase Final oponente, Baraja una carta de coste 2
+## o menos o Roba dos cartas') — a diferencia de un trigger real en juego
+## (on_opponent_turn_end, que dispara TODOS los turnos mientras la fuente
+## siga en juego), esto es un Talismán que ya se resolvió y fue Desterrado:
+## no hay ninguna carta en juego a la que consultarle has_trigger() después.
+## 'No se puede responder con nada' (aclarado por el usuario) = se resuelve
+## directo, sin pasar por ningún sistema de prevención.
+var _scheduled_next_final_phase_effects: Dictionary = {}
 
 
-func add_stack_annul_cancel_prevention(player_id: int) -> void:
-	_stack_annul_cancel_preventions[player_id] = _stack_annul_cancel_preventions.get(player_id, 0) + 1
-	print("[EffectController] Prevención 'Cancelar/Anular en pila' +1 para J%d (total: %d)" % [
-		player_id + 1, _stack_annul_cancel_preventions[player_id]
-	])
+func schedule_next_final_phase_effect(player_id: int, effect: Callable) -> void:
+	if not _scheduled_next_final_phase_effects.has(player_id):
+		_scheduled_next_final_phase_effects[player_id] = []
+	_scheduled_next_final_phase_effects[player_id].append(effect)
 
 
-func try_consume_stack_annul_cancel_prevention(player_id: int) -> bool:
-	if _stack_annul_cancel_preventions.get(player_id, 0) <= 0:
-		return false
-	_stack_annul_cancel_preventions[player_id] -= 1
-	print("[EffectController] Prevención 'Cancelar/Anular en pila' consumida para J%d (quedan %d)" % [
-		player_id + 1, _stack_annul_cancel_preventions[player_id]
-	])
-	var main := get_node_or_null("/root/Main")
-	if main:
-		main._update_debug("Se previno una Cancelación/Anulación (Drácula)")
-	return true
+func consume_scheduled_final_phase_effects(player_id: int) -> void:
+	"""Llamar al ENTRAR a la Fase Final de player_id (PhaseFlowController.
+	_resolve_fase_final()) — ejecuta y limpia (una sola vez) los efectos
+	suspendidos agendados para esta Fase Final puntual."""
+	var effects: Array = _scheduled_next_final_phase_effects.get(player_id, [])
+	if effects.is_empty():
+		return
+	_scheduled_next_final_phase_effects[player_id] = []
+	for effect: Callable in effects:
+		if effect.is_valid():
+			await effect.call()
+
+

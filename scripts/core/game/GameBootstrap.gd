@@ -99,10 +99,81 @@ func _on_decks_selected(player_data: Dictionary, opponent_data: Dictionary, play
 		DeckLoader.load_deck_from_external_data(0, player_data)
 	else:
 		DeckLoader.load_deck_from_data(0, player_data)
+
+	# Multiplayer remoto (Fase A — docs/plans/2026-09-09-multiplayer-remoto-
+	# design.md): el mazo del jugador 1 no sale de acá si hay una sala de red
+	# activa. Del lado Anfitrión, llega por red (el mazo real del Remoto, no
+	# una copia aleatoria del propio). Del lado Remoto, esta misma instancia
+	# NUNCA corre su propia partida — solo manda su mazo (el que acaba de
+	# cargar como jugador 0 arriba) y se queda esperando; Fase B reemplaza esa
+	# espera por la partida reflejada de verdad.
+	if NetworkClient.room_code != "":
+		if NetworkClient.is_host:
+			_load_opponent_deck_from_network()
+		else:
+			_send_own_deck_and_wait_for_host()
+		return
+
 	if opponent_is_external:
 		DeckLoader.load_deck_from_external_data(1, opponent_data)
 	else:
 		DeckLoader.load_deck_from_data(1, opponent_data)
+
+
+func _load_opponent_deck_from_network() -> void:
+	"""Modo Anfitrión conectado: el mazo del jugador 1 llega por el mensaje
+	{"op":"deck","card_ids":[...]} que manda el Remoto — puede haber llegado
+	antes de que esta instancia empezara a escuchar (el Remoto suele
+	confirmar su propio mazo antes de que el Anfitrión confirme el suyo), por
+	eso se revisa primero el último mensaje guardado en NetworkClient."""
+	var pending: Dictionary = NetworkClient.last_message_by_op.get("deck", {})
+	if not pending.is_empty():
+		_apply_network_opponent_deck(pending)
+		return
+	if not NetworkClient.message_received.is_connected(_on_network_message_while_waiting_deck):
+		NetworkClient.message_received.connect(_on_network_message_while_waiting_deck)
+
+
+func _on_network_message_while_waiting_deck(data: Dictionary) -> void:
+	if data.get("op", "") != "deck":
+		return
+	if NetworkClient.message_received.is_connected(_on_network_message_while_waiting_deck):
+		NetworkClient.message_received.disconnect(_on_network_message_while_waiting_deck)
+	_apply_network_opponent_deck(data)
+
+
+func _apply_network_opponent_deck(data: Dictionary) -> void:
+	var card_ids: Array = data.get("card_ids", [])
+	DeckLoader.load_test_deck(1, card_ids)
+
+
+func _send_own_deck_and_wait_for_host() -> void:
+	"""Modo Remoto conectado: junta el mazo propio (ya cargado como jugador 0
+	arriba) y lo manda al Anfitrión como lista plana de IDs (con repetidos
+	según cantidad — mismo formato que espera DeckLoader.load_test_deck() del
+	otro lado)."""
+	if DeckLoader.is_deck_loaded(0):
+		_send_deck_to_host()
+	else:
+		DeckLoader.deck_loaded.connect(_on_own_deck_loaded_for_network, CONNECT_ONE_SHOT)
+
+
+func _on_own_deck_loaded_for_network(player_id: int, _card_count: int) -> void:
+	if player_id != 0:
+		return
+	_send_deck_to_host()
+
+
+func _send_deck_to_host() -> void:
+	var deck_data: Array = DeckLoader.get_deck_data(0)
+	var card_ids: Array = []
+	for card in deck_data:
+		card_ids.append(str(card.get("id", card.get("uuid", ""))))
+	NetworkClient.send_message({"op": "deck", "card_ids": card_ids})
+	var _loading_overlay := get_node_or_null("/root/MatchLoadingOverlay")
+	if _loading_overlay:
+		_loading_overlay.show_loading(_main, "ESPERANDO AL ANFITRIÓN",
+			"Tu mazo ya se envió — el Anfitrión está preparando la partida...")
 
 
 func _on_deck_load_failed(player_id: int, error: String) -> void:
@@ -143,7 +214,17 @@ func _start_test_game() -> void:
 
 
 func _setup_oro_inicial() -> void:
-	"""Extrae el Oro Inicial de ambos mazos y lo coloca en Reserva antes del mulligan."""
+	"""Extrae el Oro Inicial de ambos mazos y lo coloca en Reserva antes del mulligan.
+
+	Resetea GameState.oro_reserva/oro_pagado ANTES de agregar nada (2026-09-06,
+	bug real reportado por el usuario): GameState es autoload, así que si se
+	vuelve al menú y se arranca una partida nueva SIN cerrar el juego, los
+	oros de la partida anterior seguían en memoria — esta función solo
+	SUMABA el Oro Inicial encima de lo que ya hubiera, dejando una Reserva
+	inicial inflada (p.ej. 6 en vez de 1) que después dejaba pagar cartas
+	que no debían ser pagables."""
+	GameState.reset_oro(0)
+	GameState.reset_oro(1)
 	for player_id in [0, 1]:
 		var deck: Array = _main.player_deck if player_id == 0 else _main.opponent_deck
 		var found_idx: int = -1
@@ -188,6 +269,14 @@ func _setup_oro_inicial() -> void:
 			_main.gold_cards.append(card)
 			GameState.agregar_oro_reserva(0, 1)
 			_main._gold_manager._update_gold_display()
+			# El Oro Inicial nunca pasa por _trigger_enter_play() (este
+			# camino de colocación es aparte, ver comentario de más arriba
+			# sobre set_zone) — sin esto, un Oro Inicial con aura continua
+			# (p.ej. Armería del Guerrero: 'Tus Aliados de coste 1 o más
+			# ganan 1 de Fuerza') nunca la registraba (2026-09-04, bug real:
+			# el aura quedaba inerte toda la partida).
+			ContinuousEffectManager._register_card_continuous_effects(card)
+			_main._gold_manager._register_armeria_opponent_turn_trigger(card)
 		else:
 			# El Oro Inicial del oponente ahora también se muestra como carta
 			# real (2026-08-25, a pedido del usuario) — antes solo sumaba al
@@ -204,11 +293,13 @@ func _setup_oro_inicial() -> void:
 			card.scale = Constants.GOLD_CARD_SCALE
 			card.base_scale = Constants.GOLD_CARD_SCALE
 			card.pivot_offset = Vector2(75.0, 105.0)
-			card.rotation_degrees = 180.0
 			_main._connect_card_signals(card)
 			_main.opponent_gold.add_child(card)
 			card.set_zone(Constants.Zone.RESERVA_ORO)  # ver comentario arriba, mismo bug en el lado rival
+			card._refresh_disabled_rotation()
 			GameState.agregar_oro_reserva(1, 1)
+			ContinuousEffectManager._register_card_continuous_effects(card)
+			_main._gold_manager._register_armeria_opponent_turn_trigger(card)
 	_main._zone_manager._update_castillo_counts()
 
 
@@ -288,83 +379,6 @@ func _build_test_decks() -> void:
 		})
 	_main.opponent_deck = _main.player_deck.duplicate(true)
 	print("[Bootstrap] Mazos de prueba: %d cartas" % _main.player_deck.size())
-
-
-func _debug_spawn_opponent_test_allies(count: int = 3, card_name: String = "bernardo ohiggins") -> void:
-	"""DEBUG TEMPORAL (2026-09-02, a pedido del usuario, "solo por ahora"):
-	al terminar el mulligan, pone 'count' copias de la misma carta conocida
-	(Bernardo O'Higgins por defecto — 2026-09-02, a pedido del usuario:
-	'que sean 3 Bernardo OHiggins o algo así', para tener un objetivo fijo
-	y repetible en vez de lo que sea que toque al azar del mazo cargado)
-	directo en la Línea de Defensa del rival, para poder probar efectos que
-	apuntan a 'una carta oponente' en juego (p.ej. Estaca — Barajar una
-	carta oponente que no sea Oro) sin tener que jugar una partida completa
-	contra el bot primero. Busca la carta por nombre en CardDatabase (no en
-	el mazo cargado — así siempre están disponibles, tenga o no el mazo del
-	rival esa carta) y duplica sus datos ('duplicate(true)', para que las 3
-	copias no compartan el mismo Dictionary). Si no la encuentra, cae al
-	comportamiento viejo (primeros Aliados que encuentre en opponent_deck).
-	Sin ETB (no pasa por _trigger_enter_play() a propósito — son solo
-	cuerpos en juego, no 'jugados' de verdad) PERO CON efectos continuos
-	(auras tipo 'Tus Aliados ganan Fuerza' — 2026-09-02, corrección: se
-	registran directo vía ContinuousEffectManager._register_card_
-	continuous_effects(), sin abrir ninguna ventana de trigger/respuesta,
-	porque una aura pasiva no depende de haber sido 'jugada'). Buscar este
-	comentario para sacarlo cuando ya no haga falta — llamado desde
-	MulliganController._end_mulligan_phase()."""
-	if not _main.opponent_field:
-		return
-
-	var base_data: Dictionary = CardDatabase.get_card_by_name(card_name) if CardDatabase else {}
-	var placed := 0
-
-	if not base_data.is_empty():
-		for i in range(count):
-			var data: Dictionary = base_data.duplicate(true)
-			var card = _main._create_card(data, false)  # is_hidden=false: en juego es info pública
-			card.owner_id = 1
-			card.controller_id = 1
-			card.pivot_offset = Vector2(75.0, 105.0)
-			card.rotation_degrees = 180.0
-			_main._connect_card_signals(card)
-			_main.opponent_field.add_child(card)
-			card.top_level = false
-			card.set_zone(Constants.Zone.LINEA_DEFENSA)
-			card.scale = Vector2.ONE
-			card.base_scale = Vector2.ONE
-			card.can_interact = true
-			CardFactory.on_card_enters_play(card)
-			ContinuousEffectManager._register_card_continuous_effects(card)
-			placed += 1
-	elif not _main.opponent_deck.is_empty():
-		# Fallback (no se encontró 'card_name' en CardDatabase): primeros
-		# Aliados del propio mazo del rival, como antes de este cambio.
-		var i := 0
-		while i < _main.opponent_deck.size() and placed < count:
-			var data: Dictionary = _main.opponent_deck[i]
-			if data.get("tipo", -1) != Constants.CardType.ALIADO:
-				i += 1
-				continue
-			_main.opponent_deck.remove_at(i)
-			var card = _main._create_card(data, false)  # is_hidden=false: en juego es info pública
-			card.owner_id = 1
-			card.controller_id = 1
-			card.pivot_offset = Vector2(75.0, 105.0)
-			card.rotation_degrees = 180.0
-			_main._connect_card_signals(card)
-			_main.opponent_field.add_child(card)
-			card.top_level = false
-			card.set_zone(Constants.Zone.LINEA_DEFENSA)
-			card.scale = Vector2.ONE
-			card.base_scale = Vector2.ONE
-			card.can_interact = true
-			CardFactory.on_card_enters_play(card)
-			ContinuousEffectManager._register_card_continuous_effects(card)
-			placed += 1
-
-	if placed > 0:
-		_main._zone_manager._update_castillo_counts()
-		_main._update_debug("[DEBUG] %d Aliado(s) rival(es) puestos en juego para pruebas" % placed)
 
 
 # =============================================================================

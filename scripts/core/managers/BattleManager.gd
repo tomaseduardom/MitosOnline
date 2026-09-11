@@ -70,6 +70,12 @@ func calculate_combat_damage() -> Dictionary:
 
 	var result = {
 		"total_damage_to_castle": 0,
+		# Daño de atacantes con "hace doble daño de combate al Destierro"
+		# (2026-09-04, a pedido del usuario — p.ej. atenea en wonderland,
+		# manuel rodriguez) — YA VIENE DOBLADO acá, separado del pool normal
+		# porque va a una zona distinta (Destierro, no Cementerio) al
+		# aplicarse más abajo.
+		"total_damage_to_exile": 0,
 		"attackers_destroyed": [],
 		"blockers_destroyed": [],
 		"unblocked_attackers": [],
@@ -106,7 +112,7 @@ func calculate_combat_damage() -> Dictionary:
 					# DAR 5.C4: el daño excedente siempre pasa al Castillo — no es
 					# una keyword especial ("Arrollar" no existe en Mitos y
 					# Leyendas), es el comportamiento por defecto del combate.
-					result.total_damage_to_castle += overflow_damage
+					_accumulate_castle_damage(result, attacker, overflow_damage)
 					result.damage_sources.append({
 						"source": attacker,
 						"damage": overflow_damage,
@@ -137,7 +143,7 @@ func calculate_combat_damage() -> Dictionary:
 		else:
 			# Sin bloqueador: todo el daño pasa al Castillo
 			result.unblocked_attackers.append(attacker)
-			result.total_damage_to_castle += attacker_strength
+			_accumulate_castle_damage(result, attacker, attacker_strength)
 			result.damage_sources.append({
 				"source": attacker,
 				"damage": attacker_strength,
@@ -148,13 +154,31 @@ func calculate_combat_damage() -> Dictionary:
 			])
 			emit_signal("unblocked_damage", attacker, attacker_strength)
 
-	# Emitir señal con el daño total calculado
-	emit_signal("on_damage_assigned", result.total_damage_to_castle)
-	print("[BattleManager] Daño asignado: %d (de %d fuentes)" % [
-		result.total_damage_to_castle, result.damage_sources.size()
+	# Emitir señal con el daño total calculado (ambos pools combinados —
+	# 2026-09-04: total_damage_to_exile ya viene doblado, ver
+	# _accumulate_castle_damage())
+	var total_damage_combined: int = result.total_damage_to_castle + result.total_damage_to_exile
+	emit_signal("on_damage_assigned", total_damage_combined)
+	print("[BattleManager] Daño asignado: %d normal + %d al Destierro (de %d fuentes)" % [
+		result.total_damage_to_castle, result.total_damage_to_exile, result.damage_sources.size()
 	])
 
-	# Aplicar daño total al Castillo del defensor
+	# Aplicar daño "hace doble daño de combate al Destierro" PRIMERO (pool
+	# separado, siempre a Destierro sin importar _check_damage_to_exile_effect)
+	if result.total_damage_to_exile > 0:
+		print("[BattleManager] === DAÑO AL DESTIERRO: %d ===" % result.total_damage_to_exile)
+		emit_signal("damage_to_castle", defender_id, result.total_damage_to_exile, result.damage_sources)
+		var exile_damage_result = await _apply_castle_damage(defender_id, result.total_damage_to_exile, true)
+		result["damage_applied_to_exile"] = exile_damage_result
+		if exile_damage_result.player_defeated:
+			result["game_ended"] = true
+			result["loser"] = defender_id
+			last_combat_result = result
+			combat_in_progress = false
+			emit_signal("combat_finished", result)
+			return result
+
+	# Aplicar daño total normal al Castillo del defensor
 	if result.total_damage_to_castle > 0:
 		print("[BattleManager] === DAÑO TOTAL AL CASTILLO: %d ===" % result.total_damage_to_castle)
 		emit_signal("damage_to_castle", defender_id, result.total_damage_to_castle, result.damage_sources)
@@ -231,6 +255,19 @@ func _check_damage_to_exile_effect(player_id: int) -> bool:
 					return true
 
 	return false
+
+
+func _accumulate_castle_damage(result: Dictionary, attacker: Node, amount: int) -> void:
+	"""Suma 'amount' al pool correcto según si 'attacker' tiene 'hace doble
+	daño de combate al Destierro' (2026-09-04, a pedido del usuario — p.ej.
+	atenea en wonderland, manuel rodriguez): ese daño se DOBLA y va a un
+	pool separado que _apply_castle_damage() manda al Destierro en vez del
+	Cementerio. El resto de atacantes en el mismo combate sigue sumando al
+	pool normal sin verse afectado."""
+	if is_instance_valid(attacker) and attacker.get("doubles_damage_to_exile") == true:
+		result.total_damage_to_exile += amount * 2
+	else:
+		result.total_damage_to_castle += amount
 
 
 func _resolve_combat_pair(attacker: Node, blocker: Node, atk_str: int, blk_str: int) -> Dictionary:
@@ -441,39 +478,15 @@ func get_potential_damage(attackers: Array, blockers: Dictionary) -> int:
 	return total
 
 
-# =============================================================================
-# MODIFICADORES DE COMBATE
-# =============================================================================
-## Modificadores de fuerza temporales para el combate
-var combat_strength_modifiers: Array[Dictionary] = []
-
-
-func add_combat_modifier(card: Node, modifier: int, source: Node = null) -> void:
-	"""Añade un modificador de fuerza para el combate actual"""
-	combat_strength_modifiers.append({
-		"target": card,
-		"modifier": modifier,
-		"source": source
-	})
-	print("[BattleManager] Modificador +%d a %s" % [modifier, _get_card_name(card)])
-
-
-func get_modified_strength(card: Node) -> int:
-	"""Obtiene la fuerza con modificadores de combate aplicados"""
-	var base = _get_strength(card)
-	var total_mod = 0
-
-	for mod in combat_strength_modifiers:
-		if mod.target == card:
-			total_mod += mod.modifier
-
-	return maxi(0, base + total_mod)  # Fuerza no puede ser negativa
-
-
-func clear_combat_modifiers() -> void:
-	"""Limpia los modificadores de combate (al final de la fase)"""
-	combat_strength_modifiers.clear()
-
+# NOTA (2026-09-08): Se eliminó un segundo sistema de "modificadores de
+# combate" (combat_strength_modifiers/add_combat_modifier()/get_modified_
+# strength()/clear_combat_modifiers()) que vivía acá, paralelo y desconectado
+# del real: calculate_combat_damage() siempre calculó la Fuerza vía
+# ContinuousEffectManager.get_modified_strength(card) (ver _get_strength()
+# más arriba), nunca a través de este — auditoría 2026-09-07 confirmó cero
+# llamadores reales en todo el proyecto. Cualquier efecto de "+X de Fuerza
+# este combate" debe registrarse en ContinuousEffectManager (duration
+# UNTIL_END_TURN o similar), no acá.
 
 # NOTA (2026-08-20): "Golpe Primero" y "Arrollar" no son keywords en Mitos y
 # Leyendas — se eliminó has_first_strike()/has_trample()/
