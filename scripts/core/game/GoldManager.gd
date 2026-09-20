@@ -1416,10 +1416,22 @@ func _trigger_enter_play(card: Node, zone: int = Constants.Zone.LINEA_DEFENSA) -
 		card.on_entered_play()
 	_register_talisman_totem_tax(card)
 	_register_talisman_second_play_tax(card)
-	EffectController.emit_signal("on_card_entered_play", 0, card, zone)
+	# 2026-09-20 (auditoría de Task 1.3, remote-multiplayer-parity Fase 1):
+	# estos tres usaban "0" fijo en vez de 'controller_id' (ya calculado un
+	# poco más arriba, línea 1447, para la ventana de respuesta). Mientras
+	# _equip_weapon() solo se llamaba para Armas del Anfitrión (owner_id
+	# siempre 0) esto nunca se notaba — pero _play_weapon_remote() (nuevo,
+	# RemotePlayerController.gd) llama a _equip_weapon() para Armas del
+	# jugador 1 (Remoto), y GameStateBroadcaster._on_card_entered_play()
+	# decide "own"/"opponent" leyendo justo este player_id — con "0" fijo,
+	# un Arma jugada por el Remoto se mostraba como si la hubiera jugado el
+	# Anfitrión del otro lado de la red. Mismo bug que la nota de Task 1.2
+	# ya advertía sobre _trigger_enter_play() en general.
+	EffectController.emit_signal("on_card_entered_play", controller_id, card, zone)
+	_refresh_dynamic_strength_badges(controller_id)
 
 	await TriggerSystem._collect_triggers_for_event("on_enter_play", {
-		"player_id": 0, "card": card, "zone": zone
+		"player_id": controller_id, "card": card, "zone": zone
 	})
 
 	# Almirante Akari — "cuando tu oponente juegue cartas, puedes Anular"

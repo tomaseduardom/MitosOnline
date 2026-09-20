@@ -53,6 +53,8 @@ func _on_message(data: Dictionary) -> void:
 					_show_ataque_prompt(data)
 				"response_window":
 					_show_response_window_prompt(data)
+				"choose_wielder":
+					_show_choose_wielder_prompt(data)
 		"move_card":
 			_apply_move_card(data)
 		"remove_card":
@@ -220,6 +222,9 @@ func _show_vigilia_prompt(data: Dictionary) -> void:
 	var gold_reserva: int = int(data.get("gold_reserva", 0))
 	var gold_candidates: Array = data.get("gold_candidates", [])
 	var ally_candidates: Array = data.get("ally_candidates", [])
+	var weapon_candidates: Array = data.get("weapon_candidates", [])
+	var talisman_candidates: Array = data.get("talisman_candidates", [])
+	var totem_candidates: Array = data.get("totem_candidates", [])
 	var vbox := _build_overlay("Tu Vigilia — Oro disponible: %d" % gold_reserva)
 
 	if not gold_candidates.is_empty():
@@ -236,6 +241,33 @@ func _show_vigilia_prompt(data: Dictionary) -> void:
 		ally_lbl.text = "Jugar Aliado:"
 		vbox.add_child(ally_lbl)
 		for card in ally_candidates:
+			var card_id: String = str(card.get("card_id", ""))
+			_add_row_button(vbox, "%s (coste %s)" % [str(card.get("nombre", "?")), str(card.get("coste", "?"))], func():
+				_send_intent_and_close({"op": "intent", "kind": "play_card", "card_id": card_id}))
+
+	if not weapon_candidates.is_empty():
+		var weapon_lbl := Label.new()
+		weapon_lbl.text = "Jugar Arma:"
+		vbox.add_child(weapon_lbl)
+		for card in weapon_candidates:
+			var card_id: String = str(card.get("card_id", ""))
+			_add_row_button(vbox, "%s (coste %s)" % [str(card.get("nombre", "?")), str(card.get("coste", "?"))], func():
+				_send_intent_and_close({"op": "intent", "kind": "play_card", "card_id": card_id}))
+
+	if not talisman_candidates.is_empty():
+		var talisman_lbl := Label.new()
+		talisman_lbl.text = "Jugar Talismán:"
+		vbox.add_child(talisman_lbl)
+		for card in talisman_candidates:
+			var card_id: String = str(card.get("card_id", ""))
+			_add_row_button(vbox, "%s (coste %s)" % [str(card.get("nombre", "?")), str(card.get("coste", "?"))], func():
+				_send_intent_and_close({"op": "intent", "kind": "play_card", "card_id": card_id}))
+
+	if not totem_candidates.is_empty():
+		var totem_lbl := Label.new()
+		totem_lbl.text = "Jugar Tótem:"
+		vbox.add_child(totem_lbl)
+		for card in totem_candidates:
 			var card_id: String = str(card.get("card_id", ""))
 			_add_row_button(vbox, "%s (coste %s)" % [str(card.get("nombre", "?")), str(card.get("coste", "?"))], func():
 				_send_intent_and_close({"op": "intent", "kind": "play_card", "card_id": card_id}))
@@ -308,3 +340,22 @@ func _show_response_window_prompt(data: Dictionary) -> void:
 	vbox.add_child(sep)
 	_add_row_button(vbox, "Pasar", func():
 		_send_intent_and_close({"op": "intent", "kind": "pass"}))
+
+
+# =============================================================================
+# ELEGIR PORTADOR DE ARMA (RemotePlayerController._choose_wielder_remote())
+# =============================================================================
+func _show_choose_wielder_prompt(data: Dictionary) -> void:
+	var weapon: Dictionary = data.get("weapon", {})
+	var candidates: Array = data.get("candidates", [])
+	var vbox := _build_overlay("Elige quién porta %s" % str(weapon.get("nombre", "el Arma")))
+	if candidates.is_empty():
+		var lbl := Label.new()
+		lbl.text = "No hay ningún Aliado en juego que pueda portarla."
+		vbox.add_child(lbl)
+		return
+
+	for card in candidates:
+		var card_id: String = str(card.get("card_id", ""))
+		_add_row_button(vbox, str(card.get("nombre", "?")), func():
+			_send_intent_and_close({"op": "intent", "kind": "choose_wielder", "card_id": card_id}))

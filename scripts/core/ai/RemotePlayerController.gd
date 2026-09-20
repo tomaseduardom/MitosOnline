@@ -58,8 +58,8 @@ func _await_intent(expected_kinds: Array) -> Dictionary:
 			return data
 	# Inalcanzable en la práctica (el while true: solo sale por return), pero
 	# el analizador de GDScript no lo sabe y exige un retorno explícito al
-	# final de la función — mismo patrón ya usado en
-	# WeaponSearchShuffleExecutor._select_cards_by_cost_budget().
+	# final de la función — mismo patrón visto en otros bucles "while true:
+	# solo sale por return" de este proyecto.
 	return {}
 
 
@@ -90,6 +90,30 @@ func _card_public_data(card: Node) -> Dictionary:
 		"tipo": int(card.get("card_type")) if card.get("card_type") != null else -1,
 		"habilidad": str(card.get("card_ability")) if card.get("card_ability") != null else "",
 	}
+
+
+func _affordable_cards_in_hand(allowed_types: Array) -> Array:
+	"""Como EasyBotController._affordable_allies_in_hand(), pero para
+	cualquier tipo de carta (no solo Aliado) — el bot no juega Armas/
+	Talismanes/Tótems todavía (fuera de alcance de ESE archivo), pero el
+	Remoto sí necesita poder ofrecérselos a la persona real. No se tocó
+	_affordable_allies_in_hand() para no darle alcance nuevo al bot sin que
+	se haya pedido."""
+	var result: Array = []
+	if not _main._opponent_fan:
+		return result
+	var reserva: int = GameState.get_oro_reserva(1)
+	var gm = _main._gold_manager
+	for c in _main._opponent_fan.get_cards():
+		if not is_instance_valid(c) or not (c.get("card_type") in allowed_types):
+			continue
+		if gm and (gm._no_more_cards_violation(c) or gm._card_play_locked(c) \
+				or gm._errante_violation(c) or gm._play_limit_violation(c)):
+			continue
+		var coste: int = PaymentManager.calcular_coste_real(c)
+		if coste <= reserva:
+			result.append(c)
+	return result
 
 
 # =============================================================================
@@ -128,6 +152,120 @@ func run_mulligan(initial_count: int) -> void:
 
 
 # =============================================================================
+# JUGAR ARMA/TALISMÁN/TÓTEM — mismo criterio que EasyBotController._play_ally()
+# (heredado tal cual, arriba en este archivo no — vive en la clase base), pero
+# para los 3 tipos de carta que el bot todavía no juega. Task 1.1-1.4,
+# docs/plans/2026-09-20-remote-multiplayer-parity.md, Fase 1.
+# =============================================================================
+func _play_totem_remote(card: Node) -> void:
+	if not is_instance_valid(card):
+		return
+	var coste: int = PaymentManager.calcular_coste_real(card)
+	_main._update_debug("Oponente juega Tótem: %s" % card.card_name)
+
+	_main._opponent_fan.remove_card(card, false)
+	card.esta_oculta = false
+	_pay_oro_for_bot(coste)
+	TurnManager.on_card_played(card)
+
+	card.can_interact = false
+	_main.opponent_linea_apoyo.add_child(card)
+	card.top_level = false
+	card.set_zone(Constants.Zone.LINEA_APOYO)
+	card.scale = Vector2(0.8, 0.8)
+	card.base_scale = Vector2(0.8, 0.8)
+	if _main._zone_manager:
+		_main._zone_manager.pin_card_to_field_slot(card, _main.opponent_linea_apoyo)
+
+	VisualManager.play_card_effect(card.card_cost)
+	if card.has_method("play_enter_animation"):
+		card.play_enter_animation()
+	await get_tree().process_frame
+	card.can_interact = true
+
+	if await TriggerSystem.open_response_window(card, str(card.card_name) if card.get("card_name") else "", 1):
+		await EffectController.destroy_card(1, card, false)
+		if _main._gold_manager:
+			_main._gold_manager._update_gold_display()
+		return
+
+	CardFactory.on_card_enters_play(card)
+	if card.has_method("on_entered_play"):
+		card.on_entered_play()
+	if _main._gold_manager:
+		_main._gold_manager._register_talisman_totem_tax(card)
+		_main._gold_manager._register_talisman_second_play_tax(card)
+	EffectController.emit_signal("on_card_entered_play", 1, card, Constants.Zone.LINEA_APOYO)
+	await TriggerSystem._collect_triggers_for_event("on_enter_play", {
+		"player_id": 1, "card": card, "zone": Constants.Zone.LINEA_APOYO
+	})
+	await EffectController.offer_counter_annul(card)
+
+
+func _choose_wielder_remote(weapon: Node) -> Node:
+	"""Pide al Remoto que elija portador para un Arma que está jugando —
+	espejo de GoldManager._select_weapon_wielder(), pero preguntando por
+	red en vez de abrir CardInteractionModule local."""
+	if not _main._gold_manager or not _main._gold_manager.has_method("_get_eligible_weapon_wielders"):
+		return null
+	var eligible: Array = _main._gold_manager._get_eligible_weapon_wielders()
+	if eligible.is_empty():
+		return null
+	var payload: Array = []
+	for w in eligible:
+		payload.append(_card_public_data(w))
+	NetworkClient.send_message({"op": "prompt", "kind": "choose_wielder", "weapon": _card_public_data(weapon), "candidates": payload})
+	var intent: Dictionary = await _await_intent(["choose_wielder"])
+	var chosen := _find_card_by_id(str(intent.get("card_id", "")))
+	if chosen and chosen in eligible:
+		return chosen
+	return null
+
+
+func _play_weapon_remote(card: Node) -> void:
+	if not is_instance_valid(card):
+		return
+	if not _main._gold_manager or not _main._gold_manager._player_has_ally_in_play():
+		NetworkClient.send_message({"op": "prompt", "kind": "error", "message": "Sin Aliados en juego para portar el Arma"})
+		return
+	var coste: int = PaymentManager.calcular_coste_real(card)
+	var wielder := await _choose_wielder_remote(card)
+	if not wielder or not is_instance_valid(wielder):
+		return
+
+	_main._opponent_fan.remove_card(card, false)
+	card.esta_oculta = false
+	_pay_oro_for_bot(coste)
+	TurnManager.on_card_played(card)
+	card.owner_id = 1
+	card.controller_id = 1
+
+	if _main._gold_manager.has_method("_equip_weapon"):
+		await _main._gold_manager._equip_weapon(card, wielder)
+
+
+func _play_talisman_remote(card: Node) -> void:
+	if not is_instance_valid(card):
+		return
+	var coste: int = PaymentManager.calcular_coste_real(card)
+	_main._update_debug("Oponente juega talismán: %s" % card.card_name)
+
+	_main._opponent_fan.remove_card(card, false)
+	card.esta_oculta = false
+	_pay_oro_for_bot(coste)
+	TurnManager.on_card_played(card)
+	UniversalCardParser.turn_registry.register("talisman_played:1", 0, GameManager.current_turn)
+
+	card.can_interact = false
+	_main.opponent_linea_apoyo.add_child(card)
+	card.top_level = false
+	card.set_zone(Constants.Zone.LINEA_APOYO)
+	await get_tree().create_timer(0.3).timeout
+
+	await TriggerSystem.resolve_talisman(card)
+
+
+# =============================================================================
 # VIGILIA — igual que la base, pero cada acción la elige el Remoto por red
 # =============================================================================
 func take_vigilia_actions() -> void:
@@ -152,6 +290,15 @@ func take_vigilia_actions() -> void:
 		var ally_candidates: Array = []
 		for c in _affordable_allies_in_hand():
 			ally_candidates.append(_card_public_data(c))
+		var weapon_candidates: Array = []
+		for c in _affordable_cards_in_hand([Constants.CardType.ARMA]):
+			weapon_candidates.append(_card_public_data(c))
+		var talisman_candidates: Array = []
+		for c in _affordable_cards_in_hand([Constants.CardType.TALISMAN]):
+			talisman_candidates.append(_card_public_data(c))
+		var totem_candidates: Array = []
+		for c in _affordable_cards_in_hand([Constants.CardType.TOTEM]):
+			totem_candidates.append(_card_public_data(c))
 
 		var hand_data: Array = []
 		for c in _main._opponent_fan.get_cards():
@@ -163,6 +310,9 @@ func take_vigilia_actions() -> void:
 			"hand": hand_data,
 			"gold_candidates": gold_candidates,
 			"ally_candidates": ally_candidates,
+			"weapon_candidates": weapon_candidates,
+			"talisman_candidates": talisman_candidates,
+			"totem_candidates": totem_candidates,
 			"gold_reserva": GameState.get_oro_reserva(1),
 		})
 		var intent: Dictionary = await _await_intent(["place_gold", "play_card", "end_vigilia"])
@@ -174,8 +324,16 @@ func take_vigilia_actions() -> void:
 					await _place_gold_card(card)
 			"play_card":
 				var card := _find_card_by_id(str(intent.get("card_id", "")))
-				if card and is_instance_valid(card) and card.get("card_type") == Constants.CardType.ALIADO:
-					await _play_ally(card)
+				if card and is_instance_valid(card):
+					match card.get("card_type"):
+						Constants.CardType.ALIADO:
+							await _play_ally(card)
+						Constants.CardType.ARMA:
+							await _play_weapon_remote(card)
+						Constants.CardType.TALISMAN:
+							await _play_talisman_remote(card)
+						Constants.CardType.TOTEM:
+							await _play_totem_remote(card)
 			"end_vigilia":
 				if GameManager.is_game_active and GameManager.active_player_id == 1 \
 						and GameManager.current_phase == Constants.Phase.VIGILIA:
