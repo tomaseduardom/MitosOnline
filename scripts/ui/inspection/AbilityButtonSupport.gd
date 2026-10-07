@@ -23,6 +23,52 @@ func _tamales_ability_restriction_reason(source_card: Node) -> String:
 	return ContinuousEffectManager.tamales_ability_restriction_reason(source_card)
 
 
+func _is_annul_or_cancel_ability(ability_raw_text: String) -> bool:
+	"""Detecta si UNA habilidad ACTIVATED puntual (raw_text ya aislado por
+	parse_abilities(), no la carta entera) es de tipo Anular/Cancelar — la
+	única categoría de ACTIVATED que CardInspectionLayer._build_ability_
+	buttons() ofrece durante el turno RIVAL (2026-09-19, arquitectura.md
+	§10.11 caso 4). Mismo criterio de palabra que GoldManagerRestrictions.
+	_is_response_only_ability_text() (Talismanes de respuesta), pero por
+	'contains' en vez de 'begins_with': aquí ya operamos sobre el raw_text de
+	UNA sola habilidad (p.ej. 'Puedes Desterrarlo para Anular una carta de
+	coste 1 o menos que no sea Aliado', Akari), no sobre la carta completa
+	con varias oraciones sin relación — el costo casi siempre precede a
+	'anular'/'cancela' en la misma oración, así que 'begins_with' descartaría
+	falsos negativos reales. Excluye frases de PROTECCIÓN ('no puede ser
+	anulada/cancelada', p.ej. Padre de la Patria) para no ofrecer el botón
+	por error en una habilidad que blinda a la propia carta, no que anula al
+	rival."""
+	var lower := ability_raw_text.to_lower()
+	if "no puede ser anulad" in lower or "no puede ser cancelad" in lower:
+		return false
+	return "anula" in lower or "cancela" in lower
+
+
+func _is_responding_to_opponent_action() -> bool:
+	"""¿Hay ahora mismo una ventana de respuesta real abierta (Paso D,
+	PriorityContext.RESPONSE_WINDOW) — es decir, se está reaccionando a algo
+	puntual que ya está en la Pila (una carta jugada o una habilidad
+	activada/disparada, cualquiera de las dos, §10.53 abre esa ventana para
+	TODO) — en vez de actuando proactivamente (tu propia Vigilia, o
+	simplemente tener la palabra en Guerra de Talismanes sin responder a
+	nada puntual, PriorityContext.GUERRA_TALISMANES)?
+
+	2026-09-19, a pedido del usuario: varias cartas (Bernardo O'Higgins,
+	Lanza Argenta, ...) combinan en un mismo botón/costo un efecto
+	PROACTIVO (Desterrar, Robar tres cartas) con uno REACTIVO (Cancelar una
+	habilidad) — la idea es que la rama se elija SOLA según el momento en
+	que se usa, no una elección A/B libre cada vez: "si voy en mi turno o en
+	Guerra de Talismanes, siempre la de Desterrar/Robar; si mi oponente jugó
+	una carta o usó una habilidad, ahí cancelaría" (cita textual del
+	usuario). No mira de quién es el turno (`GameManager.active_player_id`)
+	a propósito — mira el CONTEXTO de prioridad, que es lo que realmente
+	distingue "estoy respondiendo a algo puntual" de "tengo la palabra en
+	general" sin importar de quién sea el turno."""
+	return PriorityManager.priority_window_active \
+		and PriorityManager.current_priority_context == PriorityManager.PriorityContext.RESPONSE_WINDOW
+
+
 func _validate_ability(ability: Dictionary, source_card: Node) -> Dictionary:
 	"""Valida si una habilidad activada puede ejecutarse ahora.
 	Comprueba: prioridad, oro disponible, cartas en mano, carta girada, ActionPipeline."""
@@ -46,10 +92,22 @@ func _validate_ability(ability: Dictionary, source_card: Node) -> Dictionary:
 	if "en tu vigilia" in raw_lower and GameManager.current_phase != Constants.Phase.VIGILIA:
 		return {"can": false, "reason": "Solo en tu Vigilia"}
 
+	# "Una vez EN tu/su turno" (2026-09-13, a pedido del usuario — ver
+	# arquitectura.md §10.11): más restrictiva que "una vez por/al turno" en
+	# CUÁNDO se puede activar, no solo en frecuencia. "una vez por turno"
+	# genérico ya se permite en cualquier ventana de prioridad de tu turno
+	# (Guerra de Talismanes incluida, más abajo en can_act()/priority_window_
+	# active) — esta variante explícita NO, aunque la propia habilidad pueda
+	# Anular/Cancelar (p.ej. paladín bestiarium: su habilidad de Anular dice
+	# "una vez en tu turno", más restrictiva que la convención general de
+	# que Anular/Cancelar es de respuesta instantánea).
+	if ability.get("once_per_turn_own_turn_only", false) and PriorityManager.priority_window_active:
+		return {"can": false, "reason": "Solo en tu turno (no en una ventana de prioridad)"}
+
 	# 'Tu oponente sólo puede utilizar las habilidades de Oros y cartas de
 	# coste 2 o más si no controla más copias de esa carta' (2026-09-04,
 	# Tamales) — único choke point real de validación de habilidades
-	# ACTIVADAS, así que basta un chequeo acá para cubrir cualquier carta.
+	# ACTIVADAS, así que basta un chequeo aquí para cubrir cualquier carta.
 	var tamales_reason: String = _tamales_ability_restriction_reason(source_card)
 	if not tamales_reason.is_empty():
 		return {"can": false, "reason": tamales_reason}
@@ -104,7 +162,19 @@ func _validate_ability(ability: Dictionary, source_card: Node) -> Dictionary:
 	return {"can": true, "reason": ""}
 
 
-func _create_ability_overlay_button(ability: Dictionary, validation: Dictionary) -> Button:
+func _apply_corners(style: StyleBoxFlat, top: bool, bottom: bool, r: int = 3) -> void:
+	style.corner_radius_top_left = r if top else 0
+	style.corner_radius_top_right = r if top else 0
+	style.corner_radius_bottom_left = r if bottom else 0
+	style.corner_radius_bottom_right = r if bottom else 0
+
+
+func _create_ability_overlay_button(
+	ability: Dictionary,
+	validation: Dictionary,
+	corner_top: bool = true,
+	corner_bottom: bool = true
+) -> Button:
 	"""Botón superpuesto sobre el párrafo de la carta donde está impresa esta
 	habilidad. No dibuja texto propio (la carta ya lo muestra); un
 	rectángulo de bordes curvos color celeste marca SIEMPRE qué habilidad se
@@ -133,40 +203,43 @@ func _create_ability_overlay_button(ability: Dictionary, validation: Dictionary)
 	btn.text = ""
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	btn.tooltip_text = ""  # Sin texto negro explicativo en hover
+	btn.tooltip_text = ""
 
-	# Estilo normal: Cápsula dorada/ámbar cálida con sutil resplandor rúnico
+	# Opción 2 refinada: Solo bordes rúnicos finos, fondo 100% transparente para máxima legibilidad.
+	# En reposo: fondo transparente (sin tintes que oscurezcan el pergamino), trazo fino de 1px.
+	# En hover: el borde se ilumina en cian eléctrico y resplandor sutil.
+
+	# Estilo normal: Fondo 100% transparente; solo el marco rúnico de 1px delimita el área interactiva
 	var style_normal = StyleBoxFlat.new()
-	style_normal.bg_color = Color(0.85, 0.65, 0.20, 0.08)
+	style_normal.bg_color = Color(0.0, 0.0, 0.0, 0.0)
 	style_normal.set_border_width_all(1)
-	style_normal.border_color = Color(0.92, 0.78, 0.35, 0.85)
-	style_normal.set_corner_radius_all(6)
-	style_normal.shadow_color = Color(0.95, 0.75, 0.20, 0.25)
-	style_normal.shadow_size = 2
+	style_normal.border_color = Color(0.18, 0.60, 0.90, 0.60)
+	style_normal.shadow_size = 0
 	style_normal.anti_aliasing = true
+	_apply_corners(style_normal, corner_top, corner_bottom, 3)
 	btn.add_theme_stylebox_override("normal", style_normal)
 	btn.add_theme_stylebox_override("focus", style_normal)
 
-	# Estilo hover: Oro brillante con halo de energía mística
+	# Estilo hover: Borde cian eléctrico luminoso y velo de luz ultra-sutil (no azul fuerte invasivo)
 	var style_hover = StyleBoxFlat.new()
-	style_hover.bg_color = Color(0.95, 0.75, 0.25, 0.18)
+	style_hover.bg_color = Color(0.20, 0.65, 0.98, 0.05)
 	style_hover.set_border_width_all(1)
-	style_hover.border_color = Color(1.0, 0.90, 0.45, 1.0)
-	style_hover.set_corner_radius_all(6)
-	style_hover.shadow_color = Color(1.0, 0.82, 0.30, 0.55)
-	style_hover.shadow_size = 4
+	style_hover.border_color = Color(0.35, 0.88, 1.0, 1.0)
+	style_hover.shadow_color = Color(0.15, 0.65, 0.95, 0.35)
+	style_hover.shadow_size = 2
 	style_hover.anti_aliasing = true
+	_apply_corners(style_hover, corner_top, corner_bottom, 3)
 	btn.add_theme_stylebox_override("hover", style_hover)
 
-	# Estilo pressed: Brillo de oro intenso
+	# Estilo pressed: Destello celeste de confirmación al hacer clic
 	var style_pressed = StyleBoxFlat.new()
-	style_pressed.bg_color = Color(1.0, 0.85, 0.35, 0.30)
+	style_pressed.bg_color = Color(0.20, 0.70, 1.0, 0.18)
 	style_pressed.set_border_width_all(1)
-	style_pressed.border_color = Color(1.0, 0.98, 0.70, 1.0)
-	style_pressed.set_corner_radius_all(6)
-	style_pressed.shadow_color = Color(1.0, 0.90, 0.40, 0.75)
-	style_pressed.shadow_size = 5
+	style_pressed.border_color = Color(0.85, 0.96, 1.0, 1.0)
+	style_pressed.shadow_color = Color(0.30, 0.80, 1.0, 0.50)
+	style_pressed.shadow_size = 3
 	style_pressed.anti_aliasing = true
+	_apply_corners(style_pressed, corner_top, corner_bottom, 3)
 	btn.add_theme_stylebox_override("pressed", style_pressed)
 
 	return btn

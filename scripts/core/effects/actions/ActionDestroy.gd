@@ -5,7 +5,7 @@ extends RefCounted
 ## Extraído de ActionModule.gd (Fase 4 de reestructuración, "módulos gordos").
 ## _check_destruction_prevention() solo la usa destroy() (banish() consulta
 ## EffectController.try_consume_opponent_effect_prevention() directo, un
-## chequeo distinto) — se queda acá entera, sin necesidad de compartirla.
+## chequeo distinto) — se queda aquí entera, sin necesidad de compartirla.
 
 var _main: Node
 
@@ -132,7 +132,7 @@ func _check_destruction_prevention(target: Node, source: Node) -> Dictionary:
 	# Verificar indestructible — vía KeywordManager.can_be_destroyed(),
 	# no card.has_keyword() directo (2026-09-02, refactor: mismo motivo ya
 	# documentado en ActionValidator._can_be_destroyed() — un silenciado
-	# que le quite Indestructible por KeywordManager no se respetaba acá,
+	# que le quite Indestructible por KeywordManager no se respetaba aquí,
 	# porque card.has_keyword() no mira los overrides de KeywordManager).
 	if not KeywordManager.can_be_destroyed(target):
 		result.prevented = true

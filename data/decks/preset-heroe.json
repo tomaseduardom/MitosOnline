@@ -1,0 +1,160 @@
+{
+    "slug":  "preset-heroe",
+    "nombre":  "Heroe tech (publico)",
+    "arquetipo":  "Heroe",
+    "formato":  "imp",
+    "entries":  [
+                    {
+                        "myl_id":  "20584",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20595",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20612",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20613",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20617",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20625",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20637",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20771",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20807",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20814",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20864",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20321",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20334",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20345",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20483",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20486",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20488",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20554",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20556",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20557",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "20565",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20107",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20255",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20256",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20288",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20307",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20581",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20582",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "19893",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "19905",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "19888",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "18647",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "18652",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "18928",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "18197",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "17618",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "17658",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_tk26_02",
+                        "quantity":  1
+                    }
+                ]
+}

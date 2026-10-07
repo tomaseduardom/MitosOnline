@@ -373,14 +373,14 @@ func _detect_target(text: String) -> TargetType:
 
 
 # resolve_chain()/play_card_with_response_window() (ActionChainResolver.gd/
-# AbilityRegistry.gd) se eliminaron acá (2026-08-27, limpieza — sin ningún
+# AbilityRegistry.gd) se eliminaron aquí (2026-08-27, limpieza — sin ningún
 # llamador real, ver ActionPipeline.gd para el detalle completo).
 
 
 # =============================================================================
 # PARSE_ABILITIES — Compilador Fase 1 (entrada pública unificada)
 # =============================================================================
-# get_activated_abilities() se eliminó acá (2026-08-28, "módulos gordos"):
+# get_activated_abilities() se eliminó aquí (2026-08-28, "módulos gordos"):
 # cero llamadores reales — solo aparecía nombrada en un comentario de
 # ActionPipeline.gd, nunca invocada. parse_abilities() de abajo es la que de
 # verdad usa CardInspectionLayer para los botones de habilidad activada.
@@ -399,12 +399,19 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 	                  abre TriggerResolution/LookAndPlayResolver.
 	  once_per_turn — Contiene "Una vez por turno". Se registra en TurnRegistry para
 	                  impedir múltiples usos por turno.
+	  once_per_turn_own_turn_only — Además "una vez EN tu/su turno" específicamente
+	                  (no solo "una vez por/al turno"): más restrictiva en CUÁNDO se
+	                  puede activar, no solo en frecuencia — ver §10.11 de
+	                  arquitectura.md. Consultado en CardInspectionLayer._build_
+	                  ability_buttons() para ocultar el botón durante una ventana
+	                  de prioridad anidada (Guerra de Talismanes, respuesta a un
+	                  trigger) aunque siga siendo tu turno.
 
 	Cada elemento retornado:
 	  {raw_text, ability_type, trigger_event,
 	   cost_text, cost_type, cost_amount,
 	   effect_text, actions,
-	   is_optional, once_per_turn,
+	   is_optional, once_per_turn, once_per_turn_own_turn_only,
 	   ability_index, card_id,
 	   manager_path, method}
 	"""
@@ -451,6 +458,21 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 			or "una vez al turno" in lower_s
 			or "una vez en tu turno" in lower_s
 			or "una vez en su turno" in lower_s)
+		# "una vez EN tu/su turno" es MÁS restrictiva que "una vez por/al
+		# turno" en CUÁNDO se puede activar, no solo en la frecuencia
+		# (2026-09-13, a pedido del usuario, ver arquitectura.md §10.11):
+		# "una vez por turno"/"puedes" sin más calificación = activable en tu
+		# turno normal Y durante cualquier ventana de prioridad abierta
+		# (Guerra de Talismanes, respuesta a un trigger, etc. — así está
+		# implementado hoy). "una vez EN tu/su turno" = SOLO durante tu turno
+		# normal, NUNCA en una ventana de prioridad anidada, aunque la propia
+		# habilidad pueda Anular/Cancelar (p.ej. paladín bestiarium: su
+		# segunda habilidad puede Anular pero el propio texto la restringe a
+		# "una vez en tu turno" — esa restricción explícita pesa más que la
+		# convención general de que Anular/Cancelar es de respuesta
+		# instantánea).
+		var once_per_turn_own_turn_only: bool = ("una vez en tu turno" in lower_s
+			or "una vez en su turno" in lower_s)
 
 		# "Sólo puedes utilizar la habilidad de X una vez por turno" (2026-08-30,
 		# p.ej. Ramón Freire) — oración de CIERRE que solo reafirma la
@@ -475,6 +497,8 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 		if is_once_per_turn_qualifier_only and not result.is_empty():
 			var prev_qual: Dictionary = result[result.size() - 1]
 			prev_qual["once_per_turn"] = true
+			if once_per_turn_own_turn_only:
+				prev_qual["once_per_turn_own_turn_only"] = true
 			continue
 
 		# ── Detectar Trigger ──────────────────────────────────────────────────
@@ -550,7 +574,7 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 		# "Puedes pagar un/N Oro(s) para..." SIN ':' (2026-09-07, bug real
 		# encontrado en auditoría: Sandraudiga, Visión Heroica — distinto de
 		# pays_self_as_gold ('puedes pagarlo', la carta SE PAGA A SÍ MISMA
-		# como Oro): acá se paga Oro GENÉRICO de la Reserva como costo de un
+		# como Oro): aquí se paga Oro GENÉRICO de la Reserva como costo de un
 		# efecto, la carta de texto no es un Oro. El formato con ':' ya cubre
 		# esto cuando la carta lo imprime así; esta es la variante en prosa.
 		var pay_gold_rx := RegEx.new()
@@ -657,17 +681,29 @@ func parse_abilities(text: String, card_id: String = "") -> Array[Dictionary]:
 			})
 			break  # una acción principal por oración
 
+		# Errata retroactiva de Cuervo Nocturno/Tyet (2026-09-13, a pedido del
+		# usuario): la ÚLTIMA impresión de "Puedes poner esta y otra carta de
+		# tu mano en el fondo de tu Castillo y Robar dos cartas" agrega
+		# "Sólo puedes utilizar esta habilidad de [Nombre] una vez por turno".
+		# El usuario indica que en Mitos y Leyendas la versión más reciente de
+		# una habilidad rige para TODAS las impresiones de esa carta, no solo
+		# la que trae el texto actualizado — así que se fuerza el límite aquí
+		# (pays_self_to_deck_bottom detecta la habilidad por texto, sin
+		# depender de edición) en vez de solo confiar en que la oración de
+		# cierre esté impresa en esa copia puntual.
+		var effective_once_per_turn: bool = once_per_turn or pays_self_to_deck_bottom
 		result.append({
 			"raw_text":      sentence,
 			"ability_type":  ability_type,
 			"trigger_event": trigger_event,
 			"cost_text":     cost_text,
-			"cost_type":     cost_type,
 			"cost_amount":   cost_amount,
+			"cost_type":     cost_type,
 			"effect_text":   effect_text,
 			"actions":       actions,
 			"is_optional":   is_optional,
-			"once_per_turn": once_per_turn,
+			"once_per_turn": effective_once_per_turn,
+			"once_per_turn_own_turn_only": once_per_turn_own_turn_only,
 			"ability_index": ability_index,
 			"card_id":       card_id,
 			"manager_path":  matched_manager_path,
@@ -854,7 +890,7 @@ func extract_action(text: String) -> Dictionary:
 	return {"matched": false}
 
 
-# parse_text()/TRIGGER_RX/COST_RX/ACTION_RX/debug_parse() se eliminaron acá
+# parse_text()/TRIGGER_RX/COST_RX/ACTION_RX/debug_parse() se eliminaron aquí
 # (2026-08-27, limpieza a pedido del usuario): sin ningún llamador real —
 # era una implementación paralela y más vieja de lo que parse_abilities()
 # hace hoy (que es lo que CardInspectionLayer usa de verdad para los

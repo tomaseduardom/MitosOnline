@@ -22,15 +22,14 @@ func try_execute_titan_abismal_conditional_play_or_draw_pattern(ability_text: St
 	var lower := ability_text.to_lower()
 	if not ("si sólo controlas aliados titán o ignis" in lower or "si solo controlas aliados titan o ignis" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager:
 		return true
 
 	var only_titan_ignis := true
-	for field in [main.player_field, main.player_linea_ataque]:
+	var own_fields_titan_ab: Array = [main.player_field, main.player_linea_ataque] if controller_id == 0 else [main.opponent_field, main.opponent_linea_ataque]
+	for field in own_fields_titan_ab:
 		if not field:
 			continue
 		for c in field.get_children():
@@ -42,27 +41,33 @@ func try_execute_titan_abismal_conditional_play_or_draw_pattern(ability_text: St
 		return true
 
 	var choose_play: bool = await SelectionManager.await_two_choice(
-		main, "Titán Abismal", "Jugar un Aliado Titán de coste 1 o menos de tu Cementerio sin pagar su coste", "Robar una carta")
+		main, "Titán Abismal", "Jugar un Aliado Titán de coste 1 o menos de tu Cementerio sin pagar su coste", "Robar una carta", controller_id)
 	if choose_play:
 		var own_cemetery: Array = CardManager.get_cemetery(controller_id)
-		var eligible: Array = own_cemetery.filter(func(d): return (d.get("tipo", -1) == Constants.CardType.ALIADO
-			and int(d.get("coste", 99)) <= 1 and "tit" in str(d.get("raza", "")).to_lower()))
-		if eligible.is_empty():
+		if own_cemetery.filter(func(d): return (d.get("tipo", -1) == Constants.CardType.ALIADO
+				and int(d.get("coste", 99)) <= 1 and "tit" in str(d.get("raza", "")).to_lower())).is_empty() \
+				or not main._zone_viewer:
 			if await TriggerSystem.open_response_window(card, "Titán Abismal", controller_id):
 				return true
 			await ActionModule.draw(controller_id, 1, "etb_trigger", true)
 			return true
-		var picked_data: Dictionary = await SelectionManager.await_single_pick(
-			eligible, "Juega un Aliado Titán de coste 1 o menos de tu Cementerio sin pagar su coste", false)
-		if picked_data.is_empty():
+		# 2026-09-13, a pedido del usuario: click directo en el propio
+		# Cementerio en vez del modal de lista viejo.
+		var eligible_filter := func(c: Node) -> bool:
+			return c.owner_id == controller_id and c.get("card_type") == Constants.CardType.ALIADO \
+				and int(c.card_data.get("coste", 99)) <= 1 and "tit" in str(c.card_data.get("raza", "")).to_lower()
+		var picked: Array = await main._zone_viewer.open_cemetery_target_picker(
+			"Juega un Aliado Titán de coste 1 o menos de tu Cementerio sin pagar su coste", eligible_filter, 1, "cemetery", false, false, controller_id)
+		if picked.is_empty():
 			return true
 		if await TriggerSystem.open_response_window(card, "Titán Abismal", controller_id):
 			return true
-		var idx: int = own_cemetery.find(picked_data)
+		var picked_data: Dictionary = picked[0].data
+		var idx: int = CardManager.get_cemetery(controller_id).find(picked_data)
 		if idx < 0:
 			return true
 		CardManager.remove_from_cemetery(controller_id, idx)
-		await main._gold_manager.play_card_for_free(picked_data)
+		await main._gold_manager.play_card_for_free(picked_data, controller_id)
 	else:
 		if await TriggerSystem.open_response_window(card, "Titán Abismal", controller_id):
 			return true
@@ -82,8 +87,19 @@ func try_execute_play_cemetery_ally_discounted_min1_pattern(ability_text: String
 	var lower := ability_text.to_lower()
 	if not ("puedes jugar un aliado de tu cementerio reduciendo su coste en un oro, hasta un mínimo de 1" in lower):
 		return false
+
 	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
+		# 2026-10-05, bug real encontrado al arreglar play_card_for_free()
+		# (ver arquitectura.md §25): esta función resuelve con gold_manager.
+		# play_card(card_node) directo, que rechaza con "No es tu turno"
+		# cuando GameManager.active_player_id != 0 — exactamente la
+		# situación normal cuando el disparador de ESTA carta es de verdad
+		# el jugador 1. Esta carta estaba "convertida" (sin guard) desde
+		# antes de esta sesión, pero en la práctica queda rota para el
+		# jugador 1 por este motivo — se le vuelve a poner el guard hasta
+		# que se decida tocar la puerta de turno de play_card() (fuera de
+		# alcance de hoy).
+		return true  # el Remoto no puede usar esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager or not main.player_hand:
@@ -92,7 +108,7 @@ func try_execute_play_cemetery_ally_discounted_min1_pattern(ability_text: String
 	if own_cemetery.filter(func(d): return d.get("tipo", -1) == Constants.CardType.ALIADO).is_empty():
 		return true
 	var confirm: bool = await SelectionManager.await_two_choice(
-		main, "aku aku", "Jugar un Aliado de tu Cementerio (-1 Oro, mínimo 1)", "No hacer nada")
+		main, "aku aku", "Jugar un Aliado de tu Cementerio (-1 Oro, mínimo 1)", "No hacer nada", controller_id)
 	if not confirm:
 		return true
 	if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
@@ -130,34 +146,37 @@ func try_execute_play_cemetery_ally_free_or_draw_three_pattern(ability_text: Str
 	var lower := ability_text.to_lower()
 	if not ("puedes jugar un aliado de coste 2 o menos de tu cementerio sin pagar su coste o roba tres cartas" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager:
 		return true
 	var choose_play: bool = await SelectionManager.await_two_choice(
-		main, "sumi el terrible", "Jugar un Aliado de coste 2 o menos de tu Cementerio sin pagar su coste", "Robar tres cartas")
+		main, "sumi el terrible", "Jugar un Aliado de coste 2 o menos de tu Cementerio sin pagar su coste", "Robar tres cartas", controller_id)
 
 	if choose_play:
 		var own_cemetery: Array = CardManager.get_cemetery(controller_id)
-		var eligible: Array = own_cemetery.filter(func(d): return d.get("tipo", -1) == Constants.CardType.ALIADO and int(d.get("coste", 99)) <= 2)
-		if eligible.is_empty():
+		if own_cemetery.filter(func(d): return d.get("tipo", -1) == Constants.CardType.ALIADO and int(d.get("coste", 99)) <= 2).is_empty() \
+				or not main._zone_viewer:
 			if await TriggerSystem.open_response_window(card, "sumi el terrible", controller_id):
 				return true
 			await ActionModule.draw(controller_id, 3, "etb_trigger", true)
 			return true
-		var picked_data: Dictionary = await SelectionManager.await_single_pick(
-			eligible, "Juega un Aliado de coste 2 o menos de tu Cementerio sin pagar su coste", false)
-		if picked_data.is_empty():
+		# 2026-09-13, a pedido del usuario: click directo en vez del modal
+		# de lista viejo.
+		var eligible_filter := func(c: Node) -> bool:
+			return c.owner_id == controller_id and c.get("card_type") == Constants.CardType.ALIADO and int(c.card_data.get("coste", 99)) <= 2
+		var picked: Array = await main._zone_viewer.open_cemetery_target_picker(
+			"Juega un Aliado de coste 2 o menos de tu Cementerio sin pagar su coste", eligible_filter, 1, "cemetery", false, false, controller_id)
+		if picked.is_empty():
 			return true
 		if await TriggerSystem.open_response_window(card, "sumi el terrible", controller_id):
 			return true
-		var idx: int = own_cemetery.find(picked_data)
+		var picked_data: Dictionary = picked[0].data
+		var idx: int = CardManager.get_cemetery(controller_id).find(picked_data)
 		if idx < 0:
 			return true
 		CardManager.remove_from_cemetery(controller_id, idx)
-		await main._gold_manager.play_card_for_free(picked_data)
+		await main._gold_manager.play_card_for_free(picked_data, controller_id)
 	else:
 		if await TriggerSystem.open_response_window(card, "sumi el terrible", controller_id):
 			return true

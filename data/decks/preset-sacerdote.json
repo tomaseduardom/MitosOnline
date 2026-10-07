@@ -1,0 +1,140 @@
+{
+    "slug":  "preset-sacerdote",
+    "nombre":  "Mazo CampeÃ³n Premier Julio (publico)",
+    "arquetipo":  "Sacerdote",
+    "formato":  "imp",
+    "entries":  [
+                    {
+                        "myl_id":  "20584",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20612",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20613",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20634",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20811",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20855",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20861",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20863",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20864",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20865",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20869",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "19955",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "20253",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20270",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20580",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20581",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20582",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "18676",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "18787",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_tk26_08",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_tk26_20",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_tk26i_35",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_04",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_08",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_199",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_213",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "custom_mig_10",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_aydv_232_p",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_aydv_xp010",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_aydv_xp023",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20960",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20961",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "21148",
+                        "quantity":  1
+                    }
+                ]
+}

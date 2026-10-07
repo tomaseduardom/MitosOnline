@@ -54,6 +54,10 @@ SelectionManager="*res://scripts/core/effects/targeting/SelectionManager.gd"
 MatchLoadingOverlay="*res://scripts/ui/hud/MatchLoadingOverlay.gd"
 NetworkClient="*res://scripts/core/network/NetworkClient.gd"
 
+[debug]
+
+file_logging/enable_file_logging=true
+
 [display]
 
 window/size/viewport_width=1920

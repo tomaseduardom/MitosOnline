@@ -229,10 +229,6 @@ func _create_card_from_api(data: Dictionary) -> Dictionary:
 	var tipo_str = data.get("nombre_tipo", data.get("tipo", "Aliado"))
 	var nombre = data.get("nombre", "")
 
-	# Debug: mostrar info de cartas que deberían ser Oro
-	var oros_conocidos = ["diadema celestial", "estrella de kirin", "oro"]
-	if nombre.to_lower() in oros_conocidos or "oro" in nombre.to_lower():
-		print("[CardDatabase] Posible Oro: '%s' -> nombre_tipo: '%s', tipo_raw: '%s'" % [nombre, tipo_str, data.get("tipo", "N/A")])
 	var raza_str = data.get("nombre_raza", data.get("raza", ""))
 
 	return {
@@ -565,7 +561,12 @@ func get_card_image(card_id: String) -> Texture2D:
 	var local_path := LOCAL_CACHE_PATH + "images/" + card_id + ".png"
 	if FileAccess.file_exists(local_path):
 		var image := Image.load_from_file(local_path)
-		if image:
+		# 2026-09-11 (bug real reportado por el usuario: cartas cacheadas
+		# hace semanas se volvían a descargar de la red) — antes solo
+		# chequeaba "if image:", que es cierto para cualquier Image no-nulo
+		# aunque haya quedado vacío por una carga fallida; ahora exige que
+		# además tenga contenido real antes de darla por válida.
+		if image and not image.is_empty():
 			var texture := ImageTexture.create_from_image(image)
 			image_cache[card_id] = texture
 			return texture
@@ -647,6 +648,7 @@ func preload_deck_images(deck: Array) -> void:
 var _pending_downloads: Dictionary = {}  # card_id -> true (en progreso)
 var _download_queue: Array[String] = []   # Cola de card_ids esperando
 const MAX_CONCURRENT_DOWNLOADS: int = 8   # Máximo de requests simultáneos
+var _download_start_ms: Dictionary = {}   # [DIAG-TIMING] card_id -> Time.get_ticks_msec() al iniciar
 
 func _download_card_image(card_id: String) -> void:
 	"""Encola la descarga de la imagen. Máximo MAX_CONCURRENT_DOWNLOADS simultáneos."""
@@ -694,7 +696,7 @@ func _unwrap_broken_cloudinary_fetch(card_id: String, url: String) -> String:
 	cartas lado a lado — confirmado: 'azi_1.png' aparece con x_0/x_256/x_512,
 	tres cartas en la misma lámina) — no se puede usar la imagen de origen
 	tal cual. El recorte real se reconstruye del lado del juego con
-	Image.get_region() en _on_image_request_completed(), así que acá se
+	Image.get_region() en _on_image_request_completed(), así que aquí se
 	guarda el Rect2i en _pending_crops[card_id] para que ese callback lo
 	recupere cuando la descarga termine."""
 	var marker := "/drw7y27sm/image/fetch/"
@@ -728,6 +730,10 @@ func _start_image_download(card_id: String, imagen_path: String) -> void:
 	ese proxy ya no está disponible, así que ese camino queda solo por
 	compatibilidad si alguna vez vuelve a levantarse."""
 	_pending_downloads[card_id] = true
+	# [DIAG-TIMING] instrumentación temporal (2026-09-11) para confirmar si la
+	# demora percibida al robar cartas es de verdad tiempo de red (CDN) y no
+	# código — sacar una vez confirmado.
+	_download_start_ms[card_id] = Time.get_ticks_msec()
 
 	imagen_path = _unwrap_broken_cloudinary_fetch(card_id, imagen_path)
 
@@ -739,7 +745,8 @@ func _start_image_download(card_id: String, imagen_path: String) -> void:
 		var cdn_url = _build_cdn_url(imagen_path)
 		download_url = API_BASE_URL + "/game/card-image?url=" + cdn_url.uri_encode()
 
-	print("[CardDatabase] Descargando imagen %s → %s" % [card_id, download_url])
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[CardDatabase] Descargando imagen %s → %s" % [card_id, download_url])
 
 	var http = HTTPRequest.new()
 	add_child(http)
@@ -750,6 +757,7 @@ func _start_image_download(card_id: String, imagen_path: String) -> void:
 	if error != OK:
 		print("[CardDatabase] Falló request para %s (url: %s): %d" % [card_id, download_url, error])
 		_pending_downloads.erase(card_id)
+		_download_start_ms.erase(card_id)
 		http.queue_free()
 		emit_signal("card_image_loaded", card_id, null)  # notificar fallo inmediato
 		_process_download_queue()
@@ -774,7 +782,13 @@ func _on_image_request_completed(result: int, response_code: int, headers: Packe
 	"""Callback cuando se descarga una imagen"""
 	http.queue_free()
 	_pending_downloads.erase(card_id)
-	# Se saca del dict acá (no solo al usarlo) para no dejar basura pendiente
+	# [DIAG-TIMING] ver _download_card_image() — confirmado (2026-09-11): la
+	# demora es de red real, no código. Gateado, ya no hace falta por defecto.
+	if _download_start_ms.has(card_id):
+		if Constants.VERBOSE_DIAG_LOGS:
+			print("[DIAG-TIMING] descarga %s: %d ms" % [card_id, Time.get_ticks_msec() - _download_start_ms[card_id]])
+		_download_start_ms.erase(card_id)
+	# Se saca del dict aquí (no solo al usarlo) para no dejar basura pendiente
 	# si la descarga falla más abajo — ver _unwrap_broken_cloudinary_fetch().
 	var crop_rect: Variant = _pending_crops.get(card_id)
 	_pending_crops.erase(card_id)

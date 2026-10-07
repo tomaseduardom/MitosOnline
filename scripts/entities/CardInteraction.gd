@@ -39,8 +39,10 @@ func process(_delta: float) -> void:
 	# se disparaba mouse_exited → la escala volvía a 1 → el rect volvía a
 	# su lugar → mouse_entered de nuevo → loop infinito de "salto".
 	# get_local_mouse_position() sí invierte la transform completa (posición,
-	# escala, pivote), así que no tiene este problema.
-	var mouse_over := Rect2(Vector2.ZERO, _card.size).has_point(_card.get_local_mouse_position())
+	# escala, pivote), así que no tiene este problema. _has_point() además respeta
+	# _click_clip_right cuando las cartas están solapadas (en mano o en escalera de oros).
+	var local_mouse = _card.get_local_mouse_position()
+	var mouse_over := _card._has_point(local_mouse)
 	# Si esta carta es un Arma equipada a un Aliado (wielder), el Aliado que está encima
 	# tiene prioridad absoluta sobre el mouse. El Arma solo se activa si el mouse está
 	# sobre la parte expuesta del arma (fuera del área del Aliado).
@@ -63,9 +65,16 @@ func _on_mouse_entered() -> void:
 	if _card.hover_effect:
 		_card.hover_effect.visible = true
 
-	# Guardar z_index original y ponerlo encima de las demás
-	_card.original_z_index = _card.z_index
-	_card.z_index = 100
+	# Guardar z_index original (si no estaba ya elevado) y ponerlo encima de las demás
+	# (Las armas equipadas deben permanecer detrás de su portador en z_index = 0)
+	if _card.wielder == null:
+		if _card.z_index < 100:
+			_card.original_z_index = _card.z_index
+		_card.z_index = 100
+
+	# Quitar temporalmente el recorte de click en hover para que responda completa
+	if _card.has_method("set_click_clip_right"):
+		_card.set_click_clip_right(-1.0)
 
 	_card.emit_signal("card_hovered", _card)
 
@@ -86,8 +95,18 @@ func _on_mouse_exited() -> void:
 	if _card.hover_effect:
 		_card.hover_effect.visible = false
 
-	# Restaurar z_index original
-	_card.z_index = _card.original_z_index
+	# Restaurar z_index y recorte de solapamiento si pertenece a un contenedor con recorte (mano o fila de oros)
+	var parent = _card.get_parent()
+	if parent and parent.has_method("get_card_clip_right"):
+		_card.z_index = _card.get_meta("hand_base_z_index", _card.original_z_index)
+		if _card.has_method("set_click_clip_right"):
+			_card.set_click_clip_right(parent.get_card_clip_right(_card))
+	elif _card.has_meta("gold_click_clip"):
+		_card.z_index = _card.original_z_index
+		if _card.has_method("set_click_clip_right"):
+			_card.set_click_clip_right(_card.get_meta("gold_click_clip", -1.0))
+	else:
+		_card.z_index = _card.original_z_index
 
 	_card.emit_signal("card_unhovered", _card)
 
@@ -106,13 +125,31 @@ func on_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		# Right-click siempre funciona para inspección
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			print("[DIAG] gui_input RIGHT-CLICK llegó a: %s (zona=%s, equipada_en=%s)" % [
-				_card.card_name if _card.get("card_name") else "?",
-				_card.current_zone if _card.get("current_zone") != null else "?",
-				_card.get_parent().name if _card.get_parent() else "sin padre"
-			])
+			if Constants.VERBOSE_DIAG_LOGS:
+				print("[DIAG] gui_input RIGHT-CLICK llegó a: %s (zona=%s, equipada_en=%s)" % [
+					_card.card_name if _card.get("card_name") else "?",
+					_card.current_zone if _card.get("current_zone") != null else "?",
+					_card.get_parent().name if _card.get_parent() else "sin padre"
+				])
 			_card.emit_signal("card_right_clicked", _card)
 			return
+
+		# 2026-09-14, diagnóstico temporal a pedido del usuario ("no puedo
+		# hacer objetivo a los Aliados oponentes, mis Aliados sí") — mismo
+		# criterio que el DIAG de right-click de arriba (§10.7): imprime ANTES
+		# del corte por can_interact para distinguir "el click nunca llegó aquí"
+		# de "llegó pero can_interact era false" o "llegó, pasó, pero el
+		# filtro de la habilidad lo rechazó" (ese último caso ya avisa con su
+		# propio mensaje en CardInteractionModule._resolve_target_selection()).
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			if Constants.VERBOSE_DIAG_LOGS:
+				print("[DIAG] gui_input LEFT-CLICK llegó a: %s (owner=%s, controller=%s, can_interact=%s, zona=%s)" % [
+					_card.card_name if _card.get("card_name") else "?",
+					_card.owner_id if _card.get("owner_id") != null else "?",
+					_card.controller_id if _card.get("controller_id") != null else "?",
+					str(_card.can_interact),
+					_card.current_zone if _card.get("current_zone") != null else "?"
+				])
 
 		# Otras interacciones requieren can_interact
 		if not _card.can_interact:
@@ -133,7 +170,7 @@ func on_gui_input(event: InputEvent) -> void:
 					# su evento igual.
 					# PERO (2026-08-23): en un doble-click REAL sobre ESTA MISMA carta, el
 					# primer press (double_click=false) ya emitio card_clicked -- emitirlo
-					# de nuevo aca duplica el evento y dispara handlers como
+					# de nuevo aquí duplica el evento y dispara handlers como
 					# _declare_attacker() dos veces en paralelo (bug real: un Aliado
 					# atacando "teletransportado" al bando rival por la carrera entre
 					# ambas llamadas). Solo se emite el eco si NO hubo un press simple
@@ -190,6 +227,8 @@ func _start_drag(mouse_pos: Vector2) -> void:
 	"""Inicia el arrastre de la carta"""
 	if not _card.drag_enabled:
 		return
+	if _card.wielder != null:
+		return
 	if _card.current_state != Card.CardState.IN_HAND:
 		if not can_declare_attack_drag():
 			return
@@ -243,6 +282,25 @@ func _end_drag() -> void:
 
 func return_to_hand() -> void:
 	"""Regresa la carta a su posición original (mano o campo) con animación"""
+	if _card.wielder != null and is_instance_valid(_card.wielder):
+		# Arma equipada: anclada a su portador sin top_level
+		_card.current_state = Card.CardState.IN_PLAY
+		_card.top_level = false
+		var slot_idx: int = _card.wielder.equipped_weapons.find(_card) if "equipped_weapons" in _card.wielder else 0
+		if slot_idx < 0:
+			slot_idx = 0
+		var target_pos := Vector2(0.0, Constants.WEAPON_OFFSET_Y + slot_idx * Constants.WEAPON_STACK_STEP_Y)
+		var tween = _card.create_tween()
+		tween.set_parallel(true)
+		tween.tween_property(_card, "position", target_pos, 0.2).set_ease(Tween.EASE_OUT)
+		tween.tween_property(_card, "rotation_degrees", 0.0, 0.2).set_ease(Tween.EASE_OUT)
+		tween.tween_property(_card, "scale", _card.base_scale, 0.2).set_ease(Tween.EASE_OUT)
+		await tween.finished
+		_card.position = target_pos
+		_card.top_level = false
+		_card.z_index = _card.original_z_index
+		return
+
 	# Rotación de destino real (2026-08-30): _card.target_rotation es siempre
 	# 0.0 (la inclinación de descanso en la mano), pero si la carta está
 	# Convertida o Silenciada debe seguir mostrando el giro de 180° — sin esto,

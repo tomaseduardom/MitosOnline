@@ -4,7 +4,7 @@ extends RefCounted
 ## Virtual restringido, o juegan otra carta con descuento (Padre de la
 ## Patria, Don de Amma, Tesoro de los Césares, Miguel, Espada de O'Higgins,
 ## Infernum Vox, Aho, y todas las cartas agregadas 2026-09-06 en adelante).
-## Detectados en CardInspectionLayer._build_ability_buttons() y ruteados acá
+## Detectados en CardInspectionLayer._build_ability_buttons() y ruteados aquí
 ## en vez de al pipeline genérico de habilidades activadas.
 ##
 ## Dividido en dos archivos por tamaño (2026-09-06, "módulos gordos"):

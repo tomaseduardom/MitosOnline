@@ -86,7 +86,7 @@ var _named_ability_locks: Dictionary = {}
 ## habilidad... mientras este Aliado esté en juego") — análogo instance-
 ## based de _named_ability_locks (mismo criterio de auto-expiración
 ## perezosa), a diferencia de silence_card(..., "permanent") que es
-## indefinido de verdad y no debe usarse acá (rompería cartas como
+## indefinido de verdad y no debe usarse aquí (rompería cartas como
 ## Convertir/_execute_targeted_silence, que SÍ son permanentes sin
 ## condición). {card_instance_id: [source_node, ...]}
 var _instance_ability_locks: Dictionary = {}
@@ -111,7 +111,7 @@ var _all_allies_silence_immunity_sources: Array = []
 ## '...No puede perder su habilidad' EN SINGULAR referido a sí misma
 ## (2026-09-04, p.ej. lagrima del dragon: 'Oro Inicial. Indesterrable. No
 ## puede perder su habilidad.') — a diferencia de las dos listas de arriba
-## (que protegen a TERCEROS mientras 'source' siga en juego), acá 'source'
+## (que protegen a TERCEROS mientras 'source' siga en juego), aquí 'source'
 ## se protege a SÍ MISMA.
 var _self_silence_immunity_sources: Array = []
 
@@ -325,7 +325,7 @@ func _check_inherent_keyword(card: Node, keyword: int) -> bool:
 	# Método 1: Verificar cache (resultado de scan_and_apply_keywords) — solo
 	# como atajo cuando SÍ encuentra el keyword. El cache son las keywords
 	# propias de la carta, calculadas una vez al entrar en juego, y no se
-	# actualiza si después se le equipa un Arma — un "no está en cache" acá
+	# actualiza si después se le equipa un Arma — un "no está en cache" aquí
 	# NO es definitivo, hay que seguir a Método 2 (2026-08-26: Cañón Helios
 	# daba Furia al portador, pero este corte impedía que TurnManager.
 	# can_attack() lo viera nunca, porque nunca llegaba a Método 2, que sí
@@ -668,6 +668,34 @@ func _is_card_in_play_generic(card: Node) -> bool:
 	return zone != null and zone in Constants.ZONES_IN_PLAY
 
 
+## 'los Aliados que estén o entren en juego... si tienen Fuerza 0 no pueden
+## disparar sus habilidades' (Tercer Sello, 2026-09-20) — a diferencia de
+## _opponent_type_silence_sources (ligado a que 'source' siga en juego), un
+## Talismán como Tercer Sello resuelve y se va al Cementerio de inmediato,
+## así que este efecto no puede depender de una fuente viva: se apaga solo
+## por CONTEO DE TURNOS, igual que el modificador de Fuerza -3 que lo
+## acompaña (ver SearchOwnZonePatterns.try_execute_tercer_sello_pattern(),
+## mismo valor de 2 pasado a ambos para que se apaguen juntos). GLOBAL
+## (ambos jugadores) y sin registrar cartas puntuales — se evalúa la Fuerza
+## efectiva de cada carta en el momento de la consulta, vía
+## ContinuousEffectManager.get_modified_strength().
+var _zero_strength_ability_lock_turns_remaining: int = 0
+
+
+func register_zero_strength_ability_lock(turns: int) -> void:
+	_zero_strength_ability_lock_turns_remaining = max(_zero_strength_ability_lock_turns_remaining, turns)
+
+
+func _is_silenced_by_zero_strength_lock(card: Node) -> bool:
+	if _zero_strength_ability_lock_turns_remaining <= 0:
+		return false
+	if not is_instance_valid(card) or card.get("card_type") != Constants.CardType.ALIADO:
+		return false
+	if not _is_card_in_play_generic(card):
+		return false
+	return ContinuousEffectManager.get_modified_strength(card) <= 0
+
+
 func is_silenced(card: Node) -> bool:
 	"""Verifica si una carta está silenciada (no debe disparar habilidades).
 	Incluye el silencio por instancia (_silenced_cards) Y el bloqueo por
@@ -682,6 +710,8 @@ func is_silenced(card: Node) -> bool:
 	if is_instance_locked(card):
 		return true
 	if _is_silenced_by_opponent_type_source(card):
+		return true
+	if _is_silenced_by_zero_strength_lock(card):
 		return true
 	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else ""
 	if card_name.is_empty():
@@ -859,6 +889,11 @@ func remove_keyword(card: Node, keyword: int, source: Node = null, duration: Str
 func _on_turn_ended(_player_id: int) -> void:
 	"""Limpia keywords temporales al final del turno"""
 	_cleanup_by_duration("turn")
+	# Tercer Sello (2026-09-20) — mismo criterio de conteo que el modificador
+	# de Fuerza -3 hermano (ContinuousEffectManager, duration=TIMED): se
+	# descuenta en CADA fin de turno de cualquier jugador, no solo el propio.
+	if _zero_strength_ability_lock_turns_remaining > 0:
+		_zero_strength_ability_lock_turns_remaining -= 1
 
 
 func cleanup_combat_keywords() -> void:
@@ -954,6 +989,11 @@ func _get_card_name(card) -> String:
 	"""Helper para obtener nombre de carta"""
 	if card == null:
 		return "null"
-	if card is Node and card.get("card_name") != null:
+	# is_instance_valid() PRIMERO (2026-09-19, misma familia de bug que
+	# ContinuousEffectManager._get_card_id()/_get_card_name()/_resolve_
+	# targets() y ContinuousVisualSync.update_all_card_visuals() — 'is Node'
+	# bare sobre una referencia ya liberada revienta con "Left operand of
+	# 'is' is a previously freed instance").
+	if is_instance_valid(card) and card is Node and card.get("card_name") != null:
 		return card.card_name
 	return "Carta"

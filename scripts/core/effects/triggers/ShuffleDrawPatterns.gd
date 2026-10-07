@@ -26,15 +26,13 @@ func try_execute_shuffle_or_draw_choice_pattern(ability_text: String, controller
 	var lower := ability_text.to_lower()
 	if not ("baraja hasta una carta de coste" in lower and "o roba dos cartas" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main:
 		return true
 
 	var choose_shuffle: bool = await SelectionManager.await_two_choice(
-		main, "Caín", "Barajar hasta una carta en juego (coste 2 o menos)", "Robar dos cartas")
+		main, "Caín", "Barajar hasta una carta en juego (coste 2 o menos)", "Robar dos cartas", controller_id)
 
 	if not choose_shuffle:
 		if await TriggerSystem.open_response_window(card, "Caín", controller_id):
@@ -47,17 +45,19 @@ func try_execute_shuffle_or_draw_choice_pattern(ability_text: String, controller
 	var filter := func(c: Node) -> bool:
 		if c.get("card_cost") == null or ContinuousEffectManager.get_modified_cost(c) > 2:
 			return false
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		return parent in valid_zones
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		return c.get("current_zone") in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]
 	var target: Node = await main._card_interaction.await_target(
-		"Baraja hasta una carta en juego (coste 2 o menos) — ESC para no barajar ninguna", filter)
-	# Sin ventana genérica acá: return_to_deck() ya consulta Prevención adentro.
+		"Baraja hasta una carta en juego (coste 2 o menos) — ESC para no barajar ninguna", filter, true, controller_id)
+	# Sin ventana genérica aquí: return_to_deck() ya consulta Prevención adentro.
 	if target and is_instance_valid(target):
 		var owner: int = target.owner_id if target.get("owner_id") != null else controller_id
 		await ActionModule.return_to_deck(target, owner, true)
 		CardManager.shuffle_deck(owner)
+		AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+			"callable": Callable(AnimationQueue, "animate_shuffle").bind(owner),
+			"description": "Barajar mazo (Caín)"
+		})
 	return true
 
 
@@ -75,8 +75,6 @@ func try_execute_cain_damage_shuffle_search_pattern(isolated_text: String, card:
 	var lower := isolated_text.to_lower()
 	if not ("puedes barajalo" in lower and "buscar dos aliados de coste" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not is_instance_valid(card):
@@ -91,14 +89,17 @@ func try_execute_cain_damage_shuffle_search_pattern(isolated_text: String, card:
 		return true  # nada que buscar — la barajada ni se ofrece (atómico)
 
 	var confirm: bool = await SelectionManager.await_two_choice(
-		main, "Caín", "Barajarlo para buscar hasta 2 Aliados de coste 2 o menos", "No hacer nada")
+		main, "Caín", "Barajarlo para buscar hasta 2 Aliados de coste 2 o menos", "No hacer nada", controller_id)
 	if not confirm:
 		return true
 
 	var pick_amount: int = mini(2, matching.size())
-	var result: Dictionary = await SelectionManager.await_multi_pick(
-		matching, "Elige hasta 2 Aliados de coste 2 o menos", pick_amount, pick_amount, false)
-	var found: Array = result.get("picked", [])
+	# 2026-09-14, a pedido del usuario: click directo (open_reveal_picker)
+	# en vez del modal de lista viejo.
+	var found: Array = []
+	if main._zone_viewer:
+		found = await main._zone_viewer.open_reveal_picker(
+			"Elige hasta 2 Aliados de coste 2 o menos", matching, controller_id, Callable(), pick_amount, false)
 	if found.is_empty():
 		return true
 
@@ -106,28 +107,38 @@ func try_execute_cain_damage_shuffle_search_pattern(isolated_text: String, card:
 	# vuelve a su Castillo y se mezcla.
 	await ActionModule.return_to_deck(card, controller_id, false, card)
 	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (Caín)"
+	})
 
 	for picked_data in found:
 		deck.erase(picked_data)
 
 	var to_play_data: Dictionary = {}
 	if found.size() == 2:
-		to_play_data = await SelectionManager.await_single_pick(
-			found, "Elige cuál de las dos jugar sin pagar su coste (la otra va a tu mano)", false)
+		# 2026-09-14, a pedido del usuario: click directo (open_reveal_picker)
+		# en vez del modal de lista viejo.
+		if main._zone_viewer:
+			var picked_list: Array = await main._zone_viewer.open_reveal_picker(
+				"Elige cuál de las dos jugar sin pagar su coste (la otra va a tu mano)", found, controller_id, Callable(), 1, false)
+			if not picked_list.is_empty():
+				to_play_data = picked_list[0]
 	else:
 		var play_it: bool = await SelectionManager.await_two_choice(
-			main, "Caín", "Jugarla sin pagar su coste", "Ponerla en tu mano")
+			main, "Caín", "Jugarla sin pagar su coste", "Ponerla en tu mano", controller_id)
 		if play_it:
 			to_play_data = found[0]
 
 	if await TriggerSystem.open_response_window(card, str(card.get("card_name")), controller_id):
 		return true
+	var hand_container = main.player_hand if controller_id == 0 else main._opponent_fan
 	for picked_data in found:
 		if picked_data == to_play_data:
-			await main._gold_manager.play_card_for_free(picked_data)
+			await main._gold_manager.play_card_for_free(picked_data, controller_id)
 		else:
 			var hand_node = main._create_card(picked_data, false)
-			main.player_hand.add_card(hand_node)
+			hand_container.add_card(hand_node)
 			main._connect_card_signals(hand_node)
 
 	if main.get("_zone_manager"):
@@ -145,24 +156,24 @@ func try_execute_shuffle_cost_max_three_pattern(ability_text: String, controller
 	var lower := ability_text.to_lower()
 	if not ("baraja una carta de coste 3 o menos o anula un talismán oponente" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._card_interaction:
 		return true
 	var filter := func(c: Node) -> bool:
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		if parent not in valid_zones:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 			return false
 		return ContinuousEffectManager.get_modified_cost(c) <= 3
-	var target: Node = await main._card_interaction.await_target("Elige una carta de coste 3 o menos para barajar", filter)
+	var target: Node = await main._card_interaction.await_target("Elige una carta de coste 3 o menos para barajar", filter, true, controller_id)
 	if target and is_instance_valid(target):
 		var target_owner: int = target.controller_id if target.get("controller_id") != null else controller_id
 		if await ActionModule.return_to_deck(target, target_owner, true):
 			CardManager.shuffle_deck(target_owner)
+			AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+				"callable": Callable(AnimationQueue, "animate_shuffle").bind(target_owner),
+				"description": "Barajar mazo (vision heroica)"
+			})
 	return true
 
 
@@ -177,26 +188,26 @@ func try_execute_shuffle_cost_max_two_draw_two_pattern(ability_text: String, con
 	var lower := ability_text.to_lower()
 	if not ("baraja una carta de coste 2 o menos y roba dos cartas" in lower and "en respuesta a que se juegue una carta sin pagar su coste" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._card_interaction:
 		return true
 	var filter := func(c: Node) -> bool:
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		if parent not in valid_zones:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 			return false
 		return ContinuousEffectManager.get_modified_cost(c) <= 2
-	var target: Node = await main._card_interaction.await_target("Elige una carta de coste 2 o menos para barajar", filter)
+	var target: Node = await main._card_interaction.await_target("Elige una carta de coste 2 o menos para barajar", filter, true, controller_id)
 	if await TriggerSystem.open_response_window(card, "el caleuche", controller_id):
 		return true
 	if target and is_instance_valid(target):
 		var target_owner: int = target.controller_id if target.get("controller_id") != null else controller_id
 		if await ActionModule.return_to_deck(target, target_owner, true):
 			CardManager.shuffle_deck(target_owner)
+			AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+				"callable": Callable(AnimationQueue, "animate_shuffle").bind(target_owner),
+				"description": "Barajar mazo (el caleuche)"
+			})
 	await ActionModule.draw(controller_id, 2, "etb_trigger", true)
 	return true
 
@@ -212,8 +223,6 @@ func try_execute_attacks_alone_draw_pattern(ability_text: String, controller_id:
 	var lower := ability_text.to_lower()
 	if not ("cuando ataque solo" in lower and "roba una carta" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if GameManager.attackers.size() != 1:
 		return true  # condición 'solo' no cumplida
 	if await TriggerSystem.open_response_window(card, "manuel rodriguez", controller_id):
@@ -234,8 +243,6 @@ func try_execute_shuffle_one_in_play_and_four_cemetery_pattern(ability_text: Str
 	var lower := ability_text.to_lower()
 	if not ("baraja hasta una carta de coste 2 o menos y hasta cuatro cartas de los cementerios" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	var main := _main.get_node_or_null("/root/Main")
 	if not main:
 		return true
@@ -252,47 +259,46 @@ func try_execute_shuffle_one_in_play_and_four_cemetery_pattern(ability_text: Str
 		for c in field.get_children():
 			if is_instance_valid(c) and int(ContinuousEffectManager.get_modified_cost(c)) <= 2:
 				in_play_candidates.append(c)
-	if not in_play_candidates.is_empty():
-		var display1: Array = in_play_candidates.map(func(c): return c.card_data)
-		var picked1: Dictionary = await SelectionManager.await_single_pick(
-			display1, "Elige hasta una carta de coste 2 o menos para Barajar (ESC para omitir)", true, 0)
-		if not picked1.is_empty():
-			for c in in_play_candidates:
-				if c.card_data == picked1 and is_instance_valid(c):
-					var owner_id: int = c.owner_id if c.get("owner_id") != null else 0
-					var data: Dictionary = c.card_data.duplicate()
-					data["esta_oculta"] = true
-					var parent = c.get_parent()
-					if parent:
-						parent.remove_child(c)
-					c.queue_free()
-					CardManager.get_deck(owner_id).append(data)
-					CardManager.shuffle_deck(owner_id)
-					break
+	# 2026-09-13, a pedido del usuario: click directo en vez de los modales
+	# de lista viejos.
+	if not in_play_candidates.is_empty() and main._card_interaction:
+		var in_play_filter := func(c: Node) -> bool: return c in in_play_candidates
+		var picked1_node: Node = await main._card_interaction.await_target(
+			"Elige hasta una carta de coste 2 o menos para Barajar (ESC para omitir)", in_play_filter, true, controller_id)
+		if picked1_node and is_instance_valid(picked1_node):
+			var owner_id: int = picked1_node.owner_id if picked1_node.get("owner_id") != null else 0
+			var data: Dictionary = picked1_node.card_data.duplicate()
+			data["esta_oculta"] = true
+			var parent = picked1_node.get_parent()
+			if parent:
+				parent.remove_child(picked1_node)
+			picked1_node.queue_free()
+			CardManager.get_deck(owner_id).append(data)
+			CardManager.shuffle_deck(owner_id)
+			AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+				"callable": Callable(AnimationQueue, "animate_shuffle").bind(owner_id),
+				"description": "Barajar mazo (amazona desafiante)"
+			})
 
 	# Parte 2: hasta cuatro cartas de los Cementerios (barajar, no desterrar
 	# — a diferencia de Ofrendas al Dragón, esta carta no ofrece la opción
 	# de Destierro).
-	var cemetery_candidates: Array = []
-	for owner_id in [0, 1]:
-		for d in CardManager.get_cemetery(owner_id):
-			cemetery_candidates.append({"data": d, "owner": owner_id})
-	if not cemetery_candidates.is_empty():
-		var display2: Array = cemetery_candidates.map(func(c): return c.data)
-		var result2: Dictionary = await SelectionManager.await_multi_pick(
-			display2, "Elige hasta cuatro cartas de los Cementerios para Barajar", 4, 0, true)
-		var chosen2: Array = result2.get("picked", [])
-		for picked_data in chosen2:
-			for c in cemetery_candidates:
-				if c.data == picked_data:
-					var idx: int = CardManager.get_cemetery(c.owner).find(picked_data)
-					if idx >= 0:
-						CardManager.remove_from_cemetery(c.owner, idx)
-						var data2: Dictionary = picked_data.duplicate()
-						data2["esta_oculta"] = true
-						CardManager.get_deck(c.owner).append(data2)
-						CardManager.shuffle_deck(c.owner)
-					break
+	if main._zone_viewer:
+		var no_filter := func(_c: Node) -> bool: return true
+		var picked2: Array = await main._zone_viewer.open_cemetery_target_picker(
+			"Elige hasta cuatro cartas de los Cementerios para Barajar", no_filter, 4, "cemetery", false, false, controller_id)
+		for entry in picked2:
+			var idx: int = CardManager.get_cemetery(entry.owner_id).find(entry.data)
+			if idx >= 0:
+				CardManager.remove_from_cemetery(entry.owner_id, idx)
+				var data2: Dictionary = entry.data.duplicate()
+				data2["esta_oculta"] = true
+				CardManager.get_deck(entry.owner_id).append(data2)
+				CardManager.shuffle_deck(entry.owner_id)
+				AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+					"callable": Callable(AnimationQueue, "animate_shuffle").bind(entry.owner_id),
+					"description": "Barajar mazo (amazona desafiante)"
+				})
 	return true
 
 
@@ -303,40 +309,38 @@ func try_execute_shuffle_any_cemetery_or_exile_into_castillo_then_draw_pattern(a
 	tu Castillo y Roba tres cartas' (Abrazo de Maipú, 2026-09-04) — 'tu'
 	restringe el pool al propio Cementerio+Destierro (a diferencia de 'los
 	Cementerios'), cada carta vuelve a SU Castillo (siempre el mismo,
-	propio, acá)."""
+	propio, aquí)."""
 	var lower := ability_text.to_lower()
 	if not ("baraja cualquier cantidad de cartas de tu cementerio y destierro en tu castillo" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if await TriggerSystem.open_response_window(card, "Abrazo de Maipú", controller_id):
 		return true
 
-	var cemetery: Array = CardManager.get_cemetery(controller_id)
-	var exile: Array = CardManager.get_exile(controller_id)
-	var pool: Array = []
-	for d in cemetery:
-		pool.append({"data": d, "from": "cemetery"})
-	for d in exile:
-		pool.append({"data": d, "from": "exile"})
-	if not pool.is_empty():
-		var display_data: Array = []
-		for p in pool:
-			display_data.append(p.data)
-		var result: Dictionary = await SelectionManager.await_multi_pick(
-			display_data, "Baraja cualquier cantidad de cartas de tu Cementerio y Destierro en tu Castillo", pool.size(), 0, true)
-		for picked_data in result.get("picked", []):
-			for p in pool:
-				if p.data == picked_data:
-					if p.from == "cemetery":
-						var idx: int = cemetery.find(picked_data)
-						if idx >= 0:
-							CardManager.remove_from_cemetery(controller_id, idx)
-					else:
-						exile.erase(picked_data)
-					CardManager.get_deck(controller_id).append(picked_data)
-					break
-		CardManager.shuffle_deck(controller_id)
+	# 2026-09-13, a pedido del usuario: click directo combinando Cementerio Y
+	# Destierro propios en un solo popup (zone_type="cemetery_and_exile",
+	# nuevo en ZoneViewerModule.open_cemetery_target_picker()), con botón
+	# "Seleccionar todo" — el texto real es 'cualquier cantidad', sin tope,
+	# y clickear una por una sería tedioso con muchas cartas acumuladas.
+	var main := _main.get_node_or_null("/root/Main")
+	if main and main._zone_viewer:
+		var own_only := func(c: Node) -> bool: return c.owner_id == controller_id
+		var picked: Array = await main._zone_viewer.open_cemetery_target_picker(
+			"Baraja cualquier cantidad de cartas de tu Cementerio y Destierro en tu Castillo",
+			own_only, -1, "cemetery_and_exile", false, true, controller_id)
+		for entry in picked:
+			if entry.zone_type == "cemetery":
+				var idx: int = CardManager.get_cemetery(controller_id).find(entry.data)
+				if idx >= 0:
+					CardManager.remove_from_cemetery(controller_id, idx)
+			else:
+				CardManager.get_exile(controller_id).erase(entry.data)
+			CardManager.get_deck(controller_id).append(entry.data)
+		if not picked.is_empty():
+			CardManager.shuffle_deck(controller_id)
+			AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+				"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+				"description": "Barajar mazo (Abrazo de Maipú)"
+			})
 
 	await ActionModule.draw(controller_id, 3, "etb_trigger", true)
 	return true
@@ -354,12 +358,10 @@ func try_execute_shuffle_banish_four_cemeteries_pattern(ability_text: String, co
 	var lower := ability_text.to_lower()
 	if not ("baraja y/o destierra hasta cuatro cartas de los cementerios" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager:
 		return true
-	await main._gold_manager._resolve_armeria_barajar_desterrar(4, "Ofrendas al Dragón")
+	await main._gold_manager._resolve_armeria_barajar_desterrar(4, "Ofrendas al Dragón", controller_id)
 	return true
 
 
@@ -372,19 +374,17 @@ func try_execute_shuffle_banish_cemeteries_then_destroy_or_draw_pattern(ability_
 	var lower := ability_text.to_lower()
 	if not ("baraja y/o destierra hasta tres cartas de los cementerios y elige entre destruir una carta de coste 2 o menos o robar dos cartas" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager or not main._card_interaction:
 		return true
-	await main._gold_manager._resolve_armeria_barajar_desterrar(3, str(card.get("card_name")))
+	await main._gold_manager._resolve_armeria_barajar_desterrar(3, str(card.get("card_name")), controller_id)
 
 	var choose_destroy: bool = await SelectionManager.await_two_choice(
-		main, str(card.get("card_name")), "Destruir una carta de coste 2 o menos", "Robar dos cartas")
+		main, str(card.get("card_name")), "Destruir una carta de coste 2 o menos", "Robar dos cartas", controller_id)
 	if choose_destroy:
 		var target: Node = await TriggerSystem._targeted_executor._select_destroy_target_cost_filter(
-			"Elige una carta de coste 2 o menos para destruir", 2)
+			"Elige una carta de coste 2 o menos para destruir", 2, controller_id)
 		if target and is_instance_valid(target):
 			await ActionModule.destroy([target], card, true, true)
 	else:
@@ -402,33 +402,33 @@ func try_execute_draw_or_raise_cemetery_ally_pattern(ability_text: String, contr
 	var lower := ability_text.to_lower()
 	if not ("roba una carta o sube un aliado de tu cementerio a tu mano" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main:
 		return true
 	var choose_draw: bool = await SelectionManager.await_two_choice(
-		main, "Príncipe Orión", "Robar una carta", "Subir un Aliado de tu Cementerio a tu mano")
+		main, "Príncipe Orión", "Robar una carta", "Subir un Aliado de tu Cementerio a tu mano", controller_id)
 	if await TriggerSystem.open_response_window(card, "Príncipe Orión", controller_id):
 		return true
 	if choose_draw:
 		await ActionModule.draw(controller_id, 1, "etb_trigger", true)
-	else:
-		var own_cemetery: Array = CardManager.get_cemetery(controller_id)
-		var eligible: Array = own_cemetery.filter(func(d): return d.get("tipo", -1) == Constants.CardType.ALIADO)
-		if eligible.is_empty():
+	elif main._zone_viewer:
+		# 2026-09-13, a pedido del usuario: click directo en el propio
+		# Cementerio en vez del modal de lista viejo.
+		var eligible_filter := func(c: Node) -> bool:
+			return c.owner_id == controller_id and c.get("card_type") == Constants.CardType.ALIADO
+		var picked: Array = await main._zone_viewer.open_cemetery_target_picker(
+			"Sube un Aliado de tu Cementerio a tu mano", eligible_filter, 1, "cemetery", false, false, controller_id)
+		if picked.is_empty():
 			return true
-		var picked_data: Dictionary = await SelectionManager.await_single_pick(
-			eligible, "Sube un Aliado de tu Cementerio a tu mano")
-		if picked_data.is_empty():
-			return true
-		var idx: int = own_cemetery.find(picked_data)
+		var picked_data: Dictionary = picked[0].data
+		var idx: int = CardManager.get_cemetery(controller_id).find(picked_data)
 		if idx < 0:
 			return true
 		CardManager.remove_from_cemetery(controller_id, idx)
 		var card_node = main._create_card(picked_data, false)
-		main.player_hand.add_card(card_node)
+		var hand_container_orion = main.player_hand if controller_id == 0 else main._opponent_fan
+		hand_container_orion.add_card(card_node)
 		main._connect_card_signals(card_node)
 	return true
 
@@ -441,8 +441,6 @@ func try_execute_shuffle_up_to_one_ally_pattern(ability_text: String, card: Node
 	var lower := ability_text.to_lower()
 	if not ("cuando entra en juego, baraja hasta un aliado" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._card_interaction:
@@ -451,15 +449,18 @@ func try_execute_shuffle_up_to_one_ally_pattern(ability_text: String, card: Node
 		"Elige un Aliado para barajar (opcional)", func(c: Node) -> bool:
 			if c.get("card_type") != Constants.CardType.ALIADO:
 				return false
-			var parent = c.get_parent()
-			return parent in [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-				main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo])
-	# Sin ventana genérica acá (2026-09-09): return_to_deck() ya consulta
+			# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+			return c.get("current_zone") in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO], true, controller_id)
+	# Sin ventana genérica aquí (2026-09-09): return_to_deck() ya consulta
 	# Prevención adentro por su cuenta.
 	if target and is_instance_valid(target):
 		var target_owner: int = target.controller_id if target.get("controller_id") != null else controller_id
 		if await ActionModule.return_to_deck(target, target_owner, true, card):
 			CardManager.shuffle_deck(target_owner)
+			AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+				"callable": Callable(AnimationQueue, "animate_shuffle").bind(target_owner),
+				"description": "Barajar mazo (blanca nieves)"
+			})
 	return true
 
 
@@ -476,8 +477,6 @@ func try_execute_draw_then_discard_pattern(ability_text: String, controller_id: 
 	var m := rx.search(lower)
 	if not m:
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var draw_amount: int = UniversalCardParser._parse_amount(m.get_string(1))
 	var discard_amount: int = UniversalCardParser._parse_amount(m.get_string(2))
@@ -487,11 +486,12 @@ func try_execute_draw_then_discard_pattern(ability_text: String, controller_id: 
 		await ActionModule.draw(controller_id, draw_amount, "etb_trigger", true)
 	if discard_amount > 0:
 		var main := _main.get_node_or_null("/root/Main")
-		if main and main.player_hand:
-			var hand_cards: Array = main.player_hand.cards.duplicate()
+		var hand_container_kaitai = (main.player_hand if controller_id == 0 else main._opponent_fan) if main else null
+		if main and hand_container_kaitai:
+			var hand_cards: Array = hand_container_kaitai.cards.duplicate()
 			discard_amount = mini(discard_amount, hand_cards.size())
 			if discard_amount > 0:
-				var to_discard: Array = await _main._targeted_executor._select_hand_cards_for_discard(hand_cards, discard_amount)
+				var to_discard: Array = await _main._targeted_executor._select_hand_cards_for_discard(hand_cards, discard_amount, controller_id)
 				if not to_discard.is_empty():
 					await ActionModule.discard(controller_id, to_discard, "etb_trigger", true)
 	return true
@@ -506,30 +506,30 @@ func try_execute_shuffle_non_gold_or_draw_two_pattern(ability_text: String, card
 	var lower := ability_text.to_lower()
 	if not ("baraja hasta una carta que no sea oro o roba dos cartas" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._card_interaction:
 		return true
 	var choose_shuffle: bool = await SelectionManager.await_two_choice(
-		main, "rafael", "Barajar hasta una carta que no sea Oro", "Robar dos cartas")
+		main, "rafael", "Barajar hasta una carta que no sea Oro", "Robar dos cartas", controller_id)
 
 	if choose_shuffle:
 		var filter := func(c: Node) -> bool:
 			if c.get("card_type") == Constants.CardType.ORO:
 				return false
-			var parent = c.get_parent()
-			var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-				main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-			return parent in valid_zones
-		var target: Node = await main._card_interaction.await_target("Elige una carta que no sea Oro para barajar (opcional)", filter)
-		# Sin ventana genérica acá (2026-09-09): return_to_deck() ya consulta
+			# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+			return c.get("current_zone") in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]
+		var target: Node = await main._card_interaction.await_target("Elige una carta que no sea Oro para barajar (opcional)", filter, true, controller_id)
+		# Sin ventana genérica aquí (2026-09-09): return_to_deck() ya consulta
 		# Prevención adentro por su cuenta.
 		if target and is_instance_valid(target):
 			var target_owner: int = target.controller_id if target.get("controller_id") != null else controller_id
 			if await ActionModule.return_to_deck(target, target_owner, true, card):
 				CardManager.shuffle_deck(target_owner)
+				AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+					"callable": Callable(AnimationQueue, "animate_shuffle").bind(target_owner),
+					"description": "Barajar mazo (rafael)"
+				})
 	elif not await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
 		await ActionModule.draw(controller_id, 2, "etb_trigger", true)
 	return true
@@ -543,14 +543,12 @@ func try_execute_draw_or_search_ally_or_gold_pattern(ability_text: String, card:
 	var lower := ability_text.to_lower()
 	if not ("roba dos cartas o busca un aliado u oro en tu castillo" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main:
 		return true
 	var choose_draw: bool = await SelectionManager.await_two_choice(
-		main, "Escarapela Nacional", "Robar dos cartas", "Buscar un Aliado u Oro en tu Castillo")
+		main, "Escarapela Nacional", "Robar dos cartas", "Buscar un Aliado u Oro en tu Castillo", controller_id)
 	if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
 		return true
 	if choose_draw:

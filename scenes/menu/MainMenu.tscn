@@ -2,8 +2,8 @@
 
 [ext_resource type="Script" path="res://scripts/menu/MainMenu.gd" id="1_script"]
 [ext_resource type="Texture2D" path="res://fondo_inicio.png" id="2_background"]
-[ext_resource type="FontFile" uid="uid://cinzel_bold" path="res://assets/fonts/Cinzel-Bold.ttf" id="3_font_title"]
-[ext_resource type="FontFile" uid="uid://marcellus_reg" path="res://assets/fonts/Marcellus-Regular.ttf" id="4_font_medieval"]
+[ext_resource type="FontFile" uid="uid://c4o8my2eqi3aj" path="res://assets/fonts/Cinzel-Bold.ttf" id="3_font_title"]
+[ext_resource type="FontFile" uid="uid://bamah0jf3ujug" path="res://assets/fonts/Marcellus-Regular.ttf" id="4_font_medieval"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button"]
 bg_color = Color(0.06, 0.05, 0.09, 0.92)
@@ -117,9 +117,9 @@ anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
 offset_left = -160.0
-offset_top = 40.0
+offset_top = 12.0
 offset_right = 160.0
-offset_bottom = 472.0
+offset_bottom = 356.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 16
@@ -137,18 +137,18 @@ theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "JUGAR"
 
-[node name="OnlineButton" type="Button" parent="VBoxContainer"]
+[node name="ShadowForgeButton" type="Button" parent="VBoxContainer"]
 custom_minimum_size = Vector2(320, 56)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 theme_override_fonts/font = ExtResource("4_font_medieval")
-theme_override_colors/font_color = Color(0.75, 0.88, 1, 1)
-theme_override_colors/font_hover_color = Color(0.55, 0.8, 1, 1)
+theme_override_colors/font_color = Color(0.85, 1, 0.75, 1)
+theme_override_colors/font_hover_color = Color(0.6, 1, 0.5, 1)
 theme_override_font_sizes/font_size = 26
 theme_override_styles/normal = SubResource("StyleBoxFlat_button")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
-text = "JUGAR ONLINE"
+text = "SHADOWFORGE"
 
 [node name="DecksButton" type="Button" parent="VBoxContainer"]
 custom_minimum_size = Vector2(320, 56)
@@ -175,19 +175,6 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_button")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "DORSOS"
-
-[node name="TestButton" type="Button" parent="VBoxContainer"]
-custom_minimum_size = Vector2(320, 56)
-layout_mode = 2
-mouse_default_cursor_shape = 2
-theme_override_fonts/font = ExtResource("4_font_medieval")
-theme_override_colors/font_color = Color(0.75, 0.95, 0.85, 1)
-theme_override_colors/font_hover_color = Color(0.5, 1, 0.7, 1)
-theme_override_font_sizes/font_size = 22
-theme_override_styles/normal = SubResource("StyleBoxFlat_button")
-theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
-theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
-text = "TESTEO"
 
 [node name="ExitButton" type="Button" parent="VBoxContainer"]
 custom_minimum_size = Vector2(320, 56)

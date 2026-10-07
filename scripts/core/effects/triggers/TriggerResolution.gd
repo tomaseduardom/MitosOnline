@@ -50,11 +50,39 @@ func resolve_next_trigger() -> Dictionary:
 	_main.current_trigger_for_response = trigger
 	_main.awaiting_response = true
 
-	print("[TriggerSystem] Resolviendo trigger de inmediato: %s" % card.card_name)
-	_main.emit_signal("waiting_for_responses", trigger, opponent_id)
+	print("[TriggerSystem] Resolviendo trigger: %s" % card.card_name)
+	# waiting_for_responses YA NO se emite aquí (2026-09-19, §10.53) — su único
+	# oyente real, ResponseWindowHandler._on_trigger_waiting_for_responses()
+	# (el diálogo viejo de Signo Amarillo), cancelaba vía TriggerSystem.
+	# cancel_current_trigger()/pending_cancel_callback, que solo
+	# _wait_for_response_window() leía — con open_response_window() reemplazándola
+	# más abajo, ese flag ya no lo consume nadie, así que ese diálogo viejo
+	# quedaría clickeable pero roto (el 'Sí, cancelar' no cancelaría nada de
+	# verdad). Signo Amarillo sigue ofreciéndose igual, por el camino nuevo:
+	# ResponseWindowHandler._on_step_d_waiting()/_offer_signo_amarillo_for_step_d(),
+	# que ya escucha ActionPipeline.step_d_waiting — la señal que SÍ emite
+	# open_response_window() de abajo para CUALQUIER objeto de la Pila,
+	# trigger o no. Ver docstrings actualizados de _wait_for_response_window()
+	# y _on_trigger_waiting_for_responses() (huérfanos, no borrados).
 
-	# Esperar respuesta o timeout
-	var was_cancelled = await _wait_for_response_window()
+	# 2026-09-19 (arquitectura.md §10.53, a pedido explícito y repetido del
+	# usuario: "que el sistema se abra por carta jugada o habilidad activada
+	# o disparada"). Antes esto llamaba _wait_for_response_window(), que —
+	# a propósito, desde 2026-08-17, cuando el bot no tenía NINGUNA lógica de
+	# respuesta real — resolvía el trigger casi al instante sin abrir ninguna
+	# ventana de prioridad real, salvo el caso puntual de Signo Amarillo (ver
+	# _wait_for_response_window() más abajo, que queda sin llamador después
+	# de este cambio — no se borró, ver su propio docstring actualizado).
+	# Ahora reusa el mismo mecanismo genérico que ya usan los ~40 patrones
+	# "mira/muestra" y CUALQUIER carta jugada (GoldManager._trigger_enter_play(),
+	# EasyBotController, §10.53) — TriggerSystem.open_response_window(), Pila
+	# de Respuesta Universal: abre un objeto no-op real en ActionPipeline, así
+	# que el rival (humano o bot) recibe el mismo Paso D real, con el mismo
+	# brillo celeste/botón de Anular (§10.51) y el mismo auto-pase (§10.52)
+	# que cualquier otro objeto de la Pila — para CUALQUIER trigger, no solo
+	# los ~40 patrones que ya lo llamaban a mano.
+	var was_cancelled: bool = await _main.open_response_window(
+		card, str(card.card_name) if card.get("card_name") else trigger_type, controller_id)
 
 	if was_cancelled:
 		_main.awaiting_response = false
@@ -72,7 +100,7 @@ func resolve_next_trigger() -> Dictionary:
 	# Pila de Respuesta Universal (open_response_window(), agregada hoy a
 	# ~40 patrones de trigger) abre una ventana de prioridad REAL desde
 	# DENTRO de _execute_trigger_effect(). Antes, awaiting_response se
-	# apagaba ACÁ ARRIBA, antes de ejecutar el efecto — así que esa ventana
+	# apagaba AQUÍ ARRIBA, antes de ejecutar el efecto — así que esa ventana
 	# anidada quedaba fuera de la guardia que PhaseFlowController.
 	# _on_priority_both_passed_main() ya tenía para "no reacciones a una
 	# ventana anidada de un trigger, es suya" (comentario propio de ese
@@ -93,6 +121,16 @@ func _wait_for_response_window() -> bool:
 	"""Resuelve el trigger de inmediato, sin abrir una ventana de prioridad.
 	Returns: true si fue cancelado, false si pasó
 
+	2026-09-19, §10.53: SIN LLAMADOR HOY A PROPÓSITO — resolve_next_trigger()
+	pasó a llamar TriggerSystem.open_response_window() directo (una ventana de
+	prioridad REAL para CUALQUIER trigger, a pedido del usuario), reemplazando
+	esta espera corta. _signo_amarillo_response_available()/_find_signo_
+	amarillo() (más abajo) quedan huérfanas con ella — Signo Amarillo se sigue
+	ofreciendo igual, pero por ResponseWindowHandler._offer_signo_amarillo_
+	for_step_d() (escucha ActionPipeline.step_d_waiting, que open_response_
+	window() sí emite). No se borró: documenta el diseño de 2026-08-17 (abajo)
+	por si algún día hace falta volver a un modo "sin fricción" opcional.
+
 	Antes abría una ventana real vía PriorityManager y esperaba a que el
 	oponente (bot) le pasara la prioridad — mecánicamente funcionaba, pero
 	el bot nunca responde nada de verdad todavía (no hay IA real), así que
@@ -107,7 +145,7 @@ func _wait_for_response_window() -> bool:
 	rival controla un Oro sin convertir con el texto de Signo Amarillo, ahí
 	sí hay algo real que puede pasar — se espera de verdad a que responda.
 	resolve_next_trigger() ya emitió waiting_for_responses ANTES de llamar
-	acá (línea de arriba, sin condición) — CardInspectionLayer la escucha y
+	aquí (línea de arriba, sin condición) — CardInspectionLayer la escucha y
 	solo muestra el botón de Signo Amarillo si encuentra uno disponible, así
 	que no hace falta emitir de nuevo, solo esperar. En cualquier otro caso
 	se sigue resolviendo al instante, sin fricción."""
@@ -203,6 +241,36 @@ func _resolve_look_and_play_patterns(card: Node, full_ability_text: String, isol
 	por la cola de triggers — 2026-08-27, a pedido del usuario: 'los
 	Talismanes no disparan, resuelven').
 	Returns: true si algo se ejecutó."""
+	# Habilidades ACTIVADAS de Tótems (2026-09-20, arquitectura.md "539
+	# cartas sin cobertura") — llegan aquí también vía TriggerSystem.
+	# resolve_ability_effect() (mismo camino compartido que los triggers,
+	# ver ese comentario), así que se chequean primero, junto al resto.
+	if await _main._totem_patterns.try_execute_kotoku_in_vigilia_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._totem_patterns.try_execute_metropolitan_vigilia_convert_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._totem_patterns.try_execute_rueda_fortuna_reveal_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._totem_patterns.try_execute_rueda_fortuna_sacrifice_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._totem_patterns.try_execute_estacion_fantasma_name_pattern(full_ability_text, card, controller_id):
+		return true
+	# Habilidades ACTIVADAS de Armas (2026-09-20, arquitectura.md "539
+	# cartas sin cobertura") — mismo camino compartido que las de Tótems
+	# arriba, cada una con su propia guardia 'el portador gana' contra el
+	# falso positivo de on_enter_play (ver comentarios en WeaponAbilityPatterns.gd).
+	if await _main._weapon_patterns.try_execute_canon_naval_shared_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._weapon_patterns.try_execute_sable_corto_vigilia_pattern(full_ability_text, card, controller_id):
+		return true
+	# Habilidades ACTIVADAS de Oros (2026-09-20, arquitectura.md "539 cartas
+	# sin cobertura") — mismo camino compartido que Tótems/Armas arriba,
+	# cada una con su propia guardia de texto contra el falso positivo de
+	# on_enter_play/on_turn_end (ver OroAbilityPatterns.gd).
+	if await _main._oro_patterns.try_execute_udjat_vigilia_pattern(full_ability_text, card, controller_id):
+		return true
+	if await _main._oro_patterns.try_execute_libro_de_thoth_pay_pattern(full_ability_text, card, controller_id):
+		return true
 	if await _main._look_and_play.try_execute_look_pick_pattern(full_ability_text, controller_id, card):
 		return true
 	if await _main._look_and_play.try_execute_look_play_free_pattern(full_ability_text, card, controller_id):
@@ -248,6 +316,8 @@ func _resolve_look_and_play_patterns(card: Node, full_ability_text: String, isol
 	if await _main._look_and_play.try_execute_shuffle_up_to_one_ally_pattern(full_ability_text, card, controller_id):
 		return true
 	if await _main._look_and_play.try_execute_reveal_until_ally_and_weapon_pattern(full_ability_text, controller_id, card):
+		return true
+	if await _main._look_and_play.try_execute_reveal_until_ally_and_talisman_pattern(full_ability_text, controller_id, card):
 		return true
 	if await _main._look_and_play.try_execute_search_two_distinct_names_banish_or_cemetery_pattern(full_ability_text, card, controller_id):
 		return true
@@ -370,9 +440,25 @@ func _resolve_look_and_play_patterns(card: Node, full_ability_text: String, isol
 		return true
 	if await _main._look_and_play.try_execute_search_two_oros_split_destination_pattern(isolated_ability_text, card, controller_id):
 		return true
+	if await _main._look_and_play.try_execute_primer_sello_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_segundo_sello_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_tercer_sello_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_cuarto_sello_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_quinto_sello_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_sexto_sello_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._look_and_play.try_execute_septimo_sello_pattern(isolated_ability_text, card, controller_id):
+		return true
 	if await _main._convert_misc_resolver.try_execute_name_a_card_pattern(isolated_ability_text, card, controller_id):
 		return true
 	if await _main._convert_misc_resolver.try_execute_no_allies_convert_castillo_top_pattern(isolated_ability_text, card, controller_id):
+		return true
+	if await _main._convert_misc_resolver.try_execute_jabberwocky_convert_opponent_top_pattern(full_ability_text, card, controller_id):
 		return true
 	if await _main._convert_misc_resolver.try_execute_opponent_discard_and_draw_pattern(isolated_ability_text, card, controller_id):
 		return true
@@ -388,10 +474,14 @@ func _resolve_look_and_play_patterns(card: Node, full_ability_text: String, isol
 		return true
 	if await _main._draw_shuffle_resolver.try_execute_banish_up_to_n_cemeteries_pattern(isolated_ability_text, controller_id, card):
 		return true
+	if await _main._draw_shuffle_resolver.try_execute_shuffle_or_banish_cemeteries_equal_to_strength_pattern(isolated_ability_text, controller_id, card):
+		return true
 	if await _main._draw_shuffle_resolver.try_execute_banish_cemeteries_equal_to_own_strength_pattern(isolated_ability_text, card, controller_id):
 		return true
-	if await _main._draw_shuffle_resolver.try_execute_banish_up_to_n_cemeteries_then_draw_pattern(isolated_ability_text, controller_id, card):
-		return true
+	# try_execute_banish_up_to_n_cemeteries_then_draw_pattern() ELIMINADA
+	# (2026-09-13) — código muerto, siempre interceptada antes por
+	# try_execute_banish_from_cemeteries_and_draw_pattern() (línea ~379,
+	# chequeo más suelto). Ver arquitectura.md §10.21.
 	if await _main._draw_shuffle_resolver.try_execute_draw_and_shuffle_hand_pattern(isolated_ability_text, controller_id, card):
 		return true
 	if await _main._draw_shuffle_resolver.try_execute_draw_and_shuffle_opponent_card_pattern(isolated_ability_text, controller_id, card):
@@ -418,7 +508,7 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 	# Verificar si la carta tiene un handler ESPECÍFICO para este trigger
 	# (Card.effect_handlers) — 'handled' solo queda true si de verdad hizo
 	# algo. Antes, cualquier Card (TODAS tienen _on_trigger_event definido
-	# en la clase base) cortaba acá sin importar el resultado, así que el
+	# en la clase base) cortaba aquí sin importar el resultado, así que el
 	# fallback bueno de más abajo (aísla la oración correcta, reconoce
 	# SEARCH/DESTROY/BUFF/etc.) nunca se ejecutaba — Card._on_trigger_event()
 	# caía en su propio _resolve_default_effect(), un escaneo de palabras
@@ -427,7 +517,7 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 	# una habilidad de Oro totalmente distinta más adelante, terminaba
 	# robando una carta en vez de buscar). _resolve_default_effect() se
 	# eliminó y _on_trigger_event() ahora marca no_handler=true cuando no
-	# hay handler específico, dejando pasar la ejecución hasta acá.
+	# hay handler específico, dejando pasar la ejecución hasta aquí.
 	var handled := false
 	if card.has_method("_on_trigger_event"):
 		var effect_callable: Callable = card._on_trigger_event
@@ -449,7 +539,7 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 				full_ability_text = card.card_data.get("habilidad", "")
 			# Aislar la(s) oración(es) de ENTRA (2026-08-22, mismo bug que
 			# on_attack/on_damage_dealt de más abajo, nunca se había
-			# corregido acá): una carta puede tener "Cuando entra en juego,
+			# corregido aquí): una carta puede tener "Cuando entra en juego,
 			# X.\nEn tu Fase Final, Y." en el mismo bloque — sin aislar,
 			# extract_action() podía encontrar Y (p.ej. un 'Destierra...' de
 			# Fase Final) como la PRIMERA acción reconocible del texto
@@ -462,13 +552,43 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 			if clauses.is_empty() and not full_ability_text.is_empty():
 				clauses = [full_ability_text]
 			var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+			# Tótems auditados 2026-09-20 (arquitectura.md, "539 cartas sin
+			# cobertura") — no calzan en _resolve_look_and_play_patterns()
+			# porque no son un solo bloque "mira/muestra N... elige qué
+			# hacer" genérico (arco del triunfo además necesita is_entering
+			# explícito, ver TotemAbilityPatterns.gd), se chequean aparte,
+			# ANTES del bucle de cláusulas genérico de abajo.
+			if await _main._totem_patterns.try_execute_arco_del_triunfo_pattern(full_ability_text, card, controller_id, true):
+				result["no_handler"] = false
+			if await _main._totem_patterns.try_execute_kotoku_in_enter_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			if await _main._totem_patterns.try_execute_iga_ryu_enter_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			if await _main._totem_patterns.try_execute_hangar_ciudadela_enter_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			if await _main._totem_patterns.try_execute_metropolitan_enter_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			# Armas auditadas 2026-09-20 (arquitectura.md "539 cartas sin
+			# cobertura") — mismo criterio que los Tótems de arriba: no calzan
+			# en el despachador compartido porque necesitan saber si es
+			# ENTER u otras condiciones puntuales, se chequean aparte.
+			if await _main._weapon_patterns.try_execute_nodachi_enter_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			if await _main._weapon_patterns.try_execute_azusa_yumi_enter_leave_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			# hidromiel (2026-09-20, arquitectura.md "539 cartas sin
+			# cobertura") — única cláusula de la carta, sin riesgo de falso
+			# positivo con otra cláusula propia; se registra igual que los
+			# Tótems/Armas de arriba por consistencia de estilo.
+			if await _main._oro_patterns.try_execute_hidromiel_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
 			for ability_text: String in clauses:
 				var resolved := await _resolve_look_and_play_patterns(card, full_ability_text, ability_text, controller_id, event_data)
 				if resolved:
 					result["no_handler"] = false
 		elif trigger_type == "on_leave_play":
 			# 'Al salir del juego'/'cuando salga del juego'/'cuando entra o
-			# salga del juego' (2026-08-29, p.ej. Legión Paladín) — hasta acá
+			# salga del juego' (2026-08-29, p.ej. Legión Paladín) — hasta aquí
 			# solo on_enter_play/on_ally_enters tenían fallback genérico por
 			# texto; on_leave_play nunca resolvía nada por este camino, sin
 			# importar qué tan bien detectado estuviera el patrón en
@@ -481,8 +601,26 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 			])
 			if ability_text.is_empty():
 				ability_text = full_ability_text
+			var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+			# arco del triunfo (2026-09-20) — misma función que en on_enter_
+			# play, is_entering=false: desregistra el efecto continuo de
+			# daño al Destierro (el aura de Fuerza se limpia sola vía
+			# ModifierRegistry al salir la carta fuente de juego).
+			if await _main._totem_patterns.try_execute_arco_del_triunfo_pattern(full_ability_text, card, controller_id, false):
+				result["no_handler"] = false
+			# Armas auditadas 2026-09-20 (arquitectura.md "539 cartas sin
+			# cobertura") — mismo criterio que arco del triunfo arriba.
+			if await _main._weapon_patterns.try_execute_azusa_yumi_enter_leave_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			if await _main._weapon_patterns.try_execute_armadura_celestial_leave_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			if await _main._weapon_patterns.try_execute_nehushtan_leave_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			if await _main._weapon_patterns.try_execute_flechar_xoon_leave_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
+			if await _main._weapon_patterns.try_execute_canon_naval_leave_pattern(full_ability_text, card, controller_id):
+				result["no_handler"] = false
 			if not ability_text.is_empty():
-				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
 				var resolved := await _resolve_look_and_play_patterns(card, full_ability_text, ability_text, controller_id, event_data)
 				if resolved:
 					result["no_handler"] = false
@@ -491,7 +629,7 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 			# tener "Cuando entra en juego, Roba dos cartas. Cuando ataque, ..."
 			# en el mismo bloque, y extract_action() encuentra la PRIMERA acción
 			# reconocible en todo el texto sin importar bajo qué disparador
-			# está — dispararía de nuevo el robo de la entrada. Por eso acá se
+			# está — dispararía de nuevo el robo de la entrada. Por eso aquí se
 			# aísla primero la oración que contiene la frase de "ataque".
 			var ability_text: String = ""
 			if card.get("card_data") != null:
@@ -504,7 +642,9 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 			])
 			if not clause.is_empty():
 				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
-				if await _main._convert_misc_resolver.try_execute_mill_convert_to_ally_pattern(clause, card, controller_id):
+				if await _main._totem_patterns.try_execute_metropolitan_attack_pattern(clause, card, controller_id):
+					result["no_handler"] = false
+				elif await _main._convert_misc_resolver.try_execute_mill_convert_to_ally_pattern(clause, card, controller_id):
 					result["no_handler"] = false
 				elif await _main._look_and_play.try_execute_wielder_attack_gold_or_draw_pattern(clause, card, controller_id):
 					result["no_handler"] = false
@@ -522,6 +662,32 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 						await _main._targeted_executor.execute_parsed_action(action, card, event_data)
 						result["no_handler"]    = false
 					result["parsed_action"] = action
+		elif trigger_type == "on_block":
+			# 'Cuando bloquee'/'al bloquear' IMPRESO EN EL PROPIO ALIADO que
+			# bloquea (2026-09-20, arquitectura.md "539 cartas sin cobertura")
+			# — primer uso real de este trigger, hasta ahora clasificado en
+			# Card.TRIGGER_KEYWORDS pero sin ninguna rama de resolución
+			# (recolectado desde GameManager.confirm_blockers_and_collect_
+			# triggers(), 'card' = el Aliado bloqueador mismo, camino DIRECTO
+			# igual que on_attack). NO es el camino de libro de thoth: esa
+			# carta es un Oro que reacciona a que TÚ bloquees con cualquier
+			# Aliado, no una habilidad impresa en el bloqueador — se resuelve
+			# aparte, con un chequeo directo del Oro en juego, mismo criterio
+			# que Llave del Abismo (ver GoldManager._trigger_enter_play()) —
+			# el camino 'directo' de _collect_triggers_for_event() solo llega
+			# a la carta que disparó el evento, nunca a otra carta pasiva en
+			# una zona distinta (el Oro no está en el campo de Aliados).
+			var ability_text: String = ""
+			if card.get("card_data") != null:
+				ability_text = card.card_data.get("habilidad", "")
+			var clause := _isolate_trigger_clause(ability_text, [
+				"cuando bloquee", "al bloquear"
+			])
+			if not clause.is_empty():
+				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+				var resolved := await _resolve_look_and_play_patterns(card, ability_text, clause, controller_id, event_data)
+				if resolved:
+					result["no_handler"] = false
 		elif trigger_type == "on_turn_end":
 			# 'En tu Fase Final'/'Al final del turno' (2026-08-30, p.ej.
 			# Espada de O'Higgins) — primer trigger de este tipo que
@@ -535,10 +701,28 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 			if card.get("card_data") != null:
 				ability_text = card.card_data.get("habilidad", "")
 			var clause := _isolate_trigger_clause(ability_text, [
-				"en tu fase final", "al final del turno", "al terminar el turno"
+				"en tu fase final", "al final del turno", "al terminar el turno",
+				# torii (2026-09-20, arquitectura.md "539 cartas sin cobertura")
+				# — frase NARROW a propósito, ver docstring de try_execute_
+				# torii_final_pattern() en OroAbilityPatterns.gd (por qué "en
+				# la fase final" a secas no se puede usar aquí).
+				"en la fase final, si tienes"
 			])
 			if not clause.is_empty():
 				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+				# Cañón Naval (2026-09-20, arquitectura.md "539 cartas sin
+				# cobertura") — llamada EXPLÍCITA con la cláusula YA AISLADA
+				# (no el texto completo), a propósito NO registrada en el
+				# despachador compartido — ver el docstring de la función en
+				# WeaponAbilityPatterns.gd para el motivo completo.
+				if await _main._weapon_patterns.try_execute_canon_naval_final_pattern(clause, card, controller_id):
+					result["no_handler"] = false
+				# udjat / torii (2026-09-20, arquitectura.md "539 cartas sin
+				# cobertura") — mismo criterio que Cañón Naval arriba.
+				if await _main._oro_patterns.try_execute_udjat_final_pattern(clause, card, controller_id):
+					result["no_handler"] = false
+				if await _main._oro_patterns.try_execute_torii_final_pattern(clause, card, controller_id):
+					result["no_handler"] = false
 				var resolved := await _resolve_look_and_play_patterns(card, ability_text, clause, controller_id, event_data)
 				if resolved:
 					result["no_handler"] = false
@@ -570,10 +754,20 @@ func _execute_trigger_effect(card: Node, trigger_type: String, event_data: Dicti
 			if card.get("card_data") != null:
 				ability_text = card.card_data.get("habilidad", "")
 			var clause := _isolate_trigger_clause(ability_text, [
-				"en tu agrupación", "en tu agrupacion"
+				"en tu agrupación", "en tu agrupacion",
+				# torii (2026-09-20, arquitectura.md "539 cartas sin
+				# cobertura") — su frase real es "al comienzo de tu
+				# Agrupación", distinta de "en tu agrupación" (ver también
+				# Card.TRIGGER_KEYWORDS['on_agrupacion'], se agregó ahí
+				# también para que el trigger se clasifique).
+				"al comienzo de tu agrupación", "al comienzo de tu agrupacion"
 			])
 			if not clause.is_empty():
 				var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+				# torii (2026-09-20) — llamada EXPLÍCITA con la cláusula YA
+				# AISLADA, mismo criterio que Cañón Naval/udjat en on_turn_end.
+				if await _main._oro_patterns.try_execute_torii_agrupacion_pattern(clause, card, controller_id):
+					result["no_handler"] = false
 				var resolved := await _resolve_look_and_play_patterns(card, ability_text, clause, controller_id, event_data)
 				if resolved:
 					result["no_handler"] = false
@@ -689,7 +883,7 @@ func _isolate_all_trigger_clauses(ability_text: String, trigger_phrases: Array) 
 	  - una oración de habilidad ACTIVADA ('una vez por turno'/'una vez al
 	    turno'/'una vez en tu turno'/'una vez en su turno') — esas se
 	    resuelven por un camino totalmente distinto (parse_abilities() +
-	    ActionPipeline) y no deben mezclarse acá aunque no matcheen
+	    ActionPipeline) y no deben mezclarse aquí aunque no matcheen
 	    trigger_phrases (2026-08-29, p.ej. Tesoro de los Césares: el ETB
 	    de esta carta son DOS oraciones separadas por punto, seguidas de
 	    una habilidad activada en el mismo bloque de texto — sin este corte

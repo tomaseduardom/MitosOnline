@@ -9,8 +9,6 @@ signal deck_selected(deck_data: Dictionary)
 # =============================================================================
 # CONSTANTES
 # =============================================================================
-const API_BASE_URL = "http://localhost:3000"
-const CDN_BASE_URL = "https://grimorio-cards.b-cdn.net"
 const DECKS_PER_PAGE = 12
 
 # =============================================================================
@@ -26,17 +24,12 @@ const DECKS_PER_PAGE = 12
 # =============================================================================
 # VARIABLES
 # =============================================================================
-var http_request: HTTPRequest
 var decks_data: Array = []
 var is_loading: bool = false
+var _pending_deck_summary: Dictionary = {}
 
 
 func _ready() -> void:
-	# Crear HTTPRequest node
-	http_request = HTTPRequest.new()
-	add_child(http_request)
-	http_request.request_completed.connect(_on_request_completed)
-
 	# Conectar botón atrás
 	back_button.pressed.connect(_on_back_pressed)
 
@@ -45,53 +38,39 @@ func _ready() -> void:
 
 
 func _fetch_decks() -> void:
-	"""Obtiene los mazos desde la API"""
+	"""Obtiene mazos públicos reales de ShadowForge (2026-09-22, bug real
+	reportado por el usuario: 'DeckManager fetching from localhost:3000...
+	Request failed with result: 2' — esta pantalla nunca se actualizó cuando
+	se construyó la integración real con ShadowForge, ExternalApiClient.gd
+	(ver arquitectura.md §13); seguía apuntando a la API vieja muerta.
+	Mismo endpoint confirmado real que usa DeckSelector.gd:
+	GET /api/decks/public/ → {results, count}."""
 	if is_loading:
 		return
 
 	is_loading = true
 	_show_loading(true)
 
-	var url = "%s/api/mazos/publicos?limit=%d&sort=populares" % [API_BASE_URL, DECKS_PER_PAGE]
-	print("[DeckManager] Fetching decks from: ", url)
-
-	var error = http_request.request(url)
-	if error != OK:
-		print("[DeckManager] HTTP Request failed: ", error)
-		_show_error("Error de conexión")
-		is_loading = false
+	if not ExternalApiClient.public_decks_received.is_connected(_on_public_decks_received):
+		ExternalApiClient.public_decks_received.connect(_on_public_decks_received, CONNECT_ONE_SHOT)
+	if not ExternalApiClient.public_decks_failed.is_connected(_on_public_decks_failed):
+		ExternalApiClient.public_decks_failed.connect(_on_public_decks_failed, CONNECT_ONE_SHOT)
+	ExternalApiClient.fetch_public_decks("", 1, "", "", "popular")
 
 
-func _on_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	"""Callback cuando la request HTTP completa"""
+func _on_public_decks_received(results: Array, count: int) -> void:
 	is_loading = false
 	_show_loading(false)
+	decks_data = results
+	print("[DeckManager] %d mazos públicos cargados (de %d totales)" % [decks_data.size(), count])
+	_populate_decks()
 
-	if result != HTTPRequest.RESULT_SUCCESS:
-		print("[DeckManager] Request failed with result: ", result)
-		_show_error("Error de conexión al servidor")
-		return
 
-	if response_code != 200:
-		print("[DeckManager] Server returned: ", response_code)
-		_show_error("Error del servidor (%d)" % response_code)
-		return
-
-	# Parsear JSON
-	var json = JSON.new()
-	var parse_result = json.parse(body.get_string_from_utf8())
-	if parse_result != OK:
-		print("[DeckManager] JSON parse error")
-		_show_error("Error al procesar datos")
-		return
-
-	var data = json.get_data()
-	if data.has("mazos"):
-		decks_data = data["mazos"]
-		print("[DeckManager] Loaded %d decks" % decks_data.size())
-		_populate_decks()
-	else:
-		_show_error("Formato de datos inválido")
+func _on_public_decks_failed(reason: String) -> void:
+	is_loading = false
+	_show_loading(false)
+	print("[DeckManager] No se pudieron cargar mazos públicos: ", reason)
+	_show_error("No se pudieron cargar los mazos públicos (%s)" % reason)
 
 
 func _populate_decks() -> void:
@@ -129,8 +108,9 @@ func _create_deck_card(deck: Dictionary) -> Control:
 	bg_rect.color = Color(0.08, 0.06, 0.12, 1.0)
 	clip_container.add_child(bg_rect)
 
-	# Imagen de fondo (portada)
-	var portada_url = deck.get("portada_url", null)
+	# Imagen de fondo (portada) — "image_url" es el campo real de ShadowForge
+	# (ver arquitectura.md §13), no "portada_url" (de la API vieja muerta).
+	var portada_url = deck.get("image_url", null)
 	if portada_url != null and typeof(portada_url) == TYPE_STRING and not portada_url.is_empty():
 		_load_cover_image(clip_container, portada_url)
 
@@ -170,14 +150,9 @@ func _create_deck_card(deck: Dictionary) -> Control:
 	archetype_hbox.add_theme_constant_override("separation", 8)
 	margin_top.add_child(archetype_hbox)
 
-	var arquetipo = deck.get("arquetipo", "Sin Arquetipo")
-	var archetype_icon = _get_archetype_icon(arquetipo)
-
-	var icon_label = Label.new()
-	icon_label.text = archetype_icon
-	icon_label.add_theme_font_size_override("font_size", 14)
-	icon_label.add_theme_color_override("font_color", Color(0.83, 0.69, 0.22, 1.0))
-	archetype_hbox.add_child(icon_label)
+	# "race" es el campo real de ShadowForge para el arquetipo (§13) — no
+	# "arquetipo" (API vieja muerta).
+	var arquetipo = str(deck.get("race", "")) if not str(deck.get("race", "")).is_empty() else "Sin Arquetipo"
 
 	var archetype_label = Label.new()
 	archetype_label.text = arquetipo.to_upper()
@@ -200,9 +175,10 @@ func _create_deck_card(deck: Dictionary) -> Control:
 	center_vbox.add_theme_constant_override("separation", 4)
 	center_margin.add_child(center_vbox)
 
-	# Título del mazo
+	# Título del mazo — "name" es el campo real de ShadowForge (§13), no
+	# "nombre" (API vieja muerta).
 	var title_label = Label.new()
-	title_label.text = deck.get("nombre", "Sin nombre")
+	title_label.text = deck.get("name", "Sin nombre")
 	title_label.add_theme_font_size_override("font_size", 24)
 	title_label.add_theme_color_override("font_color", Color(1, 1, 1, 1))
 	title_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
@@ -211,9 +187,10 @@ func _create_deck_card(deck: Dictionary) -> Control:
 	title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	center_vbox.add_child(title_label)
 
-	# Autor
+	# Autor — "owner_username" es el campo real de ShadowForge (§13), no
+	# "autor_nombre" (API vieja muerta).
 	var author_label = Label.new()
-	var autor = deck.get("autor_nombre", "Anónimo")
+	var autor = str(deck.get("owner_username", "")) if not str(deck.get("owner_username", "")).is_empty() else "Anónimo"
 	author_label.text = "por %s" % autor
 	author_label.add_theme_font_size_override("font_size", 14)
 	author_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8, 1))
@@ -253,36 +230,38 @@ func _create_deck_card(deck: Dictionary) -> Control:
 	stats_hbox.add_theme_constant_override("separation", 24)
 	footer_vbox.add_child(stats_hbox)
 
-	# Vistas
-	var views_hbox = HBoxContainer.new()
-	views_hbox.add_theme_constant_override("separation", 6)
-	stats_hbox.add_child(views_hbox)
+	# Cantidad de cartas — "card_count" es el campo real de ShadowForge (§13);
+	# la API vieja muerta tenía "vistas" (visitas), sin equivalente real hoy.
+	var cards_hbox = HBoxContainer.new()
+	cards_hbox.add_theme_constant_override("separation", 6)
+	stats_hbox.add_child(cards_hbox)
 
-	var views_icon = Label.new()
-	views_icon.text = "👁"
-	views_icon.add_theme_font_size_override("font_size", 14)
-	views_icon.add_theme_color_override("font_color", Color(0.83, 0.69, 0.22, 1.0))
-	views_hbox.add_child(views_icon)
+	var cards_icon = Label.new()
+	cards_icon.text = "Cartas:"
+	cards_icon.add_theme_font_size_override("font_size", 13)
+	cards_icon.add_theme_color_override("font_color", Color(0.83, 0.69, 0.22, 1.0))
+	cards_hbox.add_child(cards_icon)
 
-	var views_count = Label.new()
-	views_count.text = str(deck.get("vistas", 0))
-	views_count.add_theme_font_size_override("font_size", 14)
-	views_count.add_theme_color_override("font_color", Color(1, 1, 1, 1))
-	views_hbox.add_child(views_count)
+	var cards_count = Label.new()
+	cards_count.text = str(deck.get("card_count", 0))
+	cards_count.add_theme_font_size_override("font_size", 14)
+	cards_count.add_theme_color_override("font_color", Color(1, 1, 1, 1))
+	cards_hbox.add_child(cards_count)
 
-	# Likes
+	# Likes — "like_count" es el campo real de ShadowForge (§13), no "likes"
+	# (API vieja muerta).
 	var likes_hbox = HBoxContainer.new()
 	likes_hbox.add_theme_constant_override("separation", 6)
 	stats_hbox.add_child(likes_hbox)
 
 	var likes_icon = Label.new()
-	likes_icon.text = "❤"
-	likes_icon.add_theme_font_size_override("font_size", 14)
+	likes_icon.text = "Votos:"
+	likes_icon.add_theme_font_size_override("font_size", 13)
 	likes_icon.add_theme_color_override("font_color", Color(0.83, 0.69, 0.22, 1.0))
 	likes_hbox.add_child(likes_icon)
 
 	var likes_count = Label.new()
-	likes_count.text = str(deck.get("likes", 0))
+	likes_count.text = str(deck.get("like_count", 0))
 	likes_count.add_theme_font_size_override("font_size", 14)
 	likes_count.add_theme_color_override("font_color", Color(1, 1, 1, 1))
 	likes_hbox.add_child(likes_count)
@@ -437,14 +416,8 @@ func _build_mana_curve_row(costs: Array) -> Control:
 	return row
 
 
-func _get_archetype_icon(arquetipo: String) -> String:
-	"""Retorna el icono correspondiente al arquetipo"""
-	match arquetipo.to_lower():
-		"agresivo": return "🔥"
-		"control": return "🛡"
-		"combo": return "⚙"
-		"midrange": return "⚖"
-		_: return "📖"
+func _get_archetype_icon(_arquetipo: String) -> String:
+	return ""
 
 
 func _load_cover_image(container: Control, url: String) -> void:
@@ -489,38 +462,31 @@ func _load_cover_image(container: Control, url: String) -> void:
 
 
 func _build_image_url(url: String) -> String:
-	"""Construye la URL completa de la imagen desde el CDN"""
-	if url.is_empty():
-		return ""
-
-	# Si ya es URL completa, devolverla
-	if url.begins_with("http://") or url.begins_with("https://"):
-		return url
-
-	# Si es path relativo, agregar CDN base
-	if url.begins_with("/"):
-		return CDN_BASE_URL + url
-
-	# Si no tiene /, agregarlo
-	return CDN_BASE_URL + "/" + url
+	"""Devuelve la URL de la imagen tal cual. 2026-09-22: 'image_url' de la
+	API real de ShadowForge ya viene como URL absoluta (Cloudinary, ver
+	arquitectura.md §13) — se sacó el prefijo de CDN relativo que usaba la
+	API vieja muerta (CDN_BASE_URL, 'grimorio-cards.b-cdn.net', ya no
+	aplica a esta fuente de datos)."""
+	return url
 
 
 func _on_deck_selected(deck: Dictionary) -> void:
-	"""Cuando el usuario selecciona un mazo"""
-	var deck_name = deck.get("nombre", "")
-	var deck_slug = deck.get("slug", "")
-	print("[DeckManager] Selected deck: %s (slug: %s)" % [deck_name, deck_slug])
+	"""Cuando el usuario selecciona un mazo. 2026-09-22, bug real corregido
+	junto con _fetch_decks(): los mazos públicos reales de ShadowForge no
+	tienen 'slug' (eso era de la API vieja muerta) — tienen 'id' numérico, y
+	la lista solo trae datos resumidos, sin las cartas ('entries'). Hay que
+	bajarlas aparte antes de poder jugar con este mazo, mismo camino real ya
+	usado por DeckSelector.gd (ExternalApiClient.fetch_public_deck_entries())."""
+	var deck_name = str(deck.get("name", ""))
+	var deck_id = int(deck.get("id", 0))
+	print("[DeckManager] Mazo elegido: %s (id: %d)" % [deck_name, deck_id])
 
-	# Emitir señal para otros sistemas
 	deck_selected.emit(deck)
 
-	# Verificar que tenemos un slug válido
-	if deck_slug.is_empty():
+	if deck_id <= 0:
 		_show_error("El mazo seleccionado no tiene un identificador válido")
 		return
 
-	# Cargar el mazo usando DeckLoader
-	# Conectar señales para feedback
 	if not DeckLoader.deck_loaded.is_connected(_on_deck_loaded):
 		DeckLoader.deck_loaded.connect(_on_deck_loaded)
 	if not DeckLoader.deck_load_failed.is_connected(_on_deck_load_failed):
@@ -528,9 +494,31 @@ func _on_deck_selected(deck: Dictionary) -> void:
 	if not DeckLoader.all_decks_ready.is_connected(_on_all_decks_ready):
 		DeckLoader.all_decks_ready.connect(_on_all_decks_ready)
 
-	# Iniciar carga del mazo para el jugador local (ID 0)
 	_show_loading(true)
-	DeckLoader.load_deck_for_player(0, deck_slug)
+	_pending_deck_summary = deck
+	if not ExternalApiClient.public_deck_detail_received.is_connected(_on_deck_entries_received):
+		ExternalApiClient.public_deck_detail_received.connect(_on_deck_entries_received, CONNECT_ONE_SHOT)
+	if not ExternalApiClient.public_deck_detail_failed.is_connected(_on_deck_entries_failed):
+		ExternalApiClient.public_deck_detail_failed.connect(_on_deck_entries_failed, CONNECT_ONE_SHOT)
+	ExternalApiClient.fetch_public_deck_entries(deck_id)
+
+
+func _on_deck_entries_received(deck_data: Dictionary) -> void:
+	"""deck_data ya trae 'entries' completas — misma forma exacta que
+	DeckLoader._process_external_deck_data() ya sabe leer (confirmado en
+	DeckSelector.gd, ver arquitectura.md §13)."""
+	var mazo := {
+		"nombre": str(deck_data.get("name", _pending_deck_summary.get("name", "Mazo público"))),
+		"arquetipo": str(deck_data.get("race", "")),
+		"formato": str(deck_data.get("format", "")),
+		"entries": deck_data.get("entries", []),
+	}
+	DeckLoader.load_deck_from_external_data(0, mazo)
+
+
+func _on_deck_entries_failed(reason: String) -> void:
+	_show_loading(false)
+	_show_error("No se pudieron descargar las cartas de ese mazo: %s" % reason)
 
 
 func _on_deck_loaded(player_id: int, card_count: int) -> void:

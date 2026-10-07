@@ -197,6 +197,22 @@ func _play_ally(card: Node) -> void:
 	await get_tree().process_frame
 	card.can_interact = true
 
+	# 2026-09-19 (arquitectura.md §10.53, bug real reportado por el usuario:
+	# "el bot jugó una carta y no me saltó la ventana para poder anular").
+	# GoldManager.play_card() (línea ~1421, 2026-09-10) ya abre la Pila de
+	# Respuesta Universal para CUALQUIER Aliado/Arma/Tótem/Oro que juegue el
+	# HUMANO, justo antes de que dispare su propio "Cuando entra en juego" —
+	# esta función (el camino equivalente del BOT) nunca se actualizó para
+	# hacer lo mismo, así que ninguna carta que jugara el bot abría nunca
+	# ventana real para el humano, con o sin disparador de entrada. Mismo
+	# criterio exacto que GoldManager: si se anula/cancela aquí, la carta va
+	# directo al Cementerio sin llegar a disparar su ETB.
+	if await TriggerSystem.open_response_window(card, str(card.card_name) if card.get("card_name") else "", 1):
+		await EffectController.destroy_card(1, card, false)
+		if _main._gold_manager:
+			_main._gold_manager._update_gold_display()
+		return
+
 	CardFactory.on_card_enters_play(card)
 	if card.has_method("on_entered_play"):
 		card.on_entered_play()
@@ -212,13 +228,14 @@ func _play_ally(card: Node) -> void:
 	# (2026-09-09): el bot juega esta carta, así que el HUMANO (su rival) es
 	# quien puede responder con Akari — ver EffectController.offer_counter_annul().
 	await EffectController.offer_counter_annul(card)
+	await EffectController.offer_flechar_xoon_annul(card)
 
 
 func play_free_ally_from_data(card_data: Dictionary) -> void:
 	"""Variante de _play_ally() para triggers que juegan un Aliado del bot
 	SIN pasar por su mano ni pagar su coste (2026-09-09, p.ej. Tangata Manu/
 	Perder la Razón revelando el tope del propio Castillo) — el llamador
-	(LookRevealPatternsA.gd) ya sacó card_data de donde corresponda, acá solo
+	(LookRevealPatternsA.gd) ya sacó card_data de donde corresponda, aquí solo
 	falta crear el nodo y ponerlo en juego. Bug real reportado por el
 	usuario: estos patrones antes llamaban GoldManager.play_card_for_free(),
 	que está hardcodeado a jugador 0 (card.owner_id=0, contenedores
@@ -248,6 +265,14 @@ func play_free_ally_from_data(card_data: Dictionary) -> void:
 	await get_tree().process_frame
 	card.can_interact = true
 
+	# 2026-09-19, §10.53 — mismo motivo que _play_ally() (ver comentario ahí):
+	# GoldManager.play_card_for_free() sí abre esta misma ventana para el
+	# humano vía _trigger_enter_play() compartido; este camino del bot nunca
+	# lo tuvo.
+	if await TriggerSystem.open_response_window(card, str(card.card_name) if card.get("card_name") else "", 1):
+		await EffectController.destroy_card(1, card, false)
+		return
+
 	CardFactory.on_card_enters_play(card)
 	if card.has_method("on_entered_play"):
 		card.on_entered_play()
@@ -256,6 +281,7 @@ func play_free_ally_from_data(card_data: Dictionary) -> void:
 		"player_id": 1, "card": card, "zone": Constants.Zone.LINEA_DEFENSA
 	})
 	await EffectController.offer_counter_annul(card)
+	await EffectController.offer_flechar_xoon_annul(card)
 
 
 func put_free_gold_in_pagado_from_data(card_data: Dictionary) -> void:
@@ -277,6 +303,17 @@ func put_free_gold_in_pagado_from_data(card_data: Dictionary) -> void:
 	gold_node.top_level = false
 	gold_node.modulate = Color(0.6, 0.6, 0.6, 1.0)
 	gold_node.set_zone(Constants.Zone.ORO_PAGADO)
+
+	# 2026-09-19, §10.53 — mismo motivo que _play_ally()/play_free_ally_from_data():
+	# la carta ya está colocada visualmente (mismo criterio que GoldManager.
+	# _trigger_enter_play() con el humano — la ventana no bloquea la
+	# colocación física, solo los efectos de estado que siguen), pero
+	# agregar_oro_pagado() queda DESPUÉS de la ventana para no tener que
+	# revertirlo si se anula/cancela aquí.
+	if await TriggerSystem.open_response_window(gold_node, str(gold_node.card_name) if gold_node.get("card_name") else "", 1):
+		await EffectController.destroy_card(1, gold_node, false)
+		return
+
 	GameState.agregar_oro_pagado(1, 1)
 
 	CardFactory.on_card_enters_play(gold_node)
@@ -296,7 +333,7 @@ func try_respond_with_activated_ability() -> bool:
 	que el resto de sus decisiones (sin heurística de "conviene o no").
 	Devuelve true si activó algo (empuja un objeto a ActionPipeline, que ya
 	lo detecta solo como "hubo respuesta" y le abre su propia ventana de
-	vuelta al rival — no hace falta orquestar nada más acá).
+	vuelta al rival — no hace falta orquestar nada más aquí).
 
 	Alcance: habilidades sin coste, "una vez por turno", Oro o Girar.
 	ActionPipeline.activate_ability()/can_activate_ability() ya distinguen
@@ -330,6 +367,14 @@ func try_respond_with_activated_ability() -> bool:
 					continue
 				if cost_type == UniversalCardParser.CostType.TAP and card.get("is_tapped") == true:
 					continue
+				# "Una vez EN tu turno" (2026-09-13, ver arquitectura.md §10.11):
+				# esta función SOLO corre dentro de una ventana de respuesta
+				# (ver docstring arriba), así que por definición nunca es el
+				# momento correcto para esta variante — más restrictiva que
+				# "una vez por turno" en cuándo se puede usar, no solo en
+				# frecuencia.
+				if ability.get("once_per_turn_own_turn_only", false):
+					continue
 				if ability.get("once_per_turn", false) or cost_type == UniversalCardParser.CostType.ONCE_PER_TURN:
 					var card_id: String = str(card.get_instance_id())
 					if UniversalCardParser.turn_registry.was_used(card_id, ability.get("ability_index", 0), GameManager.current_turn):
@@ -340,6 +385,28 @@ func try_respond_with_activated_ability() -> bool:
 		return false
 
 	var chosen: Dictionary = candidates[randi() % candidates.size()]
+
+	# Don de Amma (2026-09-13, bug real reportado por el usuario): este
+	# escaneo genérico solo mira cost_type (NONE/ONCE_PER_TURN/GOLD/TAP), no
+	# si la habilidad necesita el manejador especial de
+	# AbilityButtonPatternsA.gd — "Puedes Desterrar un Oro con habilidad de
+	# tu Reserva. Luego, busca un Oro..." calza en ONCE_PER_TURN igual que
+	# cualquier otra, así que caía en ActionPipeline.activate_ability()
+	# genérico → TargetedEffectExecutor._execute_targeted_banish(), que
+	# SIEMPRE apunta a un Aliado ("Elige un Aliado para desterrar") sin
+	# saber que el objeto real es un Oro con habilidad de la Reserva.
+	# _activate_don_de_amma() (SearchAbilityHandler_AI.gd) ya soporta
+	# owner_id 1 desde que se escribió — solo faltaba que este scan lo
+	# invocara en vez del genérico.
+	var raw_lower: String = str(chosen.ability.get("raw_text", "")).to_lower()
+	var is_don_de_amma_pattern: bool = ("desterrar un oro" in raw_lower
+		and "con habilidad" in raw_lower and "busca un oro" in raw_lower)
+	if is_don_de_amma_pattern:
+		if not _main._card_inspector or not _main._card_inspector._search_handler:
+			return false
+		await _main._card_inspector._search_handler._activate_don_de_amma(chosen.card, chosen.ability)
+		return true
+
 	var context := {"controller_id": 1, "source_card_node": chosen.card}
 	var result: Dictionary = await ActionPipeline.activate_ability(chosen.card.card_data, chosen.ability, context)
 	return result.get("success", false)

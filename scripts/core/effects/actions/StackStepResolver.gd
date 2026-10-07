@@ -232,7 +232,8 @@ func _execute_step_d(stack_obj: Dictionary) -> Dictionary:
 	var controller_id = stack_obj.context.get("controller_id", 0)
 	var opponent_id = 1 - controller_id
 
-	print("[ActionPipeline] [%s] Paso D: Ventana de Respuesta" % stack_obj.name)
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[ActionPipeline] [%s] Paso D: Ventana de Respuesta" % stack_obj.name)
 
 	_main._is_waiting_priority = true
 	_main.emit_signal("step_d_waiting", stack_obj, opponent_id)
@@ -241,7 +242,18 @@ func _execute_step_d(stack_obj: Dictionary) -> Dictionary:
 	# ─────────────────────────────────────────────────────────────────────────
 	# Abrir ventana de prioridad (oponente primero)
 	# ─────────────────────────────────────────────────────────────────────────
-	PriorityManager.start_priority_window(1, opponent_id)  # RESPONSE_WINDOW = 1
+	# 2026-09-11 (bug real reportado por el usuario: la consola mostraba
+	# "Guerra de Talismanes" al resolver Paso D de una habilidad cualquiera,
+	# sin relación con esa fase). El número mágico "1" no es RESPONSE_WINDOW
+	# — el enum real es NONE=0, GUERRA_TALISMANES=1, RESPONSE_WINDOW=2,
+	# DISCARD_PHASE=3, BLOCK_DECLARATION=4 (PriorityManager.gd) — así que esta
+	# ventana se abría con el contexto equivocado. Sin impacto en quién tiene
+	# prioridad primero (aquí siempre se pasa starting_player explícito) ni en
+	# valid_actions (sin llamadores reales hoy), pero sí rompía el auto-pase
+	# "no hay nada que decidir" del humano (PhaseFlowController._on_priority_
+	# changed_glow()), que a propósito solo actúa en RESPONSE_WINDOW real para
+	# no auto-pasar una Guerra de Talismanes genuina.
+	PriorityManager.start_priority_window(PriorityManager.PriorityContext.RESPONSE_WINDOW, opponent_id)
 
 	# ─────────────────────────────────────────────────────────────────────────
 	# Esperar hasta que ambos pasen o alguien responda
@@ -270,10 +282,14 @@ func _execute_step_d(stack_obj: Dictionary) -> Dictionary:
 				"had_response": false
 			})
 
-	print("[ActionPipeline] [%s] ✓ Paso D: %s" % [
-		stack_obj.name,
-		"Respuesta recibida" if result.had_response else "Ambos pasaron"
-	])
+	# 2026-09-25, a pedido del usuario ("elimina logs redundantes"): "Ambos
+	# pasaron" es el resultado normal en casi TODA resolución (el bot nunca
+	# responde nada todavía) — no aporta información nueva repetido en cada
+	# carta. Una respuesta real sí es noticia y se mantiene visible.
+	if result.had_response:
+		print("[ActionPipeline] [%s] Respuesta recibida" % stack_obj.name)
+	elif Constants.VERBOSE_DIAG_LOGS:
+		print("[ActionPipeline] [%s] ✓ Paso D: Ambos pasaron" % stack_obj.name)
 
 	return result
 
@@ -375,7 +391,8 @@ func _execute_step_e(stack_obj: Dictionary) -> Dictionary:
 	var context = stack_obj.context
 	var controller_id = context.get("controller_id", 0)
 
-	print("[ActionPipeline] [%s] Paso E: Resolución" % stack_obj.name)
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[ActionPipeline] [%s] Paso E: Resolución" % stack_obj.name)
 
 	_main.emit_signal("stack_object_resolving", stack_obj)
 
@@ -392,7 +409,7 @@ func _execute_step_e(stack_obj: Dictionary) -> Dictionary:
 	# Resolver según tipo
 	# ─────────────────────────────────────────────────────────────────────────
 	match stack_obj.type:
-		# CARD_PLAYED/RESPONSE_CARD ya no llegan acá (2026-08-27, limpieza —
+		# CARD_PLAYED/RESPONSE_CARD ya no llegan aquí (2026-08-27, limpieza —
 		# ver ActionPipeline.gd: play_card()/add_response_to_stack() se
 		# eliminaron, nada los crea más).
 		_main.StackObjectType.TRIGGERED_ABILITY, _main.StackObjectType.ACTIVATED_ABILITY:
@@ -422,7 +439,8 @@ func _execute_step_e(stack_obj: Dictionary) -> Dictionary:
 		if CombatLog.has_method("complete_block"):
 			CombatLog.complete_block(block_id, result.success, result)
 
-	print("[ActionPipeline] [%s] ✓ Paso E: Resuelto" % stack_obj.name)
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[ActionPipeline] [%s] ✓ Paso E: Resuelto" % stack_obj.name)
 
 	return result
 
@@ -448,7 +466,7 @@ func _resolve_ability(stack_obj: Dictionary) -> Dictionary:
 	los triggers 'al entrar en juego' y los Talismanes (2026-08-27): primero
 	los patrones compuestos ("mira/muestra N... elige qué hacer con una de
 	ahí"), y si ninguno matchea, extract_action() simple como antes. Antes
-	esto último era lo ÚNICO que se probaba acá — una habilidad ACTIVADA con
+	esto último era lo ÚNICO que se probaba aquí — una habilidad ACTIVADA con
 	un efecto compuesto nunca resolvía bien, a diferencia de una disparada
 	con el mismo texto. Reutiliza selección de objetivo y todos los tipos de
 	acción ya conectados (DRAW, DESTROY, BANISH, DISCARD, SHUFFLE, MILL,

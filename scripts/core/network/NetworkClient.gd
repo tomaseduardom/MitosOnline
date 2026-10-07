@@ -30,15 +30,34 @@ var peer_present: bool = false
 # Último mensaje de juego recibido por "op" (2026-09-10, Fase A — intercambio
 # de mazo): un mensaje puede llegar antes de que el receptor esté listo para
 # escucharlo (p.ej. el Remoto manda su mazo apenas confirma, pero el
-# Anfitrión recién empieza a escuchar cuando llega a ese punto del flujo) —
-# quien lo necesite puede revisar acá en vez de depender solo de la señal en
+# Anfitrión solo empieza a escuchar cuando llega a ese punto del flujo) —
+# quien lo necesite puede revisar aquí en vez de depender solo de la señal en
 # vivo. Se limpia junto con el resto del estado de sala.
 var last_message_by_op: Dictionary = {}
 
 
+func await_intent(expected_kinds: Array) -> Dictionary:
+	"""Espera el próximo {"op":"intent","kind":X,...} con X en expected_kinds.
+	Sin timeout — mismo criterio que el resto del motor espera a un jugador
+	humano local (SelectionManager). Si la conexión se cae mientras se
+	espera, esto queda colgado para siempre — aceptable en v1 (el diseño ya
+	decidió 'sin reconexión, la partida termina').
+
+	2026-09-30 — movido aquí desde RemotePlayerController._await_intent()
+	(que ahora delega en este) para que SelectionManager.gd/SelectionDialogs.gd
+	también puedan esperar un intent del Remoto sin duplicar la lógica
+	(Fase 3 del plan de paridad, docs/plans/2026-09-20-remote-multiplayer-
+	parity.md)."""
+	while true:
+		var data = await message_received
+		if data.get("op", "") == "intent" and data.get("kind", "") in expected_kinds:
+			return data
+	return {}
+
+
 func connect_to_relay(url: String) -> void:
 	"""Abre la conexión al relay. No crea ni une ninguna sala todavía — eso
-	se hace recién cuando `connected_to_relay` se emite, llamando
+	se hace solo cuando `connected_to_relay` se emite, llamando
 	create_room()/join_room()."""
 	is_host = false
 	room_code = ""

@@ -91,7 +91,7 @@ func _update_card_zone_properties(card: Node, new_zone: int, new_controller: int
 	if "zone_entered_turn" in card and GameManager:
 		card.zone_entered_turn = GameManager.current_turn
 
-	# (2026-08-28, "módulos gordos" punto 1): acá había un intento de emitir
+	# (2026-08-28, "módulos gordos" punto 1): aquí había un intento de emitir
 	# 'card_left_zone'/'card_entered_zone' en TriggerSystem — ninguna de las
 	# dos señales existe ni existió nunca ahí, el has_signal() que las
 	# envolvía siempre daba falso. Se sacó.

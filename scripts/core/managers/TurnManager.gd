@@ -30,6 +30,17 @@ var oro_placed_this_turn: bool = false      # ¿Ya se puso oro este turno?
 var any_card_played_this_turn: bool = false  # ¿Se jugó alguna carta? (bloquea oro)
 var oro_chance_lost: bool = false       # ¿Se perdió la oportunidad de poner oro?
 
+# 2026-09-20, Quinto Sello ("Si está en tu Cementerio, no se pueden jugar más
+# de cinco cartas por turno") — contador GLOBAL de cartas jugadas en el turno
+# actual, de CUALQUIER jugador (el texto no dice "tuyas"/"tu oponente", así
+# que es una restricción de regla, no un efecto sobre un jugador puntual).
+# A diferencia de any_card_played_this_turn (booleano, solo para la regla del
+# Oro y solo se marca en Vigilia), este cuenta TODA carta que entra en juego
+# en CUALQUIER fase — se incrementa en GoldManager._trigger_enter_play(), el
+# único choke point real por el que pasa toda carta jugada (arquitectura.md
+# §1), y se consulta en GoldManager.play_card() antes de pagar/mover nada.
+var cards_played_count_this_turn: int = 0
+
 
 func _ready() -> void:
 	print("[TurnManager] Inicializado")
@@ -95,6 +106,7 @@ func _reset_oro_tracking() -> void:
 	oro_placed_this_turn = false
 	any_card_played_this_turn = false
 	oro_chance_lost = false
+	cards_played_count_this_turn = 0
 
 
 # =============================================================================
@@ -129,5 +141,5 @@ func can_attack(ally: Node) -> Dictionary:
 	return result
 
 
-# _has_furia_fallback() se eliminó acá (2026-08-28, "módulos gordos" punto
+# _has_furia_fallback() se eliminó aquí (2026-08-28, "módulos gordos" punto
 # 1): KeywordManager es autoload — siempre existe, esta rama nunca corría.

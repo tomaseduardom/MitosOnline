@@ -157,15 +157,43 @@ func _execute_annul(target_stack_id: int, source_card: Dictionary) -> bool:
 
 	# Prevención reactiva real (2026-09-09 — Drácula): "prevenir que ... un
 	# Aliado de coste 1 sea Anulado" — solo cubre Aliados de coste 1 exacto
-	# (chequeado en el 'applies' del registro, no acá). Opera sobre un
+	# (chequeado en el 'applies' del registro, no aquí). Opera sobre un
 	# OBJETO DE LA PILA (card_data Dictionary), no un Node en juego, así que
 	# usa offer_prevention_for_player() en vez de offer_prevention().
-	var pre_obj := _main._action_pipeline.get_object_by_id(target_stack_id)
+	# 2026-09-20, bug real reportado por el usuario: "Cannot infer the type of
+	# 'pre_obj' variable because the value doesn't have a set type" — `:=`
+	# exige que el compilador infiera el tipo en tiempo de compilación, pero
+	# _main._action_pipeline se accede dinámicamente (Variant, ver comentario
+	# de clase sobre _main._action_pipeline), así que no hay tipo estático
+	# que inferir. `=` sin dos puntos (mismo criterio que target_obj más
+	# abajo, línea ~180) evita el error sin cambiar el comportamiento.
+	var pre_obj = _main._action_pipeline.get_object_by_id(target_stack_id)
 	if not pre_obj.is_empty():
 		var pre_data: Dictionary = pre_obj.get("card_data", {})
 		var pre_controller: int = pre_obj.get("context", {}).get("controller_id", 0)
 		if await EffectController.offer_prevention_for_player(pre_controller, null, "annul", pre_data):
 			return false
+		# 'No puede ser Anulado' impreso directo en la propia carta objetivo
+		# (2026-09-20, Sexto/Séptimo Sello) — protección ESTÁTICA incondicional,
+		# mismo criterio que 'no pueden ser canceladas' de Drácula en
+		# _execute_cancel() más abajo, pero del lado ANULAR: no existía ningún
+		# chequeo equivalente aquí todavía (solo el condicional de Segundo
+		# Sello, ver abajo), así que un Talismán con esta protección impresa
+		# directamente en su propio texto no estaba protegido de verdad.
+		var pre_own_ability: String = String(pre_data.get("habilidad", "")).to_lower()
+		if "no puede ser anulad" in pre_own_ability:
+			return false
+		# 'Si está en tu Cementerio, tus Sello no pueden ser Anulados'
+		# (Segundo Sello, 2026-09-20) — mismo criterio que la protección
+		# estática 'no pueden ser canceladas' de Drácula en _execute_cancel()
+		# más abajo, pero del lado ANULAR y consultando el Cementerio en vez
+		# del propio texto de la carta objetivo (la protección la otorga
+		# Segundo Sello DESDE el Cementerio, no la carta Sello objetivo en sí).
+		var pre_name: String = String(pre_data.get("nombre", "")).to_lower()
+		if pre_data.get("tipo", -1) == Constants.CardType.TALISMAN and "sello" in pre_name:
+			var pre_cemetery: Array = CardManager.get_cemetery(pre_controller)
+			if pre_cemetery.any(func(d): return String(d.get("nombre", "")).to_lower() == "segundo sello"):
+				return false
 
 	# Llamar al ActionPipeline para marcar como anulado
 	if _main._action_pipeline.has_method("apply_special_action"):
@@ -196,7 +224,10 @@ func _execute_cancel(target_stack_id: int, source_card: Dictionary) -> bool:
 	if not _main._action_pipeline:
 		return false
 
-	var pre_obj := _main._action_pipeline.get_object_by_id(target_stack_id)
+	# Mismo motivo que en _execute_annul() arriba: `=` sin dos puntos, no `:=`
+	# (el tipo de retorno de _action_pipeline.get_object_by_id() no se puede
+	# inferir estáticamente porque _action_pipeline se accede dinámicamente).
+	var pre_obj = _main._action_pipeline.get_object_by_id(target_stack_id)
 	if not pre_obj.is_empty():
 		var pre_ctx: Dictionary = pre_obj.get("context", {})
 		var pre_source: Dictionary = pre_ctx.get("source_card", {})

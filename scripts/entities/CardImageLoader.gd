@@ -61,19 +61,19 @@ func _update_placeholder() -> void:
 	if _card.placeholder_icon:
 		match _card.card_type:
 			Constants.CardType.ORO:
-				_card.placeholder_icon.text = "💰"
+				_card.placeholder_icon.text = "ORO"
 				_card.placeholder_icon.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
 			Constants.CardType.ALIADO:
-				_card.placeholder_icon.text = "⚔"
+				_card.placeholder_icon.text = "ALIADO"
 				_card.placeholder_icon.add_theme_color_override("font_color", Color(0.7, 0.8, 0.9))
 			Constants.CardType.ARMA:
-				_card.placeholder_icon.text = "🗡"
+				_card.placeholder_icon.text = "ARMA"
 				_card.placeholder_icon.add_theme_color_override("font_color", Color(0.8, 0.5, 0.3))
 			Constants.CardType.TALISMAN:
-				_card.placeholder_icon.text = "✨"
+				_card.placeholder_icon.text = "TALISMAN"
 				_card.placeholder_icon.add_theme_color_override("font_color", Color(0.6, 0.4, 0.8))
 			Constants.CardType.TOTEM:
-				_card.placeholder_icon.text = "🏛"
+				_card.placeholder_icon.text = "TOTEM"
 				_card.placeholder_icon.add_theme_color_override("font_color", Color(0.4, 0.7, 0.5))
 
 	# Nombre de la carta
@@ -115,7 +115,8 @@ func _load_card_image() -> void:
 	if _card.card_id.is_empty():
 		return
 
-	print("[Card] Cargando imagen — id:%s path:%s" % [_card.card_id, _card.card_image_path])
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[Card] Cargando imagen — id:%s path:%s" % [_card.card_id, _card.card_image_path])
 
 	# Verificar si ya está en cache
 	var texture = CardDatabase.get_card_image(_card.card_id)

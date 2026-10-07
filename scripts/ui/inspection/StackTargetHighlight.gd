@@ -200,10 +200,10 @@ func _show_target_indicator(item: Control, is_valid: bool) -> void:
 
 	indicator.visible = true
 	if is_valid:
-		indicator.text = "🎯"
+		indicator.text = "[OBJETIVO]"
 		indicator.add_theme_color_override("font_color", Color.GREEN)
 	else:
-		indicator.text = "⛔"
+		indicator.text = "[BLOQUEADO]"
 		indicator.add_theme_color_override("font_color", Color.RED)
 
 

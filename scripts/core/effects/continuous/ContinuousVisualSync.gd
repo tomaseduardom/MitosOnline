@@ -22,7 +22,11 @@ func notify_card_visual_update(card: Node, stat: String, base_value: int, modifi
 		return
 
 	# Intentar llamar método de actualización visual en la carta
-	if card.has_method("update_stat_display"):
+	if card.has_method("refresh_strength_badge") and stat == "strength":
+		card.refresh_strength_badge()
+	elif card.has_method("refresh_cost_badge") and stat == "cost":
+		card.refresh_cost_badge()
+	elif card.has_method("update_stat_display"):
 		card.update_stat_display(stat, base_value, modified_value)
 
 	elif card.has_method("set_modified_strength") and stat == "strength":
@@ -75,8 +79,12 @@ func update_affected_cards_visuals(targets: Array, stat: String) -> void:
 		# Forzar recálculo (el método emitirá señales si hay cambios)
 		if stat == "strength" or stat == "":
 			_main.get_modified_strength(target)
+			if target.has_method("refresh_strength_badge"):
+				target.refresh_strength_badge()
 		if stat == "cost" or stat == "":
 			_main.get_modified_cost(target)
+			if target.has_method("refresh_cost_badge"):
+				target.refresh_cost_badge()
 
 
 func update_all_card_visuals() -> void:
@@ -101,7 +109,17 @@ func update_all_card_visuals() -> void:
 			if _main._modifiers.has(mod_id):
 				var mod = _main._modifiers[mod_id]
 				var target = mod.target
-				if target is Node and is_instance_valid(target):
+				# 2026-09-19, bug real reportado por el usuario: "Left operand
+				# of 'is' is a previously freed instance" — is_instance_valid()
+				# DEBE ir primero: 'is' se evalúa antes que el 'and' de la
+				# derecha (orden de evaluación normal, sin cortocircuito a
+				# favor), y a diferencia de is_instance_valid(), el operador
+				# 'is' de GDScript revienta si el objeto ya fue liberado, no
+				# devuelve false. Un modificador cuyo target salió de juego sin
+				# limpiarse de _modifiers/_modifiers_by_target (carta destruida/
+				# desterrada con un buff/debuff activo todavía registrado) deja
+				# exactamente esa referencia colgante aquí.
+				if is_instance_valid(target) and target is Node:
 					if target not in all_cards:
 						all_cards.append(target)
 
@@ -109,7 +127,8 @@ func update_all_card_visuals() -> void:
 	for card in all_cards:
 		_update_single_card_visual(card)
 
-	print("[ContinuousEffectManager] Visuales actualizados: %d cartas" % all_cards.size())
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[ContinuousEffectManager] Visuales actualizados: %d cartas" % all_cards.size())
 
 
 func _update_single_card_visual(card: Node) -> void:
@@ -121,6 +140,11 @@ func _update_single_card_visual(card: Node) -> void:
 	var mod_strength = _main.get_modified_strength(card)
 	var base_cost = _main._get_base_stat(card, "cost")
 	var mod_cost = _main.get_modified_cost(card)
+
+	if card.has_method("refresh_strength_badge"):
+		card.refresh_strength_badge()
+	if card.has_method("refresh_cost_badge"):
+		card.refresh_cost_badge()
 
 	# Llamar método de actualización si existe
 	if card.has_method("update_modified_stats"):

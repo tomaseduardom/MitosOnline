@@ -112,7 +112,7 @@ func try_build(ability_lower: String, btn: Button, panel: Control, card_for_glow
 		panel.add_child(btn)
 		return true
 
-	# Estaca (segunda habilidad) y Ángel Redentor removidos de acá
+	# Estaca (segunda habilidad) y Ángel Redentor removidos de aquí
 	# (2026-09-09, "sistema de respuestas"): ya no son botones que el
 	# jugador activa desde el Zoom — EffectController.offer_prevention()
 	# las detecta y ofrece reactivamente en el momento exacto en que
@@ -138,7 +138,7 @@ func try_build(ability_lower: String, btn: Button, panel: Control, card_for_glow
 		return true
 
 	# Drácula (tercera habilidad, "convertirlo... para prevenir...")
-	# removida de acá (2026-09-09, "sistema de respuestas") — mismo motivo
+	# removida de aquí (2026-09-09, "sistema de respuestas") — mismo motivo
 	# que Estaca/Ángel Redentor arriba: ya no es un botón, es reactiva.
 
 	# Patrón especial de Drácula, cuarta habilidad (2026-08-30): "Puedes

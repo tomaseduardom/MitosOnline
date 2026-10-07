@@ -4,7 +4,7 @@ extends RefCounted
 ## la superposición en cascada, e imagen/creación/despawn de tokens de Oro
 ## Virtual (genérico y restringido). Ninguna de estas funciones toca estado
 ## propio de GoldManager (oros_virtuales, restricted_gold_pools,
-## virtual_gold_tokens siguen viviendo ahí — acá solo se opera sobre los
+## virtual_gold_tokens siguen viviendo ahí — aquí solo se opera sobre los
 ## Arrays de tokens que GoldManager pasa como parámetro, y sobre nodos de
 ## Main vía _main). Extraído de GoldManager.gd (2026-09-06, "módulos gordos",
 ## Fase 2) — confirmado por grep de todo scripts/ que ninguna de estas
@@ -67,73 +67,98 @@ func update_gold_containers_spacing() -> void:
 
 func _update_container_gold_spacing(container: HBoxContainer) -> void:
 	"""Comprime progresivamente la separación entre cartas de Oro a medida
-	que se acumulan, garantizando que siempre quepan dentro del área de
-	oros (340px) sin invadir el campo.
-
-	2026-09-04, aclarado por el usuario: la lógica correcta NO es 'nunca se
-	tapan' (el rediseño a escala que se probó antes) — es que el click se
-	resuelva por PRIORIDAD DE CAPA: la carta de ENCIMA tiene 100% de
-	prioridad en toda su área (incluida la parte que tapa a la de abajo), y
-	la de ABAJO tiene 100% de prioridad en lo que le queda expuesto, y así
-	en cascada. Eso es exactamente lo que hace el recorte de click de
-	Card._has_point()/_apply_gold_click_clip() — se mantiene la superposición
-	(separación negativa) para que quepan más Oros sin achicarlos, con el
-	recorte garantizando que cada capa responda 100% en su porción real."""
+	que se acumulan, garantizando que siempre quepan de forma ordenada dentro
+	del área de oros (330px) sin invadir el campo. Las cartas se mantienen
+	libres sobre el tablero, alineadas rectamente sobre el eje horizontal."""
 	if not container or not is_instance_valid(container):
 		return
+
+	# Conectar señal sort_children una sola vez para mantener alineadas a Y=0 y escaladas
+	# inmediatamente después de cualquier re-ordenamiento interno de Godot.
+	if not container.has_meta("gold_sort_connected"):
+		container.set_meta("gold_sort_connected", true)
+		container.sort_children.connect(func():
+			_on_container_sort_children(container)
+		)
+
 	var count: int = container.get_child_count()
 	if count <= 1:
 		container.add_theme_constant_override("separation", 6)
 		_clear_gold_click_clip(container)
+		_align_gold_cards(container)
 		container.queue_sort()
 		return
 
-	var max_width: float = 340.0
-	var card_width: float = 150.0 * Constants.GOLD_CARD_SCALE.x
-	var ideal_sep: float = (max_width - float(count) * card_width) / float(count - 1)
-	# Piso en -95 (no -125): con -125 el área expuesta de cada carta tapada
-	# bajaba hasta 25px de 150, un blanco incómodo de acertar aunque el
-	# hit-test ya apuntara a la carta correcta. Con -95 el mínimo garantizado
-	# sube a 55px — con muchos Oros a la vez el contenedor puede desbordar
-	# un poco más allá de los 340px nominales, aceptado a propósito.
-	var final_sep: int = int(clampf(ideal_sep, -95.0, 6.0))
+	var max_width: float = 330.0
+	var card_visual_width: float = 150.0 * Constants.GOLD_CARD_SCALE.x  # 120.0
+	var ideal_step: float = (max_width - card_visual_width) / float(count - 1)
+	var step: float = minf(ideal_step, 130.0)  # Límite en 130px para dejar 10px de espacio libre entre 2 cartas
+	var final_sep: int = int(round(step - 150.0))
 	container.add_theme_constant_override("separation", final_sep)
-	_apply_gold_click_clip(container, card_width, final_sep)
+
+	_apply_gold_click_clip(container, step)
 	container.queue_sort()
 
+	_align_gold_cards.call_deferred(container)
 
-func _apply_gold_click_clip(container: HBoxContainer, card_width: float, final_sep: int) -> void:
-	"""Recorta el área de CLICK (no el arte — Card._has_point(), 2026-09-03)
-	de cada carta de Oro tapada por la derecha por la siguiente (superposición
-	por separación negativa, ver _update_container_gold_spacing()). Cada carta
-	sigue siendo un Control de 150px completo aunque solo se le vea una
-	porción — sin este recorte, esa porción tapada seguía comiéndose los
-	clicks (izquierdo Y derecho) que visualmente apuntaban a la carta
-	siguiente, dibujada encima. La ÚLTIMA carta de la fila nunca está tapada,
-	así que conserva el rect completo. Esto implementa la prioridad en
-	cascada: capa de encima 100% en su rect completo, capa de abajo 100% en
-	lo que le queda expuesto (2026-09-04, confirmado por el usuario)."""
-	# card_width/final_sep están en unidades YA escaladas por GOLD_CARD_SCALE
-	# (igual que el HBoxContainer las posiciona); Card._has_point() recibe el
-	# punto en el espacio LOCAL sin escalar (Control.size se queda en 150,
-	# solo card.scale la transforma visualmente) — hay que deshacer la escala.
+
+func _on_container_sort_children(container: HBoxContainer) -> void:
+	if not is_instance_valid(container):
+		return
+	_align_gold_cards.call_deferred(container)
+
+
+func _align_gold_cards(container: HBoxContainer) -> void:
+	if not is_instance_valid(container):
+		return
+	var count := container.get_child_count()
+	for i in range(count):
+		var c = container.get_child(i)
+		if not is_instance_valid(c):
+			continue
+		c.z_index = i
+		if "original_z_index" in c:
+			c.original_z_index = i
+		if c is Control:
+			if c.scale != Constants.GOLD_CARD_SCALE:
+				c.scale = Constants.GOLD_CARD_SCALE
+			if "base_scale" in c and c.base_scale != Constants.GOLD_CARD_SCALE:
+				c.base_scale = Constants.GOLD_CARD_SCALE
+
+
+func _apply_gold_click_clip(container: HBoxContainer, step: float) -> void:
+	"""Recorta el área de CLICK en coordenadas locales de la carta cuando hay
+	superposición, asegurando que cada carta de la baraja responda solo en su
+	franja visible. Al pasar el cursor por encima (hover), CardInteraction eleva
+	la carta y desactiva temporalmente el recorte para inspección completa."""
 	var scale_x: float = maxf(Constants.GOLD_CARD_SCALE.x, 0.001)
+	var card_visual_width: float = 150.0 * scale_x
 	var children := container.get_children()
-	var exposed_width: float = (card_width + float(final_sep)) / scale_x if final_sep < 0 else -1.0
+	var local_exposed: float = (step / scale_x) if step < card_visual_width else -1.0
 	for i in range(children.size()):
 		var c = children[i]
 		if not is_instance_valid(c) or not c.has_method("set_click_clip_right"):
 			continue
 		if i == children.size() - 1:
 			c.set_click_clip_right(-1.0)
+			c.set_meta("gold_click_clip", -1.0)
+			if c.has_method("set_click_clip_top_free"):
+				c.set_click_clip_top_free(0.0)
 		else:
-			c.set_click_clip_right(exposed_width)
+			c.set_click_clip_right(local_exposed)
+			c.set_meta("gold_click_clip", local_exposed)
+			if c.has_method("set_click_clip_top_free"):
+				c.set_click_clip_top_free(0.0)
 
 
 func _clear_gold_click_clip(container: HBoxContainer) -> void:
 	for c in container.get_children():
-		if is_instance_valid(c) and c.has_method("set_click_clip_right"):
-			c.set_click_clip_right(-1.0)
+		if is_instance_valid(c):
+			if c.has_method("set_click_clip_right"):
+				c.set_click_clip_right(-1.0)
+				c.set_meta("gold_click_clip", -1.0)
+			if c.has_method("set_click_clip_top_free"):
+				c.set_click_clip_top_free(0.0)
 
 
 func _get_token_image_for_label(label: String) -> String:
@@ -160,8 +185,12 @@ func _get_token_image_for_label(label: String) -> String:
 	return "res://assets/ui/tokens/token_oro_libre.png"
 
 
-func _spawn_gold_token(nombre: String, label: String, target_list: Array) -> void:
-	"""Token visual en Reserva de Oro con ilustración temática de ficha rúnica/éter."""
+func _spawn_gold_token(nombre: String, label: String, target_list: Array, player_id: int = 0) -> void:
+	"""Token visual en Reserva de Oro con ilustración temática de ficha rúnica/éter.
+
+	'player_id' (2026-10-06, ver arquitectura.md §33): a qué Reserva real
+	(player_gold u opponent_gold) va el token — antes siempre player_gold,
+	sin importar de quién era el Oro Virtual que representaba."""
 	var image_path := _get_token_image_for_label(label)
 	var token_data := {
 		"id": "%s_token_%d" % [nombre.to_lower().replace(" ", "_"), Time.get_ticks_usec()],
@@ -179,18 +208,22 @@ func _spawn_gold_token(nombre: String, label: String, target_list: Array) -> voi
 	token.scale = Constants.GOLD_CARD_SCALE
 	token.base_scale = Constants.GOLD_CARD_SCALE
 	token.set_zone(Constants.Zone.RESERVA_ORO)
-	_main.player_gold.add_child(token)
+	token.owner_id = player_id
+	token.controller_id = player_id
+	var reserva_container: HBoxContainer = _main.player_gold if player_id == 0 else _main.opponent_gold
+	reserva_container.add_child(token)
 	target_list.append(token)
 	update_gold_containers_spacing()
 
 
-func _despawn_gold_token(target_list: Array) -> void:
+func _despawn_gold_token(target_list: Array, player_id: int = 0) -> void:
 	"""Retira un token con animación mágica de disolución y elevación."""
 	if target_list.is_empty():
 		return
 	var token: Node = target_list.pop_back()
 	if not is_instance_valid(token):
 		return
+	var reserva_container: HBoxContainer = _main.player_gold if player_id == 0 else _main.opponent_gold
 	var tween = _main.create_tween()
 	tween.set_parallel(true)
 	tween.tween_property(token, "modulate:a", 0.0, 0.22)
@@ -198,7 +231,7 @@ func _despawn_gold_token(target_list: Array) -> void:
 	tween.tween_property(token, "position:y", token.position.y - 20.0, 0.22)
 	await tween.finished
 	if is_instance_valid(token):
-		if token.get_parent() == _main.player_gold:
-			_main.player_gold.remove_child(token)
+		if token.get_parent() == reserva_container:
+			reserva_container.remove_child(token)
 		token.queue_free()
 		update_gold_containers_spacing()

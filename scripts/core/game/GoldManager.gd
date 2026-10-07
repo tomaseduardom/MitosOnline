@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 class_name GoldManager
 ## GoldManager — Sistema de pago de costes y gestión de Oro (DAR Secciones 6 y 8).
 ## Se instancia como hijo de Main en _ready(). Accede a nodos de Main via _main.
@@ -40,33 +40,41 @@ var oro_colocado_conteo: Dictionary = {0: 0, 1: 0}
 var _oro_por_efecto_used_game: Dictionary = {0: false, 1: false}
 
 var _main: Node = null
-var oros_virtuales: int = 0
+## Oro Virtual (2026-08-28, p.ej. Lobo Sagrado: "genera un Oro por el turno")
+## — por jugador desde 2026-10-06 (antes era un int único, siempre leído/
+## escrito como si solo existiera el jugador 0; ver arquitectura.md §33 para
+## el porqué y el alcance de este refactor). Usar siempre oros_virtuales[id],
+## nunca 'oros_virtuales' sola — no quedó ningún acceso directo al Dictionary
+## entero fuera de este archivo.
+var oros_virtuales: Dictionary = {0: 0, 1: 0}
 ## Tokens visuales en Reserva de Oro, uno por unidad de oros_virtuales — 1:1,
 ## para que la Reserva nunca muestre más ni menos Oro del que hay realmente
 ## disponible (2026-08-28, a pedido del usuario: antes oros_virtuales no
-## tenía ningún rastro visual, solo el contador interno).
-var virtual_gold_tokens: Array = []
+## tenía ningún rastro visual, solo el contador interno). Por jugador desde
+## 2026-10-06 (ver nota de oros_virtuales arriba).
+var virtual_gold_tokens: Dictionary = {0: [], 1: []}
 
 ## Oro Virtual RESTRINGIDO (2026-08-28, p.ej. Padre de la Patria: "genera un
 ## Oro para jugar Armas o Aliados Caballero por el turno") — a diferencia de
 ## oros_virtuales (Lobo Sagrado, sirve para pagar cualquier cosa), cada
-## unidad acá solo paga cartas que cumplan su propio 'predicate'. Varias
-## fuentes pueden coexistir (cada una es una entrada separada de esta
-## lista), por eso es Array de pools y no un solo contador+predicate.
-## Cada entrada: {"amount": int, "tokens": Array, "predicate": Callable,
-## "label": String}. predicate: func(card_type: int, card_race: String,
-## card_cost: int) -> bool (card_cost agregado 2026-08-28 para Legión
-## Paladín: "genera un Oro para jugar Aliados o Armas de coste 2 o más" —
-## texto reconfirmado 2026-08-29 contra un fetch en vivo de la API, ver
-## [[feedback_api_is_source_of_truth]]).
-var restricted_gold_pools: Array = []
+## unidad aquí solo paga cartas que cumplan su propio 'predicate'. Varias
+## fuentes pueden coexistir (cada una es una entrada separada del Array de
+## ESE jugador), por eso cada valor del Dictionary es un Array de pools y no
+## un solo contador+predicate. Cada entrada: {"amount": int, "tokens": Array,
+## "predicate": Callable, "label": String}. predicate: func(card_type: int,
+## card_race: String, card_cost: int) -> bool (card_cost agregado 2026-08-28
+## para Legión Paladín: "genera un Oro para jugar Aliados o Armas de coste 2
+## o más" — texto reconfirmado 2026-08-29 contra un fetch en vivo de la API,
+## ver [[feedback_api_is_source_of_truth]]). Por jugador desde 2026-10-06
+## (ver nota de oros_virtuales arriba).
+var restricted_gold_pools: Dictionary = {0: [], 1: []}
 
 ## "No puedes jugar más cartas este turno" (2026-08-30, p.ej. Tempilcahue) —
 ## bloqueo TOTAL de jugar cartas (Oro incluido, ver play_card() más abajo:
-## colocar Oro también pasa por acá) para el resto del turno actual, por
+## colocar Oro también pasa por aquí) para el resto del turno actual, por
 ## jugador. Se limpia en cada turno nuevo, no en "su próximo turno" —
 ## _on_turn_started_clear_virtual_gold() ya resetea otros estados "por este
-## turno" (oro_colocado_conteo, virtuales), mismo criterio acá.
+## turno" (oro_colocado_conteo, virtuales), mismo criterio aquí.
 var _no_more_cards_this_turn: Dictionary = {0: false, 1: false}
 
 var _visuals: RefCounted = null
@@ -104,6 +112,28 @@ func set_no_more_cards_this_turn(player_id: int) -> void:
 func _no_more_cards_violation(card: Node) -> bool:
 	var player_id: int = card.controller_id if card.get("controller_id") != null else 0
 	return _no_more_cards_this_turn.get(player_id, false)
+
+
+func _quinto_sello_cap_violation() -> bool:
+	"""'Si está en tu Cementerio, no se pueden jugar más de cinco cartas por
+	turno' (Quinto Sello, 2026-09-20) — a diferencia de _no_more_cards_
+	violation() (candado por JUGADOR, activado por una habilidad puntual),
+	este es un tope NUMÉRICO GLOBAL de regla (el texto no dice 'tuyas'/'tu
+	oponente', afecta a cualquiera que intente jugar la sexta carta) —
+	revisa AMBOS Cementerios, no solo el del jugador que intenta jugar.
+	Solo gatea el camino de play_card() (mano) — play_card_from_exile()/
+	play_card_from_cemetery()/play_card_for_free() NO pasan por este chequeo
+	todavía (limitación conocida, documentada en arquitectura.md §12.5: sin
+	un caso de uso real que combine Exhumar/Cementerio/gratis con este tope
+	en la misma partida para justificar tocar esos 3 caminos también sin
+	poder probarlo)."""
+	if TurnManager.cards_played_count_this_turn < 5:
+		return false
+	for pid in [0, 1]:
+		var cemetery: Array = CardManager.get_cemetery(pid)
+		if cemetery.any(func(d): return String(d.get("nombre", "")).to_lower() == "quinto sello"):
+			return true
+	return false
 
 
 ## "Elegir una carta de ahí (mano rival) que no sea Oro para que no pueda
@@ -197,7 +227,7 @@ func _offer_reactive_second_gold_to_pagado(reactor_id: int, card_data: Dictionar
 	# Cancelar son el mismo resultado — clickear la carta ya acepta sola.
 	# min_selections=0 (2026-08-30, bug real corregido de paso):
 	# await_single_pick() escucha selection_completed además de
-	# card_selected/selection_cancelled — la versión manual de acá no lo
+	# card_selected/selection_cancelled — la versión manual de aquí no lo
 	# hacía, así que confirmar con 0 elegidas dejaba el panel colgado.
 	var confirm_btn = SelectionManager.get("_confirm_button")
 	if confirm_btn:
@@ -290,14 +320,14 @@ func _place_card_as_gold(card: Node) -> void:
 	# verdad: mismo valor en GameBootstrap (Oro Inicial), _spawn_virtual_
 	# gold_token() y LookAndPlayResolver (Oro Pagado directo de Perder la
 	# Razón) — _mover_oro_a_pagado()/_mover_oro_a_reserva() no tocan scale,
-	# así que solo hay que fijarlo una vez acá donde se crea/coloca.
+	# así que solo hay que fijarlo una vez aquí donde se crea/coloca.
 	card.scale = Constants.GOLD_CARD_SCALE
 	# base_scale ANTES del tween, no después (2026-08-28, a pedido del
 	# usuario): CardInteraction._on_mouse_exited() calcula el tamaño de
 	# reposo como base_scale * card_scale_normal — si el mouse pasaba por
 	# encima de la carta durante estos ~0.3s de animación (base_scale
 	# todavía en Vector2.ONE, el de la mano), el hover la devolvía a tamaño
-	# completo. Recién en el próximo hover se veía "encoger de más" a su
+	# completo. Solo en el próximo hover se veía "encoger de más" a su
 	# tamaño real — no eran dos bugs, era el mismo: base_scale llegaba tarde.
 	card.base_scale = Constants.GOLD_CARD_SCALE
 	var tween = create_tween()
@@ -316,7 +346,7 @@ func _place_card_as_gold(card: Node) -> void:
 	_main._update_buttons_for_phase(GameManager.current_phase)
 	# 'Entra en juego como una copia de un Oro que controle tu oponente'
 	# (Corazón de Dragón, 2026-09-06, a pedido del usuario: es una CONDICIÓN
-	# DE JUEGO, no algo a lo que responder — se resuelve acá, ANTES del ETB
+	# DE JUEGO, no algo a lo que responder — se resuelve aquí, ANTES del ETB
 	# genérico de abajo, con el jugador eligiendo a qué Oro rival apuntar.
 	# Como load_from_data() reemplaza nombre/habilidad/keywords de verdad
 	# antes de que _trigger_enter_play() lea card_ability, si el Oro copiado
@@ -381,7 +411,7 @@ func _register_armeria_opponent_turn_trigger(card: Node) -> void:
 	"""'Al comienzo del turno oponente, Baraja y/o Destierra hasta dos
 	cartas de los Cementerios' (2026-09-04, Armería del Guerrero) — el Oro
 	Inicial nunca pasa por _trigger_enter_play() (GameBootstrap._setup_
-	oro_inicial() lo coloca aparte), así que este trigger se conecta acá
+	oro_inicial() lo coloca aparte), así que este trigger se conecta aquí
 	directo en vez del molde estándar de triggers de fase (resolve_
 	agrupacion_triggers()/resolve_vigilia_triggers(), pensados para cartas
 	que SÍ entran en juego normalmente). 'Al comienzo del turno oponente' =
@@ -405,40 +435,47 @@ func _register_armeria_opponent_turn_trigger(card: Node) -> void:
 	GameManager.turn_started.connect(handler)
 
 
-func _resolve_armeria_barajar_desterrar(max_amount: int = 2, title: String = "Armería del Guerrero") -> void:
+func _resolve_armeria_barajar_desterrar(max_amount: int = 2, title: String = "Armería del Guerrero", chooser_id: int = 0) -> void:
 	"""Elige hasta 'max_amount' cartas de los Cementerios (de cualquiera de
 	los dos jugadores, sin zona explícita = en juego, ver
 	[[project_no_zone_means_in_play]]) y, para cada una, Barajarla (vuelve
 	a su Castillo, barajado) o Desterrarla — elección independiente por
 	carta. Genérica desde 2026-09-04 (antes hardcodeada a 2/Armería del
-	Guerrero) — reusada por Belta ('hasta dos') y cualquier otra carta con
-	el mismo patrón exacto de texto, solo cambia la cantidad."""
-	var candidates: Array = []
-	for owner_id in [0, 1]:
-		for d in CardManager.get_cemetery(owner_id):
-			candidates.append({"data": d, "owner": owner_id})
-	if candidates.is_empty():
+	Guerrero) — reusada por Belta ('hasta dos'), Perla de Sangre, Uriel,
+	Torre de Babel y cualquier otra carta con el mismo patrón exacto de
+	texto, solo cambia la cantidad.
+	2026-09-13, a pedido del usuario: la elección de CUÁLES cartas ahora es
+	click directo (ZoneViewerModule.open_cemetery_target_picker(), pool
+	combinado de ambos Cementerios, sin lock) en vez del modal de lista
+	viejo — como esto convierte de una sola vez a las 4+ cartas que
+	reusan esta función, tiene más impacto que convertir una habilidad
+	puntual. La elección Barajar/Desterrar POR CARTA sigue siendo un
+	modal de 2 botones (es un efecto distinto, no una carta — no aplica el
+	reemplazo, ver arquitectura.md §10.16/§10.18)."""
+	if not _main._zone_viewer:
 		return
-	var display_data: Array = []
-	for c in candidates:
-		display_data.append(c.data)
-	var result: Dictionary = await SelectionManager.await_multi_pick(
-		display_data, "%s — elige hasta %d carta(s) de los Cementerios" % [title, max_amount], max_amount, 0, true)
-	for picked_data in result.picked:
-		var owner_of_picked: int = 0
-		for c in candidates:
-			if c.data == picked_data:
-				owner_of_picked = c.owner
-				break
+	var no_filter := func(_c: Node) -> bool: return true
+	var picked: Array = await _main._zone_viewer.open_cemetery_target_picker(
+		"%s — elige hasta %d carta(s) de los Cementerios" % [title, max_amount], no_filter, max_amount,
+		"cemetery", false, false, chooser_id)
+	for entry in picked:
+		var owner_of_picked: int = entry.owner_id
+		var picked_data: Dictionary = entry.data
 		var idx: int = CardManager.get_cemetery(owner_of_picked).find(picked_data)
 		if idx < 0:
 			continue
 		var shuffle_it: bool = await SelectionManager.await_two_choice(
-			_main, "¿Qué hacer con esa carta?", "Barajarla (vuelve a su Castillo)", "Desterrarla")
+			_main, "¿Qué hacer con esa carta?", "Barajarla (vuelve a su Castillo)", "Desterrarla", chooser_id)
 		CardManager.remove_from_cemetery(owner_of_picked, idx)
 		if shuffle_it:
 			CardManager.get_deck(owner_of_picked).append(picked_data)
 			CardManager.shuffle_deck(owner_of_picked)
+			# 2026-09-30, mismo criterio que el fix de Azi Sruvara: sin esto
+			# no había ninguna retroalimentación visual del barajado.
+			AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+				"callable": Callable(AnimationQueue, "animate_shuffle").bind(owner_of_picked),
+				"description": "Barajar mazo (%s)" % title
+			})
 		else:
 			CardManager.add_to_exile(owner_of_picked, picked_data)
 
@@ -499,7 +536,7 @@ func play_card(card: Node) -> bool:
 	#     aparezca una carta así) o sean de respuesta (Anular/Cancelar,
 	#     p.ej. Red de Plata) — esos ya quedan bloqueados en CUALQUIER fase
 	#     más abajo por _is_response_only_talisman(), así que no hace falta
-	#     repetir la exclusión acá.
+	#     repetir la exclusión aquí.
 	var phase_exception: bool = has_phase_exception(card.card_type)
 	# Talismanes de velocidad instantánea (Anula/Cancela, p.ej. Red de Plata,
 	# Sacrificio Solar — ver _is_response_only_talisman()) son "de respuesta"
@@ -511,7 +548,7 @@ func play_card(card: Node) -> bool:
 	# no hay pila/interrupción real de la acción del oponente — el motor no
 	# tiene un oponente que juegue cartas por su cuenta todavía (ver
 	# comentarios "el bot no actúa de forma independiente" repartidos por
-	# el proyecto) — así que "instantáneo" acá significa "juega esto cuando
+	# el proyecto) — así que "instantáneo" aquí significa "juega esto cuando
 	# quieras mientras sea tu turno", resolviendo sobre algo que YA está en
 	# juego (su objetivo), no sobre una acción a medio resolver.
 	var is_instant_response: bool = card.card_type == Constants.CardType.TALISMAN and _is_response_only_talisman(card)
@@ -520,14 +557,27 @@ func play_card(card: Node) -> bool:
 		_main._update_debug(get_phase_rejection_reason(card.card_type))
 		await _return_card_rejected(card)
 		return false
-	if GameManager.active_player_id != 0:
+	# 2026-09-15, a pedido del usuario ("integrar el sistema de respuestas,
+	# que pueda responder cartas rivales como estaba planeado"): este chequeo
+	# bloqueaba SIEMPRE que no fuera tu turno de juego — sin excepción para
+	# is_instant_response, a diferencia de los otros dos gateos de arriba/
+	# abajo (fase y ventana de prioridad), que sí la tienen. El comentario de
+	# 2026-09-06 (línea ~506) ya documentaba la intención real ("se juegan EN
+	# CUALQUIER MOMENTO en el que el jugador tenga la palabra"), pero el bot
+	# jugando cartas de forma independiente + la Pila de Respuesta Universal
+	# (docs/plans/2026-09-09-pila-respuesta-universal-design.md) hicieron que
+	# esa intención dejara de cumplirse en la práctica: un Talismán de
+	# respuesta (Red de Plata, Sacrificio Solar) nunca se podía jugar durante
+	# el turno del rival, exactamente el caso de uso real que existe para
+	# tenerlos en la mano.
+	if GameManager.active_player_id != 0 and not is_instant_response:
 		_main._update_debug("No es tu turno")
 		await _return_card_rejected(card)
 		return false
 	# Si hay una ventana de prioridad abierta (respuesta a un trigger que se
 	# acaba de disparar, p.ej. 'cuando entre en juego' de la carta anterior),
 	# no dejar jugar otra carta todavía — el trigger pendiente quedaba
-	# pospuesto y se resolvía recién cuando pasaba OTRA acción, en el
+	# pospuesto y se resolvía solo cuando pasaba OTRA acción, en el
 	# momento equivocado. Hay que resolver esa ventana primero (¿Paso?).
 	# Los Talismanes instantáneos SÍ pueden jugarse con la ventana abierta —
 	# es justo el caso de uso real (responder a lo que la disparó).
@@ -537,6 +587,10 @@ func play_card(card: Node) -> bool:
 		return false
 	if _no_more_cards_violation(card):
 		_main._update_debug("No puedes jugar más cartas este turno")
+		await _return_card_rejected(card)
+		return false
+	if _quinto_sello_cap_violation():
+		_main._update_debug("No se pueden jugar más de cinco cartas por turno (Quinto Sello)")
 		await _return_card_rejected(card)
 		return false
 	if _card_play_locked(card):
@@ -558,14 +612,14 @@ func play_card(card: Node) -> bool:
 		_main._update_debug("Ya jugaste un %s este turno" % card.card_name)
 		await _return_card_rejected(card)
 		return false
-	# Talismanes de respuesta (Anula/Cancela) ya NO se bloquean acá sin más
+	# Talismanes de respuesta (Anula/Cancela) ya NO se bloquean aquí sin más
 	# (2026-09-06, implementado): is_instant_response arriba ya los dejó
-	# pasar las dos ventanas normales de fase/prioridad — de acá para abajo
+	# pasar las dos ventanas normales de fase/prioridad — de aquí para abajo
 	# siguen el mismo camino genérico que cualquier Talismán (coste, target,
 	# _play_talisman()). Si su objetivo (Anular un Aliado/Tótem, Cancelar
 	# una habilidad) no existe en la mesa, el propio selector de objetivo
 	# (_execute_targeted_annul()/equivalente) se cancela solo con ESC — no
-	# hace falta precalcular "hay objetivo válido" acá.
+	# hace falta precalcular "hay objetivo válido" aquí.
 	# "Muestra X para reducir el coste" (2026-08-29, p.ej. El Rey y el
 	# Verdugo) — se resuelve ANTES de calcular coste_real, porque el
 	# descuento depende de una elección del jugador hecha en este mismo
@@ -584,20 +638,32 @@ func play_card(card: Node) -> bool:
 				return c == card
 			PaymentManager.agregar_modificador_coste(card, -revealed_count, applies_to_this_card, reveal_pattern.allow_zero)
 
+	# "Puedes Descartar una carta para reducir su coste en un Oro" (2026-09-20,
+	# voragh el devorador, bug real reportado por el usuario) — mismo momento
+	# y mismo criterio que el bloque de arriba (ANTES de calcular coste_real),
+	# pero la carta entregada se descarta de verdad en vez de solo mostrarse.
+	var discard_pattern: Dictionary = _get_discard_cost_reduction_pattern(card)
+	if not discard_pattern.is_empty():
+		var did_discard: bool = await _resolve_discard_cost_reduction(card)
+		if did_discard:
+			var applies_to_this_card_discard := func(c: Node) -> bool:
+				return c == card
+			PaymentManager.agregar_modificador_coste(card, -1, applies_to_this_card_discard, false)
+
 	# Filtro de asequibilidad ANTES de ofrecer portador (2026-08-28, a pedido
 	# del usuario): con excepciones de fase tipo Lobo Sagrado (Guerra de
 	# Talismanes permite Armas de cualquier coste) el jugador podía llegar a
 	# elegir portador para un Arma que ya sabíamos que no podía pagar (0 Oro
 	# disponible, Arma de coste 3) — no debía ser siquiera una opción válida,
 	# igual que Tangata Manu/_make_look_play_free_filter ya filtran por
-	# asequibilidad antes de mostrar candidatos. Se corta acá, antes de la
-	# selección de portador, en vez de recién después.
+	# asequibilidad antes de mostrar candidatos. Se corta aquí, antes de la
+	# selección de portador, en vez de solo después.
 	var coste_real = PaymentManager.calcular_coste_real(card)
 	if not PaymentManager.puede_jugar_carta(card, 0):
 		var disponible = get_oro_disponible()
 		_main._update_debug("Oro insuficiente: necesitas %d, tienes %d (gastado este turno: %d)" % [
 			coste_real, disponible, PaymentManager.oro_gastado_este_turno])
-		# Limpiar el descuento de "muestra X" si se rechaza acá (2026-08-29):
+		# Limpiar el descuento de "muestra X" si se rechaza aquí (2026-08-29):
 		# si no, un segundo intento de jugar la misma carta más tarde este
 		# turno heredaría el descuento sin haber mostrado nada de nuevo.
 		PaymentManager.remover_modificador_coste(card)
@@ -773,7 +839,7 @@ func play_card_from_cemetery(card_data: Dictionary) -> bool:
 	var card_type: int = card_data.get("tipo", -1)
 	# Nota: _card_play_locked() opera sobre el Node (candado por instance_id,
 	# ver lock_card_from_playing()) — play_card_from_cemetery() todavía no
-	# tiene el Node acá (se crea más abajo), así que el candado de Chakram no
+	# tiene el Node aquí (se crea más abajo), así que el candado de Chakram no
 	# aplica a este camino (jugar con Exhumar desde el Cementerio no es el
 	# caso que esa carta describe: 'una carta de la mano rival').
 	var card = _main._create_card(card_data, false)
@@ -818,7 +884,7 @@ func play_card_from_cemetery(card_data: Dictionary) -> bool:
 			card.queue_free()
 			return false
 
-	# Recién con todo confirmado (portador elegido, Oro alcanza) se retira
+	# Solo con todo confirmado (portador elegido, Oro alcanza) se retira
 	# de verdad del Cementerio — igual que play_card() con la mano, para que
 	# cancelar a mitad de camino no deje el Cementerio corrompido.
 	var cemetery: Array = CardManager.get_cemetery(0)
@@ -842,15 +908,23 @@ func play_card_from_cemetery(card_data: Dictionary) -> bool:
 	return true
 
 
-func play_card_for_free(card_data: Dictionary) -> bool:
+func play_card_for_free(card_data: Dictionary, owner_id: int = 0) -> bool:
 	"""Juega una carta SIN pagar su coste ni pasar por la mano (2026-08-25,
 	p.ej. Tangata Manu: 'juega una carta de coste 2 o menos... sin pagar su
-	coste'). El llamador ya sacó card_data de su zona de origen — acá solo
+	coste'). El llamador ya sacó card_data de su zona de origen — aquí solo
 	se crea el nodo y se enruta según su tipo, igual que play_card()/
-	play_card_from_cemetery() pero sin pasar por PaymentManager."""
+	play_card_from_cemetery() pero sin pasar por PaymentManager.
+
+	'owner_id' (2026-10-05, bug real encontrado al convertir más cartas —
+	ver arquitectura.md §25): antes quedaba SIEMPRE en 0 sin importar quién
+	activó el efecto que llama a esta función — cualquier llamador que
+	resuelve una habilidad del jugador 1 (La Torre, arco del triunfo, Caín,
+	etc.) terminaba poniendo la carta en el campo del Anfitrión por error.
+	Los llamadores existentes que no pasan este argumento conservan el
+	comportamiento viejo (0) sin cambios."""
 	var card_type: int = card_data.get("tipo", -1)
 	var card = _main._create_card(card_data, false)
-	card.owner_id = 0
+	card.owner_id = owner_id
 	_main._connect_card_signals(card)
 
 	if card_type == Constants.CardType.ARMA and not _player_has_ally_in_play():
@@ -865,7 +939,7 @@ func play_card_for_free(card_data: Dictionary) -> bool:
 	var chosen_wielder: Node = null
 	if card_type == Constants.CardType.ARMA:
 		card.can_interact = false
-		chosen_wielder = await _select_weapon_wielder()
+		chosen_wielder = await _select_weapon_wielder(owner_id)
 		if not chosen_wielder or not is_instance_valid(chosen_wielder):
 			_main._update_debug("Equipar Arma cancelado")
 			card.queue_free()
@@ -880,57 +954,87 @@ func play_card_for_free(card_data: Dictionary) -> bool:
 	return true
 
 
-func _select_weapon_wielder() -> Node:
+func _select_weapon_wielder(chooser_id: int = 0) -> Node:
 	"""Abre selección de objetivo para elegir qué Aliado porta el Arma que
 	se está jugando — propio O rival (2026-09-03, corregido a pedido del
 	usuario: DAR no restringe el portador a Aliados que controlas). Un
 	Arma no puede ir suelta, y un Aliado solo porta una a la vez (o más,
-	con 'Arma adicional' en juego)."""
+	con 'Arma adicional' en juego).
+
+	'chooser_id' (2026-10-05, ver arquitectura.md §25): solo lo usan
+	llamadores de play_card_for_free() en nombre del jugador 1 — los
+	llamadores de play_card()/play_card_from_cemetery() (siempre el
+	Anfitrión, ver sus propios gateos de turno) se quedan en el default 0."""
 	if not _main._card_interaction:
 		return null
 	# Chequeo defensivo ANTES de abrir la selección (2026-08-28): todos los
 	# llamadores ya verifican _player_has_ally_in_play() antes de llegar
-	# acá, pero si por cualquier motivo (nuevo llamador, estado cambiado
+	# aquí, pero si por cualquier motivo (nuevo llamador, estado cambiado
 	# entre medio) esto se llamara con cero candidatos elegibles, abrir la
 	# selección de todos modos la dejaba colgada para siempre — cualquier
 	# click en cualquier carta (incluidas otras de la mano) caía en
 	# "Objetivo no válido" sin resolver nunca 'done', y el jugador quedaba
-	# sin poder jugar más cartas hasta reiniciar. Cortar acá es la última
+	# sin poder jugar más cartas hasta reiniciar. Cortar aquí es la última
 	# red de seguridad, sin importar qué otro chequeo haya fallado antes.
 	if _get_eligible_weapon_wielders().is_empty():
 		_main._update_debug("No hay ningún Aliado libre en juego para portar el Arma")
 		return null
 	var filter := func(c: Node) -> bool:
 		return c in _get_eligible_weapon_wielders()
-	return await _main._card_interaction.await_target("Elige qué Aliado porta el Arma (propio o rival)", filter)
+	return await _main._card_interaction.await_target("Elige qué Aliado porta el Arma (propio o rival)", filter, true, chooser_id)
 
 
-func _equip_weapon(weapon: Node, ally: Node) -> void:
+func _equip_weapon(weapon: Node, ally: Node, fire_enter_play: bool = true) -> void:
 	"""Ancla el Arma como hija directa del Aliado portador — no va a ningún
 	contenedor de línea. Se puede seguir inspeccionando con clic derecho por
 	separado (mismo Card.tscn/Card.gd) y la sigue automáticamente si el
 	Aliado se reparenta (ataca) o sale de juego (ver CardManager.destroy_card/
-	exile_card, que la mueven al mismo destino que el portador)."""
-	TurnManager.on_card_played(weapon)
+	exile_card, que la mueven al mismo destino que el portador).
+
+	fire_enter_play (2026-09-25, bug real reportado por el usuario: 'pude
+	jugar un arma en fase de daño, no puedo hacer eso') — CardManager.
+	_resolve_weapon_survives_wielder() reusa esta misma función para
+	RE-anclar un Arma que YA estaba en juego a un nuevo portador cuando el
+	anterior muere (DAR: el Arma sobrevive, no se 'juega' de nuevo). Antes
+	esta función llamaba _trigger_enter_play() SIEMPRE, sin distinguir ese
+	caso de un Arma genuinamente recién jugada — eso disparaba otra vez su
+	'Cuando entra en juego' (visible en el log como una Espada Vikinga
+	resolviendo su habilidad en plena Asignación de Daño), sumaba de más al
+	contador de Quinto Sello, y re-evaluaba auras de entrada (Primer
+	Sello/Llave del Abismo) para una carta que nunca volvió a entrar.
+	Ahora, si fire_enter_play es false (reasignación de portador), se
+	saltea _trigger_enter_play() por completo — el Arma sigue en juego, con
+	su bono de Fuerza/keywords ya registrados de nuevo para el portador
+	nuevo (eso sí corresponde), pero sin re-disparar nada de 'entrar en
+	juego'."""
+	if fire_enter_play:
+		TurnManager.on_card_played(weapon)
 	_main._update_debug("Equipando %s a %s" % [weapon.card_name, ally.card_name])
 
-	# Quitar de la mano SOLO si de verdad sigue ahí (2026-08-22): llamadores
-	# como TriggerSystem._execute_play_weapon_discount_draw() (Lobo Sagrado)
-	# pueden pasar un Arma que YA se sacó de su origen antes de llamar acá
-	# (de mano) o que nunca estuvo en la mano (recién instanciada desde el
-	# Cementerio) — remove_child() sobre un nodo que no es hijo tira error.
-	var idx = _main.player_hand.cards.find(weapon)
-	if idx >= 0:
-		_main.player_hand.cards.remove_at(idx)
-	if weapon.get_parent() == _main.player_hand:
-		_main.player_hand.remove_child(weapon)
-		_main.player_hand._arrange_cards()
-	weapon.can_interact = false
+	# 1. Capturar posición global inicial ANTES de quitar el arma de su contenedor
+	var start_pos: Vector2 = weapon.global_position if weapon.is_inside_tree() else ally.global_position
 
-	var start_pos = weapon.global_position if weapon.is_inside_tree() else ally.global_position
+	# 2. Desactivar interacción y arrastre residual de inmediato
+	weapon.can_interact = false
+	if "is_dragging" in weapon:
+		weapon.is_dragging = false
+	if "drag_enabled" in weapon:
+		weapon.drag_enabled = false
+	if "_drag_pending" in weapon:
+		weapon._drag_pending = false
+
+	# 3. Quitar de la mano matando cualquier tween activo en DynamicHand (2026-09-19)
+	# para evitar que tweens residuales sigan moviendo 'position' a las coordenadas de la mano.
+	if _main and _main.player_hand:
+		if _main.player_hand.cards.has(weapon) or weapon.get_parent() == _main.player_hand:
+			_main.player_hand.remove_card(weapon, false)
 	if weapon.get_parent():
 		weapon.get_parent().remove_child(weapon)
+
+	# 4. Asignar estado IN_PLAY y emparentar al Aliado
+	weapon.current_state = Card.CardState.IN_PLAY
 	ally.add_child(weapon)
+
 	# Detrás del Aliado, asomando solo por abajo (2026-08-29, tercera vuelta
 	# de este mismo ajuste, a pedido del usuario: 'el portador está sobre el
 	# arma y esta solo se puede ver su caja de texto por abajo'). El primer
@@ -939,8 +1043,8 @@ func _equip_weapon(weapon: Node, ally: Node) -> void:
 	# CardBase. El segundo intento (más arriba en el historial) sacó la
 	# superposición por completo (Arma abajo del todo, sin tapar nada) — el
 	# usuario prefiere la superposición real: portador arriba, Arma
-	# asomando abajo. La diferencia con el primer intento es el OFFSET: acá
-	# es lo bastante grande (140 de 210 de alto) para que la parte de abajo
+	# asomando abajo. La diferencia con el primer intento es el OFFSET: aquí
+	# es lo bastante grande (125 de 210 de alto) para que la parte de abajo
 	# del Arma quede FUERA del rect del Aliado (ahí sí se ve, nada del
 	# Aliado la tapa), y solo la parte de arriba (dentro del rect) queda
 	# escondida detrás del CardBase.
@@ -960,32 +1064,54 @@ func _equip_weapon(weapon: Node, ally: Node) -> void:
 	# de bug que _place_card_as_gold(): CardInteraction usa base_scale como
 	# referencia para el tamaño de reposo tras el hover, y CardAnimations.
 	# play_enter_animation() la usa como destino de su tween de entrada).
-	# Y=140 de 210 de alto de carta (Card.tscn) — deja ~70px asomando abajo
-	# del borde inferior del Aliado, la franja donde una carta real imprime
-	# su texto. Con más de un Arma equipada se van apilando hacia abajo.
-	var slot_index = ally.equipped_weapons.size()
+	# Y=125 de 210 de alto de carta — deja ~85px asomando abajo del borde
+	# inferior del Aliado, la franja donde una carta real imprime su texto.
+	# Con más de un Arma equipada se van apilando hacia abajo (+Constants.WEAPON_STACK_STEP_Y cada una).
+	var slot_index: int = ally.equipped_weapons.size()
 	var equip_scale: Vector2 = ally.base_scale
 	weapon.scale = equip_scale
 	weapon.base_scale = equip_scale
-	weapon.position = Vector2(0.0, 125.0 + slot_index * 40.0)
+	var target_local_pos := Vector2(0.0, Constants.WEAPON_OFFSET_Y + slot_index * Constants.WEAPON_STACK_STEP_Y)
+	weapon.position = target_local_pos
 	ally.equipped_weapons.append(weapon)
 	weapon.wielder = ally
 	_register_weapon_strength_bonus(weapon, ally)
 	_register_wielder_leave_play_immunity(weapon, ally)
+	_register_weapon_talisman_tax(weapon)
 	_refresh_dynamic_strength_badges(ally.controller_id if ally.get("controller_id") != null else 0)
 
+	# 5. Animación de equipar en el espacio local del Aliado
 	await get_tree().process_frame
-	var end_pos = weapon.global_position
-	weapon.global_position = start_pos
-	var tween = create_tween()
-	tween.tween_property(weapon, "global_position", end_pos, 0.3).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	if not is_instance_valid(weapon) or not is_instance_valid(ally):
+		return
+
+	# 2026-09-19, bug real reportado por el usuario: "Invalid call. Nonexistent
+	# function 'to_local' in base 'Control (Card)'" — to_local()/to_global()
+	# son métodos de Node2D, no de Control (ambos heredan de CanvasItem por
+	# separado, Control no hereda de Node2D). Equivalente real para Control,
+	# mismo idioma ya usado en MulliganController.gd:42.
+	var start_local_pos: Vector2 = ally.get_global_transform().affine_inverse() * start_pos
+	weapon.position = start_local_pos
+	weapon.top_level = false
+
+	var tween = weapon.create_tween()
+	tween.tween_property(weapon, "position", target_local_pos, 0.3).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 	await tween.finished
-	weapon.can_interact = true
-	weapon.modulate.a = 1.0
-	VisualManager.play_card_effect(weapon.card_cost)
+
+	# 6. Reafirmar determinísticamente la posición, escala y estado final
+	if is_instance_valid(weapon) and is_instance_valid(ally):
+		weapon.position = target_local_pos
+		weapon.top_level = false
+		weapon.scale = ally.base_scale
+		weapon.base_scale = ally.base_scale
+		weapon.can_interact = true
+		weapon.modulate.a = 1.0
+
 	_update_gold_display()
 	_main._update_buttons_for_phase(GameManager.current_phase)
-	await _trigger_enter_play(weapon, ally.current_zone)
+	if fire_enter_play:
+		VisualManager.play_card_effect(weapon.card_cost)
+		await _trigger_enter_play(weapon, ally.current_zone)
 
 
 func _register_weapon_strength_bonus(weapon: Node, ally: Node) -> void:
@@ -1037,6 +1163,75 @@ func _register_weapon_strength_bonus(weapon: Node, ally: Node) -> void:
 		})
 		if ally.has_method("refresh_strength_badge"):
 			ally.refresh_strength_badge()
+		return
+
+	# "El portador gana 2 de Fuerza por cada Azusa Yumi que controles y hace
+	# daño al Destierro" (azusa yumi, 2026-09-20, arquitectura.md "539 cartas
+	# sin cobertura") — mismo mecanismo de value Callable que el bono por Oro
+	# de arriba, pero contando copias de la MISMA Arma equipadas en cualquier
+	# Aliado del controlador (no un recurso del jugador). Sin este branch
+	# específico ANTES del regex genérico de más abajo, "el portador gana 2 de
+	# fuerza por cada azusa yumi..." matchearía el regex genérico como un
+	# número FIJO de 2 (ignorando "por cada..."), un bug real detectado al
+	# escribir este código, no reportado todavía por el usuario.
+	var azusa_rx := RegEx.new()
+	azusa_rx.compile("(?i)el portador gana (\\d+) de fuerza por cada azusa yumi que controles")
+	var azusa_m := azusa_rx.search(ability_text)
+	if azusa_m:
+		var per_azusa: int = int(azusa_m.get_string(1))
+		var wielder_controller_az: int = ally.controller_id if ally.get("controller_id") != null else 0
+		var count_azusa := func() -> int:
+			var n: int = 0
+			for other in ContinuousEffectManager._get_all_cards_in_play():
+				if ContinuousEffectManager._get_card_owner(other) != wielder_controller_az:
+					continue
+				var w = other.get("equipped_weapons")
+				if w is Array:
+					for weap in w:
+						if is_instance_valid(weap) and str(weap.get("card_name")).to_lower() == "azusa yumi":
+							n += 1
+			return n
+		ContinuousEffectManager.register_modifier({
+			"source": weapon,
+			"target": ally,
+			"type": ContinuousEffectManager.ModifierType.STRENGTH,
+			"stat": "strength",
+			"value": func(_c: Node, _current: int, _mod: Dictionary) -> int:
+				return count_azusa.call() * per_azusa,
+			"operation": "add",
+			"duration": ContinuousEffectManager.ModifierDuration.PERMANENT,
+			"layer": ContinuousEffectManager.ModifierLayer.LAYER_7B_CHAR_MODIFY,
+			"description": "%s porta %s (+Fuerza por Azusa Yumi)" % [ally.card_name, weapon.card_name],
+		})
+		# "...y hace daño al Destierro" — mismo mecanismo real ya usado por
+		# arco del triunfo/Segundo Sello (TriggerSystem.register_continuous_
+		# effect con type 'damage_to_exile', targets = el OPONENTE de quien
+		# porta el Arma, porque ese registro se consulta del lado de quien
+		# RECIBE el daño). Se registra una vez por copia equipada; si se
+		# desequipa, TriggerSystem no tiene un "unregister por source" para
+		# este tipo puntual todavía (mismo camino que arco del triunfo usa al
+		# salir del juego) — limitación conocida, aceptable porque Azusa Yumi
+		# rara vez se desequipa sin salir de juego (no hay Arma "cambia de
+		# portador" en el catálogo auditado esta sesión).
+		TriggerSystem.register_continuous_effect(weapon, {
+			"type": "damage_to_exile",
+			"targets": [1 - wielder_controller_az]
+		})
+		if ally.has_method("refresh_strength_badge"):
+			ally.refresh_strength_badge()
+		return
+
+	# "En Guerra de Talismanes, una vez por turno, el portador gana 1 de
+	# Fuerza por cada Aliado en tu Línea de Defensa..." (kabutowari,
+	# 2026-09-20) — NO es un aura permanente (depende de fase + "una vez por
+	# turno" + un draw condicional al resultado), así que debe estar excluida
+	# del regex genérico de más abajo (que la matchearía como +1 Fuerza FIJO
+	# y PERMANENTE, incorrecto). Igual que kabutowari en el lote de Tótems:
+	# el mecanismo completo (fase Guerra de Talismanes + cupo por turno +
+	# draw condicional) queda pendiente, sin implementar todavía — este
+	# 'return' solo evita el bug de un bono equivocado, no otorga nada.
+	if "gana 1 de fuerza por cada aliado en tu l" in ability_text.to_lower() \
+			and "guerra de talismanes" in ability_text.to_lower():
 		return
 
 	var rx := RegEx.new()
@@ -1096,7 +1291,7 @@ func _register_wielder_leave_play_immunity(weapon: Node, ally: Node) -> void:
 	"""'Cuando entra en juego, el portador no puede salir del juego hasta tu
 	próximo turno' (2026-08-30, p.ej. Garfio Pirata) — mismo criterio que
 	_register_weapon_strength_bonus(): efecto propio del Arma sobre su
-	portador al equiparse, resuelto directo acá (no por el pipeline genérico
+	portador al equiparse, resuelto directo aquí (no por el pipeline genérico
 	de triggers) porque necesita saber QUIÉN es el portador, algo que
 	ABILITY_PATTERNS no puede extraer solo de un regex."""
 	var ability: String = weapon.card_ability.to_lower() if weapon.get("card_ability") else ""
@@ -1104,6 +1299,27 @@ func _register_wielder_leave_play_immunity(weapon: Node, ally: Node) -> void:
 		return
 	var controller_id: int = weapon.controller_id if weapon.get("controller_id") != null else 0
 	EffectController.add_single_card_leave_play_immunity(ally, controller_id)
+
+
+func _register_weapon_talisman_tax(weapon: Node) -> void:
+	"""'Los Talismanes cuestan un Oro adicional' (nodachi, 2026-09-20,
+	arquitectura.md "539 cartas sin cobertura") — texto SIN calificar a
+	'de tu oponente', así que se interpreta literal: sube el COSTE IMPRESO
+	(agregar_modificador_coste, no oros_mas — el texto dice 'cuestan', no
+	'pagas X Oro adicional', mismo criterio de la familia A/B documentada en
+	PaymentManager.calcular_coste_real()) de CUALQUIER Talismán, de ambos
+	jugadores por igual, mientras nodachi esté equipada. Limpieza automática
+	ya cubierta por Card._exit_tree() → PaymentManager.remover_modificador_
+	coste(self) (ver GoldManagerTax.gd línea ~44) — no hace falta desregistrar
+	manualmente al desequipar/salir de juego. Primer uso REAL de un coste
+	ADICIONAL (modifier positivo) en todo el proyecto — hasta esta carta,
+	agregar_modificador_coste() solo se llamaba con valores negativos."""
+	var ability: String = weapon.card_ability.to_lower() if weapon.get("card_ability") else ""
+	if not ("los talismanes cuestan un oro adicional" in ability):
+		return
+	var condition := func(c: Node) -> bool:
+		return is_instance_valid(c) and c.get("card_type") == Constants.CardType.TALISMAN
+	PaymentManager.agregar_modificador_coste(weapon, 1, condition, false)
 
 
 func _refresh_dynamic_strength_badges(player_id: int) -> void:
@@ -1118,7 +1334,7 @@ func _refresh_dynamic_strength_badges(player_id: int) -> void:
 	CONTEO de Armas de otra carta) nunca se enteraba — el valor calculado
 	quedaba pegado al de cuando Bulnes entró en juego, sin importar cuántas
 	Armas se equiparan después. Llamar cada vez que el conteo de Armas
-	equipadas de un jugador puede haber cambiado (acá: al equipar una)."""
+	equipadas de un jugador puede haber cambiado (aquí: al equipar una)."""
 	if ContinuousEffectManager.has_method("_invalidate_cache"):
 		ContinuousEffectManager._invalidate_cache()
 	var fields = [_main.player_field, _main.player_linea_ataque, _main.player_linea_apoyo] if player_id == 0 \
@@ -1171,6 +1387,14 @@ func _get_reveal_cost_reduction_pattern(card: Node) -> Dictionary:
 
 func _resolve_reveal_cost_reduction(card: Node, pattern: Dictionary) -> int:
 	return await _tax._resolve_reveal_cost_reduction(card, pattern)
+
+
+func _get_discard_cost_reduction_pattern(card: Node) -> Dictionary:
+	return _tax._get_discard_cost_reduction_pattern(card)
+
+
+func _resolve_discard_cost_reduction(card: Node) -> bool:
+	return await _tax._resolve_discard_cost_reduction(card)
 
 
 ## Elegibilidad para jugar una carta (Errante, límite de juego por nombre,
@@ -1242,32 +1466,45 @@ func _return_card_rejected(card: Node) -> void:
 
 func _play_card_to_field(card: Node) -> void:
 	TurnManager.on_card_played(card)
+	# 2026-10-05, bug real encontrado al convertir más cartas (ver
+	# arquitectura.md §25): esta función asumía SIEMPRE _main.player_hand/
+	# player_field/player_linea_apoyo (el Anfitrión), sin importar el
+	# owner_id real de la carta — roto para cualquier carta jugada vía
+	# play_card_for_free()/play_card_from_cemetery() en nombre del jugador 1
+	# (p.ej. La Torre, arco del triunfo, Caín). card.owner_id ya está
+	# asignado antes de llegar aquí en los 3 caminos (play_card/play_card_
+	# from_cemetery/play_card_for_free), así que se enruta por eso en vez
+	# de los contenedores fijos.
+	var owner_id: int = card.owner_id if card.get("owner_id") != null else 0
 	# Crono Diamante (2026-09-02): "si jugaste un Aliado de coste 2 o más
-	# este turno" — condición previa de su otra habilidad. Se registra acá
+	# este turno" — condición previa de su otra habilidad. Se registra aquí
 	# porque es el único lugar real donde un Aliado termina jugado, sin
 	# importar el origen (mano, Exhumar, gratis) — los tres caminos
 	# (play_card/play_card_from_cemetery/play_card_for_free) pasan por
 	# esta misma función para Aliados/Tótems.
 	if card.card_type == Constants.CardType.ALIADO and int(card.card_cost) >= 2:
-		UniversalCardParser.turn_registry.register("played_ally_cost2plus:0", 0, GameManager.current_turn)
+		UniversalCardParser.turn_registry.register("played_ally_cost2plus:%d" % owner_id, 0, GameManager.current_turn)
 	if card.card_type in [Constants.CardType.ALIADO, Constants.CardType.TOTEM] and int(card.card_cost) >= 2:
 		_apply_crono_diamante_annul_protection(card)
 	_main._update_debug("Jugando: %s" % card.card_name)
 	var start_pos = card.global_position
-	var idx = _main.player_hand.cards.find(card)
+	var hand_container: HBoxContainer = _main.player_hand if owner_id == 0 else _main._opponent_fan
+	var idx = hand_container.cards.find(card) if hand_container else -1
 	if idx >= 0:
-		_main.player_hand.cards.remove_at(idx)
+		hand_container.cards.remove_at(idx)
 	# Solo si de verdad sigue en la mano (2026-08-23): un Aliado/Tótem
 	# jugado via Exhumar (play_card_from_cemetery) nunca estuvo en la mano —
 	# remove_child() sobre un nodo que no es hijo tira error (mismo bug ya
 	# corregido en _equip_weapon() para Lobo Sagrado).
-	if card.get_parent() == _main.player_hand:
-		_main.player_hand.remove_child(card)
-		_main.player_hand._arrange_cards()
+	if hand_container and card.get_parent() == hand_container:
+		hand_container.remove_child(card)
+		hand_container._arrange_cards()
 	card.can_interact = false
 	# Tótems van a Línea de Apoyo; Aliados y Armas a Línea de Defensa
 	# (DAR — 3 zonas reales dentro del campo, ver consolidación 2026-08-20).
-	var target_container: HBoxContainer = _main.player_linea_apoyo if card.card_type == Constants.CardType.TOTEM else _main.player_field
+	var own_linea_apoyo: HBoxContainer = _main.player_linea_apoyo if owner_id == 0 else _main.opponent_linea_apoyo
+	var own_field: HBoxContainer = _main.player_field if owner_id == 0 else _main.opponent_field
+	var target_container: HBoxContainer = own_linea_apoyo if card.card_type == Constants.CardType.TOTEM else own_field
 	var target_zone: int = Constants.Zone.LINEA_APOYO if card.card_type == Constants.CardType.TOTEM else Constants.Zone.LINEA_DEFENSA
 	target_container.add_child(card)
 	# Si la carta llegó por arrastre (drag), top_level seguía en true (modo
@@ -1342,6 +1579,208 @@ func _apply_crono_diamante_annul_protection(card: Node) -> void:
 	card.set_meta("protected_from_annul_this_turn", true)
 
 
+func _check_primer_sello_cemetery_trigger(card: Node, controller_id: int) -> void:
+	"""'Si está en tu Cementerio, una vez por turno, cuando juegues una
+	carta Sello, tu oponente Bota una carta' (Primer Sello, 2026-09-20 — ver
+	SearchOwnZonePatterns.try_execute_primer_sello_pattern()). Habilidad
+	DESDE EL CEMENTERIO: sin precedente en el proyecto, así que se engancha
+	aquí, el único punto real por el que pasa TODA carta jugada de CUALQUIER
+	tipo (arquitectura.md §1 — Aliado/Arma/Tótem/Oro entran por aquí antes
+	de disparar su propio 'Cuando entra en juego'; Talismán entra por aquí
+	también, antes de la rama que lo manda a resolve_talisman() un poco más
+	abajo), en vez de inventar un signal nuevo 'card_played'.
+	'una carta Sello' se identifica por nombre (igual que _search_sello_
+	to_hand() en SearchOwnZonePatterns.gd — 'Sello' no es Raza impresa).
+	Cuenta también jugar el propio Primer Sello por segunda vez (con otra
+	copia ya en el Cementerio) — el texto no lo excluye."""
+	if not is_instance_valid(card):
+		return
+	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else ""
+	if not ("sello" in card_name.to_lower()):
+		return
+	var cemetery: Array = CardManager.get_cemetery(controller_id)
+	var has_primer_sello: bool = cemetery.any(func(d): return String(d.get("nombre", "")).to_lower() == "primer sello")
+	if not has_primer_sello:
+		return
+	var registry_key: String = "primer_sello_cemetery:%d" % controller_id
+	if UniversalCardParser.turn_registry.was_used(registry_key, 0, GameManager.current_turn):
+		return
+	UniversalCardParser.turn_registry.register(registry_key, 0, GameManager.current_turn)
+	await ActionModule.mill(1 - controller_id, 1, false, "Primer Sello (Cementerio)", true)
+
+
+func _check_los_siete_sellos_trigger(card: Node, controller_id: int) -> void:
+	"""'Los Siete Sellos' (Oro, 2026-09-20): 'Hasta dos veces por turno,
+	cuando se resuelva el efecto de uno de tus Talismanes Sello, tu oponente
+	Bota dos cartas.' Se llama SOLO cuando un Talismán terminó de resolver
+	de verdad (ver _trigger_enter_play(), rama TALISMAN) — 'tus' = el mismo
+	controller_id que el Talismán que acaba de resolver, así que "Los Siete
+	Sellos" debe pertenecer y estar EN JUEGO (Reserva) del mismo jugador.
+	'no puede ser convertido' ya queda cubierto gratis por la protección
+	genérica de Convertir (_target_text_denies() en TargetedEffectExecutor.gd/
+	GoldConversionPatterns.gd, que lee el propio texto de la carta objetivo)
+	sin necesitar código aparte aquí. 'no pagas costes adicionales mientras
+	juegas o utilizas la habilidad de cartas Sello' NO se implementó: no
+	existe en el proyecto ningún efecto que imponga un coste adicional al
+	OPONENTE por jugar/usar una carta (ver arquitectura.md §12.5) — no hay
+	nada real que esta cláusula esté exceptuando todavía."""
+	if not is_instance_valid(card):
+		return
+	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else ""
+	if not ("sello" in card_name.to_lower()):
+		return
+	var reserva: Array = _main.gold_cards if controller_id == 0 else _main.opponent_gold.get_children() if _main.get("opponent_gold") else []
+	var has_los_siete_sellos: bool = false
+	for g in reserva:
+		if is_instance_valid(g) and g.get("owner_id") == controller_id and g.get("current_zone") == Constants.Zone.RESERVA_ORO:
+			var g_name: String = str(g.get("card_name")) if g.get("card_name") != null else ""
+			if g_name.to_lower() == "los siete sellos":
+				has_los_siete_sellos = true
+				break
+	if not has_los_siete_sellos:
+		return
+	# "Hasta dos veces por turno" — turn_registry.was_used()/register() solo
+	# soportan un booleano "una vez por turno" (ver su propia definición en
+	# UniversalCardParser.gd), así que el tope de 2 usa DOS claves separadas
+	# en vez de extender la clase compartida para un único caso.
+	var key_1: String = "los_siete_sellos_1:%d" % controller_id
+	var key_2: String = "los_siete_sellos_2:%d" % controller_id
+	if not UniversalCardParser.turn_registry.was_used(key_1, 0, GameManager.current_turn):
+		UniversalCardParser.turn_registry.register(key_1, 0, GameManager.current_turn)
+	elif not UniversalCardParser.turn_registry.was_used(key_2, 0, GameManager.current_turn):
+		UniversalCardParser.turn_registry.register(key_2, 0, GameManager.current_turn)
+	else:
+		return
+	await ActionModule.mill(1 - controller_id, 2, false, "Los Siete Sellos", true)
+
+
+func _check_llave_del_abismo_enter_aura(card: Node, controller_id: int) -> void:
+	"""'Tus Aliados ganan 1 de Fuerza e Indestructible' (Llave del Abismo,
+	Oro, 2026-09-20, arquitectura.md "539 cartas sin cobertura") — aura
+	PERMANENTE mientras esté en juego, mismo mecanismo de auras "Tus
+	Aliados" ya usado por arco del triunfo (TotemAbilityPatterns.gd). Se
+	engancha aquí (en vez del despachador de triggers) porque Llave del
+	Abismo NO tiene ninguna cláusula "cuando entra en juego" propia — su
+	única cláusula con disparador es la reactiva de más abajo, así que
+	nunca se encolaría para on_enter_play si se intentara por ese camino.
+	Se limpia sola al salir de juego (Card._exit_tree() → remove_modifiers_
+	from_source(), mismo criterio que cualquier otro modificador con
+	source=esta carta)."""
+	if not is_instance_valid(card):
+		return
+	var card_name: String = str(card.get("card_name")) if card.get("card_name") != null else ""
+	if card_name.to_lower() != "llave del abismo":
+		return
+	ContinuousEffectManager.register_modifier({
+		"source": card, "target": "ALLIES",
+		"filter": {"type": Constants.CardType.ALIADO},
+		"type": ContinuousEffectManager.ModifierType.STRENGTH, "stat": "strength",
+		"value": 1, "operation": "add",
+		"duration": ContinuousEffectManager.ModifierDuration.PERMANENT,
+		"description": "Llave del Abismo: +1 Fuerza a tus Aliados"
+	})
+	ContinuousEffectManager.register_modifier({
+		"source": card, "target": "ALLIES",
+		"filter": {"type": Constants.CardType.ALIADO},
+		"type": ContinuousEffectManager.ModifierType.KEYWORDS, "stat": "",
+		"value": 0, "operation": "add",
+		"duration": ContinuousEffectManager.ModifierDuration.PERMANENT,
+		"layer": ContinuousEffectManager.ModifierLayer.LAYER_6_ABILITIES,
+		"keywords_add": [Constants.Keyword.INDESTRUCTIBLE],
+		"description": "Llave del Abismo: Indestructible a tus Aliados"
+	})
+
+
+func _check_llave_del_abismo_reactive(card: Node, controller_id: int) -> void:
+	"""'Cuando un Aliado con Furia entra en juego bajo tu control, tu
+	oponente Bota una carta. Puedes utilizar esta habilidad más de una vez
+	por turno' (Llave del Abismo, 2026-09-20) — reactiva a que OTRA carta
+	(un Aliado con Furia) entre en juego bajo el mismo controlador que
+	tiene Llave del Abismo en Reserva/Oro Pagado. Enganchada aquí (chequeo
+	directo sobre la carta recién jugada) en vez de por el sistema de
+	trigger_type 'on_ally_enters' — ese camino exige que el texto matchee
+	una de las frases fijas de Card.TRIGGER_KEYWORDS['on_ally_enters']
+	('cuando otro aliado entre'/'cuando un aliado entre'), y el texto real
+	de esta carta ('cuando un aliado CON FURIA entra en juego BAJO TU
+	CONTROL') no calza con ninguna de esas dos por la inserción de 'con
+	Furia' — mismo criterio directo que _check_primer_sello_cemetery_
+	trigger()/_check_los_siete_sellos_trigger() de arriba, más simple y
+	sin depender del parseo de frases. 'Más de una vez por turno' = sin
+	tope, dispara cada vez que corresponda."""
+	if not is_instance_valid(card):
+		return
+	if card.get("card_type") != Constants.CardType.ALIADO:
+		return
+	if not KeywordManager.has_keyword(card, Constants.Keyword.FURIA):
+		return
+	var ally_controller: int = card.get("owner_id") if card.get("owner_id") != null else controller_id
+	var reserva: Array = _main.gold_cards if ally_controller == 0 else (_main.opponent_gold.get_children() if _main.get("opponent_gold") else [])
+	var pagado: Array = _main.player_oro_pagado.get_children() if ally_controller == 0 and _main.get("player_oro_pagado") else \
+		(_main.opponent_oro_pagado.get_children() if ally_controller == 1 and _main.get("opponent_oro_pagado") else [])
+	var has_llave: bool = false
+	for g in reserva + pagado:
+		if is_instance_valid(g) and str(g.get("card_name")).to_lower() == "llave del abismo":
+			has_llave = true
+			break
+	if not has_llave:
+		return
+	await ActionModule.mill(1 - ally_controller, 1, false, "Llave del Abismo", true)
+
+
+func check_libro_de_thoth_block(blocker: Node, blocker_owner: int) -> void:
+	"""'Cuando bloquees, genera un Oro por el turno' (libro de thoth, Oro,
+	2026-09-20, arquitectura.md "539 cartas sin cobertura") — reactiva a que
+	CUALQUIER Aliado tuyo bloquee, no una habilidad impresa en el propio
+	bloqueador. Enganchada desde GameManager.confirm_blockers_and_collect_
+	triggers() (una vez por bloqueador confirmado, mismo criterio que
+	'cuando ataque' en confirm_attackers()), con chequeo directo del Oro en
+	juego — mismo patrón que _check_llave_del_abismo_reactive() de arriba,
+	sin depender del parseo de frases de Card.TRIGGER_KEYWORDS (ese camino
+	de trigger_type solo llega a la carta que disparó el evento —aquí, el
+	Aliado bloqueador—, nunca a otra carta pasiva en una zona distinta,
+	como un Oro en Reserva/Oro Pagado). Sin restricción de para qué sirve
+	el Oro generado (el texto no la especifica), mismo criterio que Cañón
+	Naval (WeaponAbilityPatterns.gd)."""
+	if not is_instance_valid(blocker):
+		return
+	var reserva: Array = _main.gold_cards if blocker_owner == 0 else (_main.opponent_gold.get_children() if _main.get("opponent_gold") else [])
+	var pagado: Array = _main.player_oro_pagado.get_children() if blocker_owner == 0 and _main.get("player_oro_pagado") else \
+		(_main.opponent_oro_pagado.get_children() if blocker_owner == 1 and _main.get("opponent_oro_pagado") else [])
+	var has_libro: bool = false
+	for g in reserva + pagado:
+		if is_instance_valid(g) and str(g.get("card_name")).to_lower() == "libro de thoth":
+			has_libro = true
+			break
+	if not has_libro:
+		return
+	var always_true := func(_t, _r, _c) -> bool: return true
+	generar_oro_virtual_restringido(1, always_true, "libro de thoth")
+
+
+func _discard_oro_from_reserva(oro_card: Node, controller_id: int) -> void:
+	"""Descarta (al Cementerio) un Oro FÍSICO que está en Reserva — no existe
+	en el proyecto ningún camino genérico para esto (discard() de
+	ActionReturnDiscard.gd es solo desde la MANO, ver su propio docstring).
+	Costo de Cuarto Sello ('Puedes pagar un Oro y Descartarlo...', 2026-09-20)
+	— mismo orden de limpieza que ActionReturnDiscard.return_to_deck() para
+	una carta en juego (desconectar señales antes de queue_free, actualizar
+	Reserva/gold_cards y el contador de GameState)."""
+	if not is_instance_valid(oro_card):
+		return
+	var data: Dictionary = oro_card.card_data.duplicate() if oro_card.get("card_data") else {}
+	CardManager.add_to_cemetery(controller_id, data)
+	GameState.agregar_oro_reserva(controller_id, -1)
+	if controller_id == 0:
+		_main.gold_cards.erase(oro_card)
+	CardManager._disconnect_card_interaction_signals(oro_card)
+	var parent = oro_card.get_parent()
+	if parent:
+		parent.remove_child(oro_card)
+	oro_card.queue_free()
+	if controller_id == 0:
+		_update_gold_display()
+
+
 func _trigger_enter_play(card: Node, zone: int = Constants.Zone.LINEA_DEFENSA) -> bool:
 	"""Dispara la entrada al juego (DAR 7.4) para habilidades 'Al entrar' de
 	Aliados/Armas/Oro/Tótems. Para Talismanes es distinto (2026-08-27): no
@@ -1361,7 +1800,7 @@ func _trigger_enter_play(card: Node, zone: int = Constants.Zone.LINEA_DEFENSA) -
 	con 'await' en vez de por señal: conectado por señal, quien juega la
 	carta no esperaba a que el trigger terminara de resolverse, así que el
 	juego seguía de fase mientras el trigger todavía se procesaba en
-	segundo plano — se vio con Drácula y Signo Amarillo resolviendo recién
+	segundo plano — se vio con Drácula y Signo Amarillo resolviendo solo
 	en la fase de Bloqueo, varios pasos después de jugarse.
 
 	Los Talismanes se ramifican ANTES de todo esto (2026-08-28, a pedido
@@ -1374,6 +1813,22 @@ func _trigger_enter_play(card: Node, zone: int = Constants.Zone.LINEA_DEFENSA) -
 	pasos corrían igual para Talismanes y dejaban logs falsos tipo 'entró en
 	juego'/'entró a Línea de Apoyo' incluso jugándolo via Exhumar desde el
 	Cementerio, donde nunca pisa una zona de juego real."""
+	var _sello_controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
+	await _check_primer_sello_cemetery_trigger(card, _sello_controller_id)
+	# Llave del Abismo (Oro, 2026-09-20, arquitectura.md "539 cartas sin
+	# cobertura") — dos chequeos directos sobre TODA carta jugada, mismo
+	# choke point que los Sellos de arriba: registra su propia aura al
+	# entrar ella misma, y reacciona cuando OTRO Aliado con Furia entra
+	# bajo el mismo controlador (ver docstrings de ambas funciones).
+	_check_llave_del_abismo_enter_aura(card, _sello_controller_id)
+	await _check_llave_del_abismo_reactive(card, _sello_controller_id)
+	# Quinto Sello ("no se pueden jugar más de cinco cartas por turno", ver
+	# TurnManager.cards_played_count_this_turn) — se cuenta aquí, el único
+	# choke point real por el que pasa TODA carta jugada, para que el gateo
+	# en play_card() (que corre ANTES de llegar aquí) siempre vea el conteo
+	# de las cartas ya jugadas, sin contar la que se está resolviendo ahora.
+	TurnManager.cards_played_count_this_turn += 1
+
 	if card.get("card_type") == Constants.CardType.TALISMAN:
 		_register_talisman_totem_tax(card)
 		_register_talisman_second_play_tax(card)
@@ -1389,19 +1844,27 @@ func _trigger_enter_play(card: Node, zone: int = Constants.Zone.LINEA_DEFENSA) -
 		# de Respuesta Universal, 2026-09-09) — devuelve true si fue
 		# anulado/cancelado ahí, para que _play_talisman() lo mande al
 		# Cementerio sin mirar su propio texto para decidir destino.
-		return await TriggerSystem.resolve_talisman(card)
+		var _was_annulled_or_cancelled: bool = await TriggerSystem.resolve_talisman(card)
+		# "Los Siete Sellos" (Oro, 2026-09-20): 'Hasta dos veces por turno,
+		# cuando se resuelva el efecto de uno de tus Talismanes Sello, tu
+		# oponente Bota dos cartas' — solo si el efecto REALMENTE resolvió
+		# (no si fue anulado/cancelado en la ventana de arriba, ver
+		# TriggerSystem.resolve_talisman()).
+		if not _was_annulled_or_cancelled:
+			await _check_los_siete_sellos_trigger(card, _sello_controller_id)
+		return _was_annulled_or_cancelled
 
 	# CARD_PLAYED para Aliado/Arma/Tótem/Oro (2026-09-10, Pila de Respuesta
-	# Universal). A diferencia de un Talismán, acá la carta YA está
+	# Universal). A diferencia de un Talismán, aquí la carta YA está
 	# físicamente en una zona de juego (jugarla y que entre en juego no son
 	# el mismo momento del DAR) — reescribir cada camino de juego (play_card,
 	# _equip_weapon, _place_card_as_gold, las búsquedas que colocan directo)
 	# para abrir la ventana ANTES de animar/crear el Node hubiera exigido un
 	# destino nuevo (Cementerio directo desde la mano) sin poder reusar
 	# destroy_card() (exige zona de juego válida). Aproximación acordada con
-	# el usuario: la ventana se abre ACÁ, justo antes de que dispare su
+	# el usuario: la ventana se abre AQUÍ, justo antes de que dispare su
 	# propio "Cuando entra en juego" — se la ve entrar igual que hoy, pero si
-	# se anula/cancela acá su ETB nunca dispara y va directo al Cementerio
+	# se anula/cancela aquí su ETB nunca dispara y va directo al Cementerio
 	# (mismo destino por defecto que cualquier Anular, igual que el Talismán
 	# de arriba).
 	var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
@@ -1438,10 +1901,11 @@ func _trigger_enter_play(card: Node, zone: int = Constants.Zone.LINEA_DEFENSA) -
 	# (2026-09-09). Se ofrece DESPUÉS de que el ETB propio ya resolvió —
 	# distinto de la ventana de arriba (esa cubre CUALQUIER anulación antes
 	# del ETB; esta es la habilidad puntual de Akari, que sigue viviendo
-	# acá por si Akari no estaba entre los candidatos de la ventana genérica
+	# aquí por si Akari no estaba entre los candidatos de la ventana genérica
 	# — offer_counter_annul() tiene su propio chequeo interno, no duplica
 	# la pregunta si ya se resolvió arriba).
 	await EffectController.offer_counter_annul(card)
+	await EffectController.offer_flechar_xoon_annul(card)
 	return false
 
 
@@ -1462,16 +1926,24 @@ func _play_talisman(card: Node) -> void:
 	var talisman_owner: int = card.owner_id if card.get("owner_id") != null else 0
 	UniversalCardParser.turn_registry.register("talisman_played:%d" % talisman_owner, 0, GameManager.current_turn)
 
-	var idx = _main.player_hand.cards.find(card)
+	# 2026-10-05, bug real encontrado al convertir más cartas: esta función
+	# asumía siempre _main.player_hand/player_field (el Anfitrión) sin
+	# importar quién controla el Talismán — roto para cualquier Talismán
+	# jugado vía play_card_for_free()/play_card_from_cemetery() en nombre
+	# del jugador 1 (ver arquitectura.md §25). Se enruta por talisman_owner,
+	# el mismo que ya usa el resto de esta función más abajo.
+	var hand_container: HBoxContainer = _main.player_hand if talisman_owner == 0 else _main._opponent_fan
+	var field_container: HBoxContainer = _main.player_field if talisman_owner == 0 else _main.opponent_field
+	var idx = hand_container.cards.find(card) if hand_container else -1
 	if idx >= 0:
-		_main.player_hand.cards.remove_at(idx)
+		hand_container.cards.remove_at(idx)
 	# Ver GoldManager._play_card_to_field() — misma corrección (Exhumar: la
 	# carta nunca estuvo en la mano).
-	if card.get_parent() == _main.player_hand:
-		_main.player_hand.remove_child(card)
-		_main.player_hand._arrange_cards()
+	if hand_container and card.get_parent() == hand_container:
+		hand_container.remove_child(card)
+		hand_container._arrange_cards()
 	card.can_interact = false
-	_main.player_field.add_child(card)
+	field_container.add_child(card)
 	# Ver GoldManager._play_card_to_field() — misma corrección.
 	card.top_level = false
 	card.set_zone(Constants.Zone.LINEA_APOYO)
@@ -1480,7 +1952,7 @@ func _play_talisman(card: Node) -> void:
 	# _trigger_enter_play() ya queda 'await'-eado hasta el final de verdad
 	# (resolve_talisman() → _resolve_look_and_play_patterns(), toda la
 	# cadena incluye cualquier elección anidada del jugador) — la espera
-	# fija que había acá después ("dar tiempo a que la habilidad resuelva")
+	# fija que había aquí después ("dar tiempo a que la habilidad resuelva")
 	# era pura demora sin motivo real, la carta quedaba pegada en Línea de
 	# Apoyo un rato de más después de haber terminado (2026-08-30, a pedido
 	# del usuario: los Talismanes deben irse al Cementerio apenas resuelven,
@@ -1540,7 +2012,7 @@ func _play_talisman(card: Node) -> void:
 		# destierra igual jugada desde el Cementerio o no. La única regla
 		# que fuerza Destierro PASE LO QUE DIGA el texto es Exhumar de
 		# verdad (is_exhumed, arriba) — jugar desde el Cementerio por otro
-		# efecto (Miguel) no agrega ninguna regla nueva acá, cae en el
+		# efecto (Miguel) no agrega ninguna regla nueva aquí, cae en el
 		# comportamiento normal de siempre.
 		if self_exile:
 			await EffectController.exile_card(true_owner, card)
@@ -1563,32 +2035,38 @@ func update_gold_containers_spacing() -> void:
 	_visuals.update_gold_containers_spacing()
 
 
-func puede_pagar(cantidad: int, card_type: int = -1, card_race: String = "", card_cost: int = -1) -> bool:
-	var oro_fisico = GameState.get_oro_reserva(0)
-	var restringido = _restricted_gold_available_for(card_type, card_race, card_cost)
-	var disponible = oros_virtuales + restringido + oro_fisico
+func puede_pagar(cantidad: int, card_type: int = -1, card_race: String = "", card_cost: int = -1, player_id: int = 0) -> bool:
+	var oro_fisico = GameState.get_oro_reserva(player_id)
+	var restringido = _restricted_gold_available_for(card_type, card_race, card_cost, player_id)
+	var disponible = oros_virtuales.get(player_id, 0) + restringido + oro_fisico
 	return disponible >= cantidad
 
 
-func pagar_coste(cantidad: int, card_type: int = -1, card_race: String = "", card_cost: int = -1) -> bool:
+func pagar_coste(cantidad: int, card_type: int = -1, card_race: String = "", card_cost: int = -1, player_id: int = 0) -> bool:
 	"""card_type/card_race/card_cost identifican QUÉ se está pagando — sin
 	esto no hay forma de saber si el Oro Virtual restringido aplica (p.ej.
 	Padre de la Patria: 'para jugar Armas o Aliados Caballero' — usa
 	card_type/card_race). Pasar -1/"" cuando no corresponda (p.ej. una
 	habilidad activada sin carta objetivo) para que el pago ignore los pools
-	restringidos de forma segura."""
-	if not puede_pagar(cantidad, card_type, card_race, card_cost):
-		# player_gold.get_child_count() incluye los tokens visuales de Oro
-		# Virtual (genérico + restringido) — se restan para no contarlos dos
-		# veces en el mensaje.
+	restringidos de forma segura.
+
+	'player_id' (2026-10-06, ver arquitectura.md §33): de qué jugador se paga
+	— Oro Virtual, Oro Virtual restringido y Oro físico son todos por
+	jugador ahora. Default 0 preserva el comportamiento de todos los
+	llamadores existentes que no lo pasaban (siempre el Anfitrión)."""
+	var reserva_container: HBoxContainer = _main.player_gold if player_id == 0 else _main.opponent_gold
+	if not puede_pagar(cantidad, card_type, card_race, card_cost, player_id):
+		# reserva_container.get_child_count() incluye los tokens visuales de
+		# Oro Virtual (genérico + restringido) — se restan para no contarlos
+		# dos veces en el mensaje.
 		var restricted_token_count := 0
-		for pool in restricted_gold_pools:
+		for pool in restricted_gold_pools.get(player_id, []):
 			restricted_token_count += pool.tokens.size()
-		var oro_fisico_visible = _main.player_gold.get_child_count() - virtual_gold_tokens.size() - restricted_token_count
-		var restringido_disp = _restricted_gold_available_for(card_type, card_race, card_cost)
-		var disponible = oros_virtuales + restringido_disp + oro_fisico_visible
+		var oro_fisico_visible = reserva_container.get_child_count() - virtual_gold_tokens.get(player_id, []).size() - restricted_token_count
+		var restringido_disp = _restricted_gold_available_for(card_type, card_race, card_cost, player_id)
+		var disponible = oros_virtuales.get(player_id, 0) + restringido_disp + oro_fisico_visible
 		_main._update_debug("Oro insuficiente: necesitas %d, tienes %d (V:%d + R:%d + F:%d)" % [
-			cantidad, disponible, oros_virtuales, restringido_disp, oro_fisico_visible])
+			cantidad, disponible, oros_virtuales.get(player_id, 0), restringido_disp, oro_fisico_visible])
 		return false
 	if cantidad <= 0:
 		return true
@@ -1598,21 +2076,20 @@ func pagar_coste(cantidad: int, card_type: int = -1, card_race: String = "", car
 	# ahora que sí aplica, se pierde igual al pasar de turno, mientras que el
 	# genérico y el físico se pueden guardar para otra compra.
 	if restante > 0:
-		var restr_usados = await _consume_restricted_gold_for(card_type, card_race, card_cost, restante)
+		var restr_usados = await _consume_restricted_gold_for(card_type, card_race, card_cost, restante, player_id)
 		if restr_usados > 0:
 			restante -= restr_usados
 			_main._update_debug("Consumido %d Oro Virtual restringido (quedan %d por pagar)" % [restr_usados, restante])
 
-	if restante > 0 and oros_virtuales > 0:
-		var virtuales_usados = mini(oros_virtuales, restante)
-		oros_virtuales -= virtuales_usados
+	if restante > 0 and oros_virtuales.get(player_id, 0) > 0:
+		var virtuales_usados = mini(oros_virtuales[player_id], restante)
+		oros_virtuales[player_id] -= virtuales_usados
 		restante -= virtuales_usados
 		for i in range(virtuales_usados):
-			await _despawn_virtual_gold_token()
-		_main._update_debug("Consumido %d Oro Virtual (quedan %d)" % [virtuales_usados, oros_virtuales])
+			await _despawn_virtual_gold_token(player_id)
+		_main._update_debug("Consumido %d Oro Virtual (quedan %d)" % [virtuales_usados, oros_virtuales[player_id]])
 	if restante > 0:
 		_main._update_debug("Pagando %d Oro físico..." % restante)
-		var oros_reserva: Array = _main.player_gold.get_children()
 		# Elegir CUÁLES Oros físicos se gastan (2026-09-03, a pedido del
 		# usuario) — antes se tomaban los primeros N de get_children() sin
 		# que el jugador eligiera nada, lo que hacía imposible usar cartas
@@ -1622,31 +2099,66 @@ func pagar_coste(cantidad: int, card_type: int = -1, card_race: String = "", car
 		# (restringido y genérico, arriba) siguen siendo los primeros en
 		# gastarse siempre — esto solo decide el orden DENTRO del Oro
 		# físico, cuando de verdad hace falta.
-		var chosen_oros: Array = await _choose_physical_gold_to_spend(oros_reserva, restante)
-		# diverted cuenta las unidades que NO terminaron en Oro Pagado de
-		# verdad (2026-08-29, p.ej. Jormundgander: '...convierte este Oro en
-		# un Aliado y muévelo a tu Línea de Defensa' en vez del movimiento
-		# normal) — GameState.pagar_oro() de abajo suma 'restante' completo
-		# a oro_pagado sin saber esto, así que hay que restar la diferencia
-		# después o el próximo Reagrupamiento regala Oro de más que nunca
-		# existió físicamente en la pila.
+		#
+		# Se elige el orden completo UNA SOLA VEZ (bug real: llamar a
+		# _choose_physical_gold_to_spend() de nuevo en cada vuelta del bucle
+		# de abajo reabre su propio bucle interno de selección entero cada
+		# vez, preguntando 3+2+1=6 veces para restante=3 en vez de 3 — esa
+		# función ya junta por sí sola tantas cartas como pida 'restante',
+		# no devuelve una sola).
+		var oros_reserva: Array = reserva_container.get_children()
+		var chosen_oros: Array = await _choose_physical_gold_to_spend(oros_reserva, restante, player_id)
+		var chosen_idx := 0
+
+		# 2026-09-11 (a pedido del usuario, corrigiendo un diseño anterior):
+		# se gasta un Oro físico A LA VEZ (no todos de una) porque "genera un
+		# Oro adicional CUANDO SEA USADO PARA PAGAR" implica que ese Oro
+		# nuevo cuenta para ESTA MISMA compra, no que quede de sobrante sin
+		# tocar — si Monitor Araucano paga un Arma de coste 2, el segundo
+		# Oro de esa compra lo pone él mismo, no tu Reserva. Por eso antes de
+		# sacar el siguiente Oro físico (ya elegido arriba) se revisa si ya
+		# apareció Oro Virtual nuevo que cubra parte de lo que falta.
 		var diverted := 0
-		for oro_card in chosen_oros:
+		var physical_spent := 0
+		while restante > 0:
+			if oros_virtuales.get(player_id, 0) > 0:
+				var v_now: int = mini(oros_virtuales[player_id], restante)
+				oros_virtuales[player_id] -= v_now
+				restante -= v_now
+				for i in range(v_now):
+					await _despawn_virtual_gold_token(player_id)
+				if restante <= 0:
+					break
+			if chosen_idx >= chosen_oros.size():
+				break  # no debería pasar (puede_pagar() ya validó), pero no colgarse si pasa
+			var oro_card = chosen_oros[chosen_idx]
+			chosen_idx += 1
+			if not is_instance_valid(oro_card):
+				continue
+			# diverted cuenta las unidades que NO terminaron en Oro Pagado de
+			# verdad (2026-08-29, p.ej. Jormundgander: '...convierte este Oro
+			# en un Aliado y muévelo a tu Línea de Defensa' en vez del
+			# movimiento normal) — GameState.pagar_oro() de abajo suma
+			# physical_spent sin saber esto, así que hay que restar la
+			# diferencia después o el próximo Reagrupamiento regala Oro de
+			# más que nunca existió físicamente en la pila.
 			var was_diverted: bool = await _mover_oro_a_pagado(oro_card)
 			if was_diverted:
 				diverted += 1
-			_resolve_gold_paid_reaction(oro_card, card_type, card_race, card_cost)
-		GameState.pagar_oro(0, restante)
+			physical_spent += 1
+			restante -= 1
+			_resolve_gold_paid_reaction(oro_card, card_type, card_race, card_cost, player_id)
+		GameState.pagar_oro(player_id, physical_spent)
 		if diverted > 0:
-			GameState.agregar_oro_pagado(0, -diverted)
+			GameState.agregar_oro_pagado(player_id, -diverted)
 	TurnManager.any_card_played_this_turn = true
-	var oro_restante = GameState.get_oro_reserva(0)
-	_main._update_debug("Pagado %d Oro total (Reserva: %d, Virtual: %d)" % [cantidad, oro_restante, oros_virtuales])
+	var oro_restante = GameState.get_oro_reserva(player_id)
+	_main._update_debug("Pagado %d Oro total (Reserva: %d, Virtual: %d)" % [cantidad, oro_restante, oros_virtuales.get(player_id, 0)])
 	_update_gold_display()
 	return true
 
 
-func _choose_physical_gold_to_spend(oros_reserva: Array, restante: int) -> Array:
+func _choose_physical_gold_to_spend(oros_reserva: Array, restante: int, player_id: int = 0) -> Array:
 	"""Elige qué Oros físicos de Reserva se gastan para pagar 'restante'
 	unidades (2026-09-03, a pedido del usuario — ver _resolve_gold_paid_
 	reaction()). Sin elección real (hay que gastarlos todos, o solo queda
@@ -1666,22 +2178,22 @@ func _choose_physical_gold_to_spend(oros_reserva: Array, restante: int) -> Array
 	var remaining_candidates: Array = oros_reserva.duplicate()
 	for c in remaining_candidates:
 		if is_instance_valid(c):
-			c.set_activatable(true)
+			c.set_activatable(true, CardBadges.GLOW_COLOR_GOLD, &"target_select")
 
 	while chosen.size() < restante and not remaining_candidates.is_empty():
 		var filter := func(c: Node) -> bool:
 			return c in remaining_candidates
 		var picked: Node = await _main._card_interaction.await_target(
-			"Elige qué Oro gastar (%d de %d)" % [chosen.size() + 1, restante], filter)
+			"Elige qué Oro gastar (%d de %d)" % [chosen.size() + 1, restante], filter, true, player_id)
 		if not picked or not is_instance_valid(picked):
 			break  # cancelado (ESC) — se completa abajo con el orden mecánico de siempre
 		remaining_candidates.erase(picked)
-		picked.set_activatable(false)
+		picked.set_activatable(false, CardBadges.GLOW_COLOR_GOLD, &"target_select")
 		chosen.append(picked)
 
 	for c in remaining_candidates:
 		if is_instance_valid(c):
-			c.set_activatable(false)
+			c.set_activatable(false, CardBadges.GLOW_COLOR_GOLD, &"target_select")
 
 	if chosen.size() < restante:
 		# Cancelado a mitad de camino (ESC) — completar con las que falten
@@ -1696,12 +2208,12 @@ func _choose_physical_gold_to_spend(oros_reserva: Array, restante: int) -> Array
 	return chosen
 
 
-func _resolve_gold_paid_reaction(oro_card: Node, card_type: int, card_race: String, card_cost: int) -> void:
+func _resolve_gold_paid_reaction(oro_card: Node, card_type: int, card_race: String, card_cost: int, player_id: int = 0) -> void:
 	"""Detecta 'Este Oro genera un Oro adicional cuando sea usado para
 	pagar X [de coste N o más]' en el texto del Oro que EFECTIVAMENTE pagó
 	(2026-09-03, p.ej. Monitor Araucano) — solo se llama con el nodo físico
 	real ya elegido en _choose_physical_gold_to_spend(), así que 'usado
-	para pagar' acá es literal, no una aproximación."""
+	para pagar' aquí es literal, no una aproximación."""
 	if not is_instance_valid(oro_card):
 		return
 	var ability_text: String = oro_card.get("card_ability") if oro_card.get("card_ability") != null else ""
@@ -1731,24 +2243,33 @@ func _resolve_gold_paid_reaction(oro_card: Node, card_type: int, card_race: Stri
 		if card_cost < min_cost:
 			return
 
-	generar_oros_virtuales(1)
+	generar_oros_virtuales(1, player_id)
 	_main._update_debug("%s generó 1 Oro adicional" % str(oro_card.get("card_name")))
 
 
-func generar_oros_virtuales(cantidad: int) -> void:
-	oros_virtuales += cantidad
+func generar_oros_virtuales(cantidad: int, player_id: int = 0) -> void:
+	oros_virtuales[player_id] = oros_virtuales.get(player_id, 0) + cantidad
+	var tokens: Array = virtual_gold_tokens.get(player_id, [])
 	for i in range(cantidad):
-		_spawn_gold_token("Oro Virtual Libre", "Libre", virtual_gold_tokens)
-	_main._update_debug("Generado %d Oro Virtual (total: %d)" % [cantidad, oros_virtuales])
+		_spawn_gold_token("Oro Virtual Libre", "Libre", tokens, player_id)
+	virtual_gold_tokens[player_id] = tokens
+	_main._update_debug("Generado %d Oro Virtual (total: %d)" % [cantidad, oros_virtuales[player_id]])
 	_update_gold_display()
 
 
 func limpiar_oros_virtuales() -> void:
-	if oros_virtuales > 0:
-		_main._update_debug("Oros Virtuales expirados: %d" % oros_virtuales)
-		oros_virtuales = 0
-		var tokens_to_clear = virtual_gold_tokens.duplicate()
-		virtual_gold_tokens.clear()
+	# Limpia AMBOS jugadores siempre (2026-10-06): "Oro por el turno" expira
+	# al empezar cualquier turno nuevo, sin importar de quién sea ni quién
+	# lo generó — mismo criterio que oro_colocado_conteo/_no_more_cards_
+	# this_turn, que ya se resetean así en _on_turn_started_clear_virtual_gold().
+	for player_id in [0, 1]:
+		if oros_virtuales.get(player_id, 0) <= 0:
+			continue
+		_main._update_debug("Oros Virtuales expirados: %d" % oros_virtuales[player_id])
+		oros_virtuales[player_id] = 0
+		var reserva_container: HBoxContainer = _main.player_gold if player_id == 0 else _main.opponent_gold
+		var tokens_to_clear = virtual_gold_tokens.get(player_id, []).duplicate()
+		virtual_gold_tokens[player_id] = []
 		for token in tokens_to_clear:
 			if is_instance_valid(token):
 				var tw = create_tween()
@@ -1757,94 +2278,104 @@ func limpiar_oros_virtuales() -> void:
 				tw.tween_property(token, "position:y", token.position.y - 15.0, 0.20)
 				tw.finished.connect(func():
 					if is_instance_valid(token):
-						if token.get_parent() == _main.player_gold:
-							_main.player_gold.remove_child(token)
+						if token.get_parent() == reserva_container:
+							reserva_container.remove_child(token)
 						token.queue_free()
 						update_gold_containers_spacing()
 				)
-		_update_gold_display()
+	_update_gold_display()
 
 
-func generar_oro_virtual_restringido(cantidad: int, predicate: Callable, label: String) -> void:
+func generar_oro_virtual_restringido(cantidad: int, predicate: Callable, label: String, player_id: int = 0) -> void:
 	"""Oro Virtual que SOLO paga cartas que cumplan 'predicate(card_type,
 	card_race) -> bool' (p.ej. Padre de la Patria: 'para jugar Armas o
 	Aliados Caballero'). A diferencia de generar_oros_virtuales(), queda
-	guardado en restricted_gold_pools como su propia entrada — varias
-	fuentes con distintas restricciones pueden coexistir sin mezclarse."""
+	guardado en restricted_gold_pools[player_id] como su propia entrada —
+	varias fuentes con distintas restricciones pueden coexistir sin
+	mezclarse."""
 	var tokens: Array = []
 	for i in range(cantidad):
-		_spawn_gold_token("Oro Virtual (%s)" % label, label, tokens)
-	restricted_gold_pools.append({"amount": cantidad, "tokens": tokens, "predicate": predicate, "label": label})
+		_spawn_gold_token("Oro Virtual (%s)" % label, label, tokens, player_id)
+	var pools: Array = restricted_gold_pools.get(player_id, [])
+	pools.append({"amount": cantidad, "tokens": tokens, "predicate": predicate, "label": label})
+	restricted_gold_pools[player_id] = pools
 	_main._update_debug("Generado %d Oro Virtual restringido (%s)" % [cantidad, label])
 	_update_gold_display()
 
 
 func limpiar_oro_restringido() -> void:
-	if restricted_gold_pools.is_empty():
-		return
-	var pools_to_clear = restricted_gold_pools.duplicate()
-	restricted_gold_pools.clear()
-	_main._update_debug("Oro Virtual restringido expirado (%d pool(s))" % pools_to_clear.size())
-	for pool in pools_to_clear:
-		for token in pool.tokens:
-			if is_instance_valid(token):
-				var tw = create_tween()
-				tw.set_parallel(true)
-				tw.tween_property(token, "modulate:a", 0.0, 0.20)
-				tw.tween_property(token, "position:y", token.position.y - 15.0, 0.20)
-				tw.finished.connect(func():
-					if is_instance_valid(token):
-						if token.get_parent() == _main.player_gold:
-							_main.player_gold.remove_child(token)
-						token.queue_free()
-						update_gold_containers_spacing()
-				)
+	# Limpia AMBOS jugadores siempre — mismo motivo que limpiar_oros_virtuales().
+	for player_id in [0, 1]:
+		var pools_to_clear: Array = restricted_gold_pools.get(player_id, [])
+		if pools_to_clear.is_empty():
+			continue
+		restricted_gold_pools[player_id] = []
+		var reserva_container: HBoxContainer = _main.player_gold if player_id == 0 else _main.opponent_gold
+		_main._update_debug("Oro Virtual restringido expirado (%d pool(s))" % pools_to_clear.size())
+		for pool in pools_to_clear:
+			for token in pool.tokens:
+				if is_instance_valid(token):
+					var tw = create_tween()
+					tw.set_parallel(true)
+					tw.tween_property(token, "modulate:a", 0.0, 0.20)
+					tw.tween_property(token, "position:y", token.position.y - 15.0, 0.20)
+					tw.finished.connect(func():
+						if is_instance_valid(token):
+							if token.get_parent() == reserva_container:
+								reserva_container.remove_child(token)
+							token.queue_free()
+							update_gold_containers_spacing()
+					)
 	_update_gold_display()
 
 
-func _restricted_gold_available_for(card_type: int, card_race: String, card_cost: int = -1) -> int:
+func _restricted_gold_available_for(card_type: int, card_race: String, card_cost: int = -1, player_id: int = 0) -> int:
 	if card_type < 0:
 		return 0
 	var total := 0
-	for pool in restricted_gold_pools:
+	for pool in restricted_gold_pools.get(player_id, []):
 		if pool.predicate.call(card_type, card_race, card_cost):
 			total += pool.amount
 	return total
 
 
-func _consume_restricted_gold_for(card_type: int, card_race: String, card_cost: int, needed: int) -> int:
-	if card_type < 0 or needed <= 0 or restricted_gold_pools.is_empty():
+func _consume_restricted_gold_for(card_type: int, card_race: String, card_cost: int, needed: int, player_id: int = 0) -> int:
+	var pools: Array = restricted_gold_pools.get(player_id, [])
+	if card_type < 0 or needed <= 0 or pools.is_empty():
 		return 0
 	var consumed := 0
 	var empty_indices: Array = []
-	for i in range(restricted_gold_pools.size()):
+	for i in range(pools.size()):
 		if consumed >= needed:
 			break
-		var pool: Dictionary = restricted_gold_pools[i]
+		var pool: Dictionary = pools[i]
 		if not pool.predicate.call(card_type, card_race, card_cost):
 			continue
 		var usa: int = mini(pool.amount, needed - consumed)
 		pool.amount -= usa
 		consumed += usa
 		for j in range(usa):
-			await _despawn_gold_token(pool.tokens)
+			await _despawn_gold_token(pool.tokens, player_id)
 		if pool.amount <= 0:
 			empty_indices.append(i)
 	for i in range(empty_indices.size() - 1, -1, -1):
-		restricted_gold_pools.remove_at(empty_indices[i])
+		pools.remove_at(empty_indices[i])
+	restricted_gold_pools[player_id] = pools
 	return consumed
 
 
-func _spawn_gold_token(nombre: String, label: String, target_list: Array) -> void:
-	_visuals._spawn_gold_token(nombre, label, target_list)
+func _spawn_gold_token(nombre: String, label: String, target_list: Array, player_id: int = 0) -> void:
+	_visuals._spawn_gold_token(nombre, label, target_list, player_id)
 
 
-func _despawn_virtual_gold_token() -> void:
-	await _despawn_gold_token(virtual_gold_tokens)
+func _despawn_virtual_gold_token(player_id: int = 0) -> void:
+	var tokens: Array = virtual_gold_tokens.get(player_id, [])
+	await _despawn_gold_token(tokens, player_id)
+	virtual_gold_tokens[player_id] = tokens
 
 
-func _despawn_gold_token(target_list: Array) -> void:
-	await _visuals._despawn_gold_token(target_list)
+func _despawn_gold_token(target_list: Array, player_id: int = 0) -> void:
+	await _visuals._despawn_gold_token(target_list, player_id)
 
 
 func _mover_oro_a_pagado(card: Node) -> bool:
@@ -1986,7 +2517,7 @@ func _reset_gold() -> void:
 	(2026-09-02, mismo tipo de corrupción ya encontrado y arreglado en
 	update_gold_containers_spacing()/puede_pagar()/_revert_gold_to_ally()/
 	get_oro_disponible() — funciones llamadas sin definición). GameState.
-	reagrupar_oro() ya existe y resetea los contadores reales; acá se
+	reagrupar_oro() ya existe y resetea los contadores reales; aquí se
 	mueven las cartas VISUALES de vuelta una por una con
 	_mover_oro_a_reserva(), que ya existe pero no toca GameState (por eso
 	el orden: contadores primero, visual después)."""
@@ -1998,13 +2529,13 @@ func _reset_gold() -> void:
 	_update_gold_display()
 
 
-func get_oro_disponible() -> int:
-	return GameState.get_oro_reserva(0)
+func get_oro_disponible(player_id: int = 0) -> int:
+	return GameState.get_oro_reserva(player_id)
 
 
-func get_oro_pagado() -> int:
-	return GameState.get_oro_pagado(0)
+func get_oro_pagado(player_id: int = 0) -> int:
+	return GameState.get_oro_pagado(player_id)
 
 
-func get_oro_total() -> int:
-	return GameState.get_oro_total(0)
+func get_oro_total(player_id: int = 0) -> int:
+	return GameState.get_oro_total(player_id)

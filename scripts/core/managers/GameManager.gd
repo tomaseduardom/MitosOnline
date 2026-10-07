@@ -8,7 +8,7 @@ extends Node
 ## a un layout de tablero de una versión anterior de la escena (líneas de
 ## ataque/defensa/apoyo separadas) que ya no existe en Main.tscn actual, así
 ## que nunca se pudo adjuntar a ningún nodo real. Se eliminó ese archivo.
-## No se quitó la propiedad de acá porque ~15 archivos todavía la LEEN (todos
+## No se quitó la propiedad de aquí porque ~15 archivos todavía la LEEN (todos
 ## ya con su propio camino real de respaldo vía CardManager/Main, no
 ## necesitan el board para funcionar) — quitarla también de ahí es un
 ## cambio más grande que se hará por partes. El único camino que hoy mueve
@@ -63,7 +63,7 @@ func setup_game(player1: Node, player2: Node) -> void:
 
 func start_game(starting_player: int = 0) -> void:
 	"""Inicializa el estado global de la partida, emite game_started y arranca
-	el Turno 1. Seguro llamar _start_turn() directamente acá: PhaseFlowController
+	el Turno 1. Seguro llamar _start_turn() directamente aquí: PhaseFlowController
 	ya conectó GameManager.phase_changed/turn_started en Main._ready(), mucho
 	antes de que termine el mulligan y se llegue a este punto.
 	"""
@@ -146,7 +146,7 @@ func _process_agrupacion() -> void:
 	1. Aliados de Línea de Ataque → Línea de Defensa  (vía PhaseFlowController,
 	   caso AGRUPACION de _on_phase_state_machine() — llama unmark_attackers())
 	2. Oros Pagados → Reserva de Oro                   (vía PhaseFlowController._reset_gold())
-	3. Limpiar enfermedad de invocación (DAR 3.1) — a partir de acá los
+	3. Limpiar enfermedad de invocación (DAR 3.1) — a partir de aquí los
 	   Aliados del jugador activo pueden atacar sin necesitar Furia.
 	La fase avanza automáticamente a VIGILIA tras un breve delay para que el
 	título visual sea visible.
@@ -185,7 +185,7 @@ func _process_vigilia() -> void:
 	# VIGILIA a FINAL (ver 'Paso: omitiendo batalla → Fase Final') y jamás
 	# pasa por _start_batalla(), que era el único lugar que vaciaba
 	# 'attackers' — un Aliado que atacó quedaba en esa lista para siempre
-	# hasta que OTRO Aliado forzara la fase de Ataque de rebote. Acá se
+	# hasta que OTRO Aliado forzara la fase de Ataque de rebote. Aquí se
 	# limpia sí o sí al empezar cada Vigilia, haya habido batalla o no.
 	attackers.clear()
 	blockers.clear()
@@ -223,7 +223,7 @@ var blockers: Dictionary = {}  # {atacante: bloqueador}
 func _start_batalla() -> void:
 	"""Inicia la Batalla Mitológica — disparada por el botón "Atacar"
 	(proceed_to_battle(), 2026-08-28). NO limpiar 'attackers'/'blockers'
-	acá: siguen vacíos porque recién ahora, ya en fase Ataque, se pueden
+	aquí: siguen vacíos porque solo ahora, ya en fase Ataque, se pueden
 	declarar (_process_vigilia() ya garantiza que arrancan vacíos al
 	empezar cada Vigilia nueva)."""
 	print("[GameManager] Batalla Mitológica iniciada - Paso de Ataque")
@@ -258,7 +258,7 @@ func declare_attacker(ally: Node) -> bool:  # coroutine — el llamador debe usa
 	attackers.append(ally)
 	print("[GameManager] Atacante declarado: %s" % ally.name)
 
-	# "Cuando ataque" (DAR 5.3.1) YA NO se dispara acá (2026-08-29, corrige
+	# "Cuando ataque" (DAR 5.3.1) YA NO se dispara aquí (2026-08-29, corrige
 	# exploit real reportado: declarar/desdeclarar el mismo Aliado varias
 	# veces antes de confirmar disparaba el trigger una vez POR CADA
 	# declare, generando Oro/robando cartas/etc. de más — p.ej. Lobo
@@ -297,14 +297,14 @@ func confirm_attackers() -> void:  # coroutine — el llamador debe usar 'await'
 		_end_batalla()
 		return
 
-	# "Cuando ataque" (DAR 5.3.1) se dispara ACÁ, una sola vez por Aliado,
+	# "Cuando ataque" (DAR 5.3.1) se dispara AQUÍ, una sola vez por Aliado,
 	# no en declare_attacker() (2026-08-29, corrige exploit real: declarar/
 	# desdeclarar el mismo Aliado varias veces antes de confirmar disparaba
 	# el trigger una vez POR CADA declare — p.ej. Lobo Sagrado, "genera un
 	# Oro por el turno", permitía Oro infinito). 'attackers' ya es la lista
 	# final deduplicada — declare_attacker() rechaza duplicados y
 	# undeclare_attacker() los saca — así que cada Aliado dispara su propio
-	# 'cuando ataque' exactamente una vez acá, sin importar cuántas veces
+	# 'cuando ataque' exactamente una vez aquí, sin importar cuántas veces
 	# se declaró/desdeclaró antes de este punto.
 	for ally in attackers:
 		if is_instance_valid(ally):
@@ -334,7 +334,7 @@ func _check_wielder_attack_triggers(ally: Node, player_id: int) -> void:
 	(TriggerSystem._collect_triggers_for_event) solo revisa el texto de la
 	carta que ataca, no el de sus Armas equipadas (mismo motivo por el que
 	_check_attack_count_triggers() existe aparte para Sable de Napoleón) —
-	se resuelve acá, directo, con el mismo criterio."""
+	se resuelve aquí, directo, con el mismo criterio."""
 	if not is_instance_valid(ally):
 		return
 	var weapons = ally.get("equipped_weapons")
@@ -354,16 +354,14 @@ func _card_has_wielder_attack_choice(card: Node) -> bool:
 func _resolve_wielder_attack_choice(weapon: Node, ally: Node, player_id: int) -> void:
 	if int(ally.get("card_cost")) < 1:
 		return
-	if player_id != 0:
-		return  # el bot no usa esta elección todavía
 	var main := get_node_or_null("/root/Main")
 	if not main:
 		return
 	var choose_gold: bool = await SelectionManager.await_two_choice(
-		main, weapon.card_name if weapon.get("card_name") else "Arma", "Generar un Oro", "Robar una carta")
+		main, weapon.card_name if weapon.get("card_name") else "Arma", "Generar un Oro", "Robar una carta", player_id)
 	if choose_gold:
 		if main._gold_manager:
-			main._gold_manager.generar_oros_virtuales(1)
+			main._gold_manager.generar_oros_virtuales(1, player_id)
 	else:
 		await ActionModule.draw(player_id, 1, "weapon_attack_trigger", true)
 
@@ -372,7 +370,7 @@ func _check_attack_count_triggers(player_id: int, attacker_count: int) -> void:
 	"""'Cuando ataques con tres o más Aliados, las cartas que estén o sean
 	puestas en los Cementerios este turno pierden su habilidad hasta tu
 	próximo turno' (2026-08-30, p.ej. Sable de Napoleón). Se resuelve UNA
-	SOLA VEZ acá (no es un trigger por Aliado, es una condición sobre el
+	SOLA VEZ aquí (no es un trigger por Aliado, es una condición sobre el
 	total de atacantes confirmados) — apenas se encuentra una fuente con
 	este texto, se aplica y se corta (no tiene sentido aplicar dos veces
 	aunque hubiera dos copias)."""
@@ -430,9 +428,57 @@ func declare_blocker(blocker: Node, attacker: Node) -> void:
 
 
 func confirm_blockers() -> void:
-	"""Confirma los bloqueadores y pasa a Guerra de Talismanes"""
+	"""HUÉRFANA — nunca llamada por nadie (verificado 2026-09-20, grep de todo
+	`scripts/`: cero call sites). El camino real que confirma bloqueadores y
+	avanza a Guerra de Talismanes es PhaseFlowController._on_priority_both_
+	passed_main(), rama Constants.Phase.BLOQUEO, que llama directo a
+	GameManager.advance_to_phase(GUERRA_TALISMANES) (sin pasar por aquí) — y
+	_start_guerra_talismanes() de abajo (reset manual de priority_player_id/
+	players_passed_priority) quedó redundante desde que PriorityManager
+	empezó a manejar esto solo, escuchando la señal phase_changed
+	(PriorityManager.gd, rama GUERRA_TALISMANES de _on_phase_changed). No se
+	borra (podría tener un dueño futuro no identificado), pero NO es la
+	función a tocar para 'cuando bloqueas' — ver confirm_blockers_and_
+	collect_triggers() más abajo, que sí es el camino real nuevo."""
 	_change_phase(Constants.Phase.GUERRA_TALISMANES)
 	_start_guerra_talismanes()
+
+
+func confirm_blockers_and_collect_triggers() -> void:  # coroutine — el llamador debe usar 'await'
+	"""Recolecta el trigger 'cuando bloqueas' (DAR 7.2/7.3) para cada
+	bloqueador REALMENTE declarado, luego avanza a Guerra de Talismanes.
+	Mismo criterio que confirm_attackers(): la lista ya es la definitiva (un
+	bloqueador por atacante, declare_blocker() reescribe la misma clave del
+	diccionario, no acumula duplicados si el jugador cambia de bloqueador
+	antes de confirmar), así que cada Aliado dispara su propio 'cuando
+	bloqueas' una sola vez, aquí, cuando el bloqueo ya es definitivo — no en
+	declare_blocker() (mismo motivo del exploit ya documentado para
+	confirm_attackers(): declarar/desdeclarar varias veces antes de
+	confirmar dispararía el trigger una vez por cada intento).
+
+	2026-09-20 (arquitectura.md "539 cartas sin cobertura", libro de thoth):
+	primer uso real del trigger on_block — hasta ahora estaba clasificado en
+	Card.TRIGGER_KEYWORDS pero sin ningún código que lo recolectara ni
+	resolviera (TriggerResolution._execute_trigger_effect() no tenía rama
+	'on_block'). No se reutiliza confirm_blockers() de arriba porque esa
+	función quedó huérfana con lógica de reset que hoy podría pisar el
+	estado de PriorityManager — este camino nuevo solo hace lo que el
+	camino real (PhaseFlowController → advance_to_phase) ya hacía, más la
+	recolección de triggers antes del cambio de fase."""
+	var main := get_node_or_null("/root/Main")
+	for blocker in blockers.values():
+		if is_instance_valid(blocker):
+			var blocker_owner: int = blocker.get("controller_id") if blocker.get("controller_id") != null else (1 - active_player_id)
+			EffectController.emit_signal("on_card_blocks", blocker_owner, blocker)
+			await TriggerSystem._collect_triggers_for_event("on_block", {
+				"player_id": blocker_owner, "card": blocker
+			})
+			# libro de thoth (Oro, 2026-09-20) — carta pasiva ajena al
+			# bloqueador, no llega por el camino de trigger_type de arriba
+			# (ver docstring de GoldManager.check_libro_de_thoth_block()).
+			if main and main.get("_gold_manager"):
+				main._gold_manager.check_libro_de_thoth_block(blocker, blocker_owner)
+	advance_to_phase(Constants.Phase.GUERRA_TALISMANES)
 
 
 func _start_guerra_talismanes() -> void:
@@ -488,7 +534,7 @@ func check_victory() -> void:
 	player.has_method('get_deck_count') daba SIEMPRE false — esta función
 	nunca disparó una victoria, ni siquiera en su único llamador real
 	(ZoneManager.draw_card() al intentar robar con el mazo ya vacío). El
-	camino de victoria por DAÑO DE COMBATE nunca pasó por acá — BattleManager
+	camino de victoria por DAÑO DE COMBATE nunca pasó por aquí — BattleManager
 	calcula el mazo vacío él mismo y llama GameManager.player_loses()
 	directo, por eso ese sí funcionaba. Se lee el tamaño real de
 	player_deck/opponent_deck en Main (mismo patrón que el resto de

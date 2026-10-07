@@ -4,7 +4,7 @@ class_name BernardoAbilityHandler
 ## alternativo (Barajar un Arma/Aliado Caballero) + elección de efecto con
 ## objetivo (Desterrar coste ≤3 o cancelar habilidad). Detectado en
 ## CardInspectionLayer._build_ability_buttons() (is_bernardo_pattern) y
-## ruteado acá en vez de al pipeline genérico de habilidades activadas.
+## ruteado aquí en vez de al pipeline genérico de habilidades activadas.
 ## Opera sobre CardInspectionLayer via _inspector (y sobre el Main del juego
 ## via _inspector._main).
 ## Extraído de CardInspectionLayer.gd (2026-08-28, "módulos gordos").
@@ -47,41 +47,49 @@ func _activate_bernardo_shuffle_removal(source_card: Node, ability: Dictionary) 
 		_main._update_debug("No tienes un Arma ni un Aliado Caballero para Barajar")
 		return
 
-	var candidate_data: Array = candidates.map(func(c): return c.card_data)
-	var picked: Dictionary = await SelectionManager.await_single_pick(
-		candidate_data, "Baraja un Arma o Caballero (coste de la habilidad)", true, 0)
-	if picked.is_empty():
+	if not _main._card_interaction:
+		return
+	# 2026-09-13, a pedido del usuario: click directo sobre la mano/campo en
+	# vez del modal de lista viejo.
+	var cost_filter := func(c: Node) -> bool: return c in candidates
+	var cost_card: Node = await _main._card_interaction.await_target(
+		"Baraja un Arma o Caballero (coste de la habilidad)", cost_filter)
+	if not cost_card or not is_instance_valid(cost_card):
 		return  # canceló — no se pagó nada, no se marca "una vez por turno"
-
-	var cost_card: Node = null
-	for c in candidates:
-		if is_instance_valid(c) and c.card_data == picked:
-			cost_card = c
-			break
-	if not cost_card:
+	# source_card se usa después de este await (2026-09-13, bug real:
+	# "Invalid type... (previously freed)" al llamar _bernardo_banish_
+	# target). Mismo motivo ya documentado en HandCementerioAbilityHandler.
+	# gd: el await de arriba es tiempo real de espera del jugador — si
+	# Bernardo salió de juego mientras tanto (destruido/desterrado por
+	# cualquier vía), queda una referencia colgante.
+	if not is_instance_valid(source_card) or not is_instance_valid(cost_card):
 		return
 
 	var cost_owner: int = cost_card.owner_id if cost_card.get("owner_id") != null else 0
 	_bernardo_shuffle_into_deck(cost_card, cost_owner)
 
-	# "Una vez por turno" recién se marca ahora que el coste ya se pagó de
+	# "Una vez por turno" se marca solo ahora que el coste ya se pagó de
 	# verdad — mismo criterio que ActionPipeline.activate_ability() (Paso B).
 	# register_ability_use() usa el instance_id de source_card (2026-08-30),
 	# no card_data.id — cada copia física necesita su propio cupo.
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
 
-	var choice_state := {"resolved": false, "choice": ""}
-	_show_bernardo_effect_choice(func(c: String):
-		choice_state.choice = c
-		choice_state.resolved = true
-	)
-	while not choice_state.resolved:
-		await _inspector.get_tree().process_frame
+	# 2026-09-19, a pedido explícito del usuario: ya NO se pregunta "Desterrar
+	# o Cancelar" con un diálogo — la rama se elige SOLA según el momento en
+	# que se usa Bernardo. En tu propio turno o en Guerra de Talismanes
+	# (proactivo, sin responder a nada puntual) siempre Desterrar; respondiendo
+	# a que el rival jugó una carta o usó una habilidad (ventana de respuesta
+	# real, §10.53) siempre Cancelar. Ver AbilityButtonSupport._is_responding_
+	# to_opponent_action(). _show_bernardo_effect_choice() queda huérfana (no
+	# borrada, ver su docstring) por si hace falta volver a una elección
+	# manual.
+	if not is_instance_valid(source_card):
+		return
 
-	if choice_state.choice == "desterrar":
-		await _bernardo_banish_target(source_card)
-	elif choice_state.choice == "cancelar":
+	if _inspector._button_support._is_responding_to_opponent_action():
 		await _bernardo_cancel_ability_target(source_card)
+	else:
+		await _bernardo_banish_target(source_card)
 
 
 func _bernardo_can_shuffle(c: Node) -> bool:
@@ -122,6 +130,20 @@ func _bernardo_shuffle_into_deck(card: Node, owner_id: int) -> void:
 
 
 func _show_bernardo_effect_choice(on_choice: Callable) -> void:
+	# 2026-09-19, SIN LLAMADOR HOY A PROPÓSITO — reemplazada por elección
+	# automática según contexto en _activate_bernardo_shuffle_removal() (ver
+	# AbilityButtonSupport._is_responding_to_opponent_action(), a pedido del
+	# usuario). No se borró: si algún día se quisiera volver a una elección
+	# manual (p.ej. el usuario decide que no le gusta la automática), queda
+	# lista para reconectar.
+	#
+	# 2026-09-13, bug real reportado por el usuario: este diálogo es hijo de
+	# inspection_layer, la misma capa que close_card_inspection() (llamada
+	# al activar el botón de Bernardo, antes de este punto) apaga con un
+	# retraso de ~0.2s (tween de cierre) — sin avisarle a esa capa que hay
+	# contenido nuevo, el apagón diferido lo dejaba presente pero invisible
+	# hasta el próximo click derecho. Ver mark_inspection_layer_in_use().
+	_inspector.mark_inspection_layer_in_use()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -146,7 +168,7 @@ func _show_bernardo_effect_choice(on_choice: Callable) -> void:
 	vbox.add_child(lbl)
 	# mouse_filter = IGNORE ANTES de queue_free() (2026-09-06, a raíz de un
 	# reporte del usuario de clicks que "no detectaban" el siguiente paso de
-	# selección de objetivo justo después de elegir acá): queue_free() no
+	# selección de objetivo justo después de elegir aquí): queue_free() no
 	# saca al nodo del árbol hasta el final del frame — este ColorRect a
 	# pantalla completa seguía activo (con su mouse_filter STOP por
 	# defecto) durante ese frame y podía tragarse el primer click que el
@@ -186,7 +208,7 @@ func _bernardo_banish_target(source_card: Node) -> void:
 		return int(c.get("card_cost")) <= 3
 	var chosen: Node = await _inspector._main._card_interaction.await_target(
 		"Elige una carta de coste 3 o menos para Desterrar", filter)
-	if chosen and is_instance_valid(chosen):
+	if chosen and is_instance_valid(chosen) and is_instance_valid(source_card):
 		await ActionModule.banish([chosen], source_card, true)
 
 
@@ -197,5 +219,5 @@ func _bernardo_cancel_ability_target(source_card: Node) -> void:
 		return c.get("card_type") == Constants.CardType.ALIADO
 	var chosen: Node = await _inspector._main._card_interaction.await_target(
 		"Elige un Aliado que pierda su habilidad", filter)
-	if chosen and is_instance_valid(chosen):
+	if chosen and is_instance_valid(chosen) and is_instance_valid(source_card):
 		await KeywordManager.silence_card(chosen, source_card, "permanent")

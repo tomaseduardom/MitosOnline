@@ -18,7 +18,7 @@ func _get_searchable_zone_data(player_id: int, zone: int) -> Variant:
 	buscar ahí no tiene sentido en DAR (ya están a la vista).
 	Se lee vía CardManager, que está sincronizado por referencia con
 	Main.player_deck/player_cemetery (ver CardManager.sync_from_main) — así
-	que remover una entrada acá remueve la carta de verdad."""
+	que remover una entrada aquí remueve la carta de verdad."""
 	match zone:
 		Constants.Zone.CASTILLO:
 			return CardManager.get_deck(player_id)
@@ -28,7 +28,7 @@ func _get_searchable_zone_data(player_id: int, zone: int) -> Variant:
 			return null
 
 
-func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_fail: bool = true, skip_validation: bool = false, may_play: bool = false, source_card: Node = null, destination: int = Constants.Zone.MANO, distinct_names: bool = false) -> Dictionary:
+func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_fail: bool = true, skip_validation: bool = false, may_play: bool = false, source_card: Node = null, destination: int = Constants.Zone.MANO, distinct_names: bool = false, chooser_id: int = -1) -> Dictionary:
 	"""Busca cartas en el Castillo o Cementerio que cumplan el filtro (DAR
 	Sección 8). El jugador elige cuáles llevarse (o todas, si hay menos que
 	amount). Si may_play es true, cada carta encontrada se juega de inmediato
@@ -40,6 +40,13 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 			también es SUYO — buscar en el Castillo rival y desterrar manda
 			al Destierro del rival, no al propio; DAR: la carta sigue siendo
 			del jugador de quien salió)
+		chooser_id (2026-09-30, Fase 3 del plan de paridad remota): quién
+			HACE la elección — no siempre es player_id. 'Busca en el Castillo
+			OPONENTE y destiérralas' tiene player_id=oponente (es SU zona/
+			destino) pero quien elige qué desterrar es el CONTROLADOR de la
+			habilidad, no la víctima. Default -1 = usar player_id (todo
+			llamador existente que no lo pasa sigue viéndose exactamente
+			igual que antes de agregar este parámetro).
 		zone: Zona donde buscar (CASTILLO o CEMENTERIO — únicas zonas con datos)
 		filter: Filtro de cartas {type, raza, cost_max, cost_min, strength_min,
 			name_contains, keyword}
@@ -106,7 +113,8 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 
 	# Si hay cartas, el jugador debe elegir (o se toman todas si hay ≤ amount)
 	var to_select = mini(amount, matching.size())
-	var selected_data: Array = await _select_search_results(matching, to_select, distinct_names)
+	var effective_chooser: int = chooser_id if chooser_id >= 0 else player_id
+	var selected_data: Array = await _select_search_results(matching, to_select, distinct_names, effective_chooser)
 	result.selected = selected_data
 
 	_main.emit_signal("action_search_selected", player_id, selected_data)
@@ -165,6 +173,21 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 			"description": "Barajar mazo"
 		})
 
+	# 2026-09-14, a pedido del usuario (La Ouija): buscar en el Castillo saca
+	# cartas del tope y después lo baraja (arriba), pero a diferencia de
+	# CASI todo el resto del código que toca player_deck (ZoneManager.
+	# draw_card(), la propia habilidad de La Ouija en DSR_SearchGoldCombos.gd,
+	# y ~20 sitios más en los archivos de triggers), esta función genérica
+	# — la que de verdad usan la mayoría de las cartas "busca en tu
+	# Castillo" — nunca llamaba a ZoneManager._update_castillo_counts(), el
+	# único punto de verdad real para refrescar tanto el contador visible
+	# del Castillo como el revelado del tope de La Ouija (ver
+	# ZoneViewerModule.refresh_castillo_top_reveal()). Resultado: con La
+	# Ouija en juego, buscar dejaba la carta revelada vieja en pantalla
+	# hasta que algo MÁS disparara el refresco por otro lado.
+	if zone == Constants.Zone.CASTILLO and main and main.get("_zone_manager"):
+		main._zone_manager._update_castillo_counts()
+
 	_main.emit_signal("action_search_completed", player_id, result)
 
 	await _main._end_trigger_collection_and_resolve()
@@ -172,7 +195,7 @@ func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_
 	return result
 
 
-func _select_search_results(matching: Array, to_select: int, distinct_names: bool = false) -> Array:
+func _select_search_results(matching: Array, to_select: int, distinct_names: bool = false, player_id: int = 0) -> Array:
 	"""Abre el overlay de selección (SelectionManager) y espera a que el
 	jugador elija. Si hay ≤ to_select coincidencias, se toman todas sin
 	abrir UI (salvo con distinct_names, ver más abajo). Si el jugador
@@ -181,8 +204,12 @@ func _select_search_results(matching: Array, to_select: int, distinct_names: boo
 	IMPORTANTE: con max_selections == 1, SelectionManager cierra en el
 	primer clic y emite 'card_selected' (un solo Dictionary) en vez de
 	'selection_completed' (un Array) — hay que escuchar ambas señales o el
-	await se queda colgado para siempre (mismo caso ya resuelto en
-	SelectionModule.open_discard_selection())."""
+	await se queda colgado para siempre.
+
+	'player_id' (2026-09-30, Fase 3 del plan de paridad remota — pasado como
+	chooser_id a open_search(), ver ese comentario en SelectionManager.gd):
+	de quién es esta búsqueda, para que si es el jugador 1 Y es un Remoto
+	real, la elección se le pregunte a él por red en vez de al Anfitrión."""
 	if distinct_names:
 		# No se puede usar el atajo "tomar todas" ni un multi-select de un
 		# solo tiro: aunque matching.size() <= to_select, puede haber
@@ -193,7 +220,7 @@ func _select_search_results(matching: Array, to_select: int, distinct_names: boo
 		var picked: Array = []
 		var pool: Array = matching.duplicate()
 		while picked.size() < to_select and not pool.is_empty():
-			var one := await _select_search_results(pool, 1, false)
+			var one := await _select_search_results(pool, 1, false, player_id)
 			if one.is_empty():
 				break  # el jugador canceló esta ronda — se queda con lo ya elegido
 			var chosen: Dictionary = one[0]
@@ -225,7 +252,7 @@ func _select_search_results(matching: Array, to_select: int, distinct_names: boo
 	sel_mgr.selection_completed.connect(on_completed, CONNECT_ONE_SHOT)
 	sel_mgr.card_selected.connect(on_single_selected, CONNECT_ONE_SHOT)
 	sel_mgr.selection_cancelled.connect(on_cancelled, CONNECT_ONE_SHOT)
-	sel_mgr.open_search(matching, to_select)
+	sel_mgr.open_search(matching, to_select, Callable(), player_id)
 
 	while not state.resolved:
 		await _main.get_tree().process_frame
@@ -253,6 +280,9 @@ func _put_found_card_into_play(main: Node, player_id: int, card_data: Dictionary
 		main._connect_card_signals(card_node)
 	else:
 		main._opponent_fan.add_card(card_node)
+		# 2026-09-14, mismo bug real que ZoneManager.draw_card() (ver ese
+		# comentario) — faltaba aquí también.
+		main._connect_card_signals(card_node)
 
 	if may_play and player_id == 0:
 		await _main.get_tree().create_timer(0.3).timeout

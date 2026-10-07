@@ -5,10 +5,19 @@ class_name SceneSetupModule
 
 const DropZoneScript = preload("res://scripts/ui/zones/DropZone.gd")
 const OpponentFanScript = preload("res://scripts/ui/hand/OpponentFan.gd")
+const PauseMenuOverlayScript = preload("res://scripts/ui/hud/PauseMenuOverlay.gd")
 
 var _main: Node = null
 var pause_menu: CanvasLayer = null
-var is_paused: bool = false
+var is_paused: bool:
+	get:
+		if pause_menu and pause_menu.has_method("is_open"):
+			return pause_menu.is_open()
+		return false
+	set(val):
+		if pause_menu and pause_menu.has_method("is_open"):
+			if val != pause_menu.is_open():
+				pause_menu.toggle_menu()
 
 
 func setup(main: Node) -> void:
@@ -27,10 +36,7 @@ func _setup_styles() -> void:
 	var font_medieval = preload("res://assets/fonts/Marcellus-Regular.ttf")
 	var font_bold = preload("res://assets/fonts/Cinzel-Bold.ttf")
 
-	var topbar_style = StyleBoxFlat.new()
-	topbar_style.bg_color = Color(0.06, 0.05, 0.08, 0.92)
-	topbar_style.border_color = Color(0.72, 0.60, 0.30, 0.85)
-	topbar_style.border_width_bottom = 2
+	var topbar_style = StyleBoxEmpty.new()
 	_main.get_node("TopBar").add_theme_stylebox_override("panel", topbar_style)
 
 	var topbar_title = _main.get_node_or_null("TopBar/TurnLabel")
@@ -38,6 +44,9 @@ func _setup_styles() -> void:
 		topbar_title.add_theme_font_override("font", font_medieval)
 		topbar_title.add_theme_font_size_override("font_size", 16)
 		topbar_title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.70, 1.0))
+		topbar_title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
+		topbar_title.add_theme_constant_override("shadow_offset_x", 1)
+		topbar_title.add_theme_constant_override("shadow_offset_y", 2)
 
 	var debug_style = StyleBoxFlat.new()
 	debug_style.bg_color = Color(0, 0, 0, 0.7)
@@ -117,90 +126,29 @@ func _on_card_back_changed(_back_id: String) -> void:
 # MENÚ DE PAUSA
 # =============================================================================
 func _create_pause_menu() -> void:
-	pause_menu = CanvasLayer.new()
-	pause_menu.layer = 100
-	pause_menu.visible = false
-	pause_menu.process_mode = Node.PROCESS_MODE_ALWAYS
+	pause_menu = PauseMenuOverlayScript.new()
+	pause_menu.name = "PauseMenuOverlay"
 	_main.add_child(pause_menu)
-
-	var blur_bg = ColorRect.new()
-	blur_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	blur_bg.color = Color(0, 0, 0, 0.7)
-	blur_bg.name = "BlurBackground"
-	pause_menu.add_child(blur_bg)
-
-	var panel = Panel.new()
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.offset_left = -200
-	panel.offset_top = -175
-	panel.offset_right = 200
-	panel.offset_bottom = 175
-	panel.name = "PausePanel"
-	var panel_style = StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.1, 0.1, 0.15, 0.95)
-	panel_style.border_color = Color(0.8, 0.65, 0.3, 1)
-	panel_style.border_width_bottom = 3
-	panel_style.border_width_top = 3
-	panel_style.border_width_left = 3
-	panel_style.border_width_right = 3
-	panel_style.corner_radius_top_left = 12
-	panel_style.corner_radius_top_right = 12
-	panel_style.corner_radius_bottom_left = 12
-	panel_style.corner_radius_bottom_right = 12
-	panel.add_theme_stylebox_override("panel", panel_style)
-	pause_menu.add_child(panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	vbox.offset_left = 25; vbox.offset_top = 25
-	vbox.offset_right = -25; vbox.offset_bottom = -25
-	vbox.add_theme_constant_override("separation", 15)
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	panel.add_child(vbox)
-
-	var title = Label.new()
-	title.text = "PAUSA"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 32)
-	title.add_theme_color_override("font_color", Color(1, 0.9, 0.6, 1))
-	vbox.add_child(title)
-
-	var btn_style = StyleBoxFlat.new()
-	btn_style.bg_color = Color(0.15, 0.12, 0.2, 0.9)
-	btn_style.border_color = Color(0.8, 0.65, 0.3, 1)
-	btn_style.border_width_bottom = 2; btn_style.border_width_top = 2
-	btn_style.border_width_left = 2; btn_style.border_width_right = 2
-	btn_style.corner_radius_top_left = 8; btn_style.corner_radius_top_right = 8
-	btn_style.corner_radius_bottom_left = 8; btn_style.corner_radius_bottom_right = 8
-
-	for btn_info in [
-		["CONTINUAR", _on_pause_continue, Color(1, 0.95, 0.8, 1)],
-		["VOLVER AL INICIO", _on_pause_main_menu, Color(1, 0.95, 0.8, 1)],
-		["SALIR DEL JUEGO", _on_pause_exit, Color(1, 0.7, 0.7, 1)],
-	]:
-		var btn = Button.new()
-		btn.text = btn_info[0]
-		btn.custom_minimum_size = Vector2(300, 55)
-		btn.add_theme_font_size_override("font_size", 22)
-		btn.add_theme_color_override("font_color", btn_info[2])
-		btn.add_theme_stylebox_override("normal", btn_style.duplicate())
-		btn.pressed.connect(btn_info[1])
-		vbox.add_child(btn)
+	pause_menu.setup(_main)
+	pause_menu.resume_requested.connect(_on_pause_continue)
 
 
 func toggle_pause_menu() -> void:
-	is_paused = not is_paused
-	pause_menu.visible = is_paused
-	get_tree().paused = is_paused
+	if pause_menu and pause_menu.has_method("toggle_menu"):
+		pause_menu.toggle_menu()
 
 
 func _on_pause_continue() -> void:
-	toggle_pause_menu()
+	# Manejado internamente por PauseMenuOverlay (resume_requested)
+	pass
 
 
 func _on_pause_main_menu() -> void:
-	get_tree().paused = false
-	get_tree().change_scene_to_file("res://scenes/menu/MainMenu.tscn")
+	if pause_menu and pause_menu.has_method("_execute_main_menu"):
+		pause_menu._execute_main_menu()
+	else:
+		get_tree().paused = false
+		get_tree().change_scene_to_file("res://scenes/menu/MainMenu.tscn")
 
 
 func _on_pause_exit() -> void:

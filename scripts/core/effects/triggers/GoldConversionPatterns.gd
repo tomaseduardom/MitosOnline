@@ -52,7 +52,7 @@ func try_execute_convert_then_reveal_until_same_type_pattern(ability_text: Strin
 	var cm := cost_rx.search(lower)
 	var max_cost: int = int(cm.get_string(1)) if cm else 3
 
-	var chosen_target: Node = await _main._targeted_executor._select_convert_target(max_cost, card)
+	var chosen_target: Node = await _main._targeted_executor._select_convert_target(max_cost, card, controller_id)
 	if not chosen_target or not is_instance_valid(chosen_target):
 		return true
 
@@ -63,14 +63,14 @@ func try_execute_convert_then_reveal_until_same_type_pattern(ability_text: Strin
 		return true
 
 	var target_type: int = chosen_target.card_type
-	# Sin ventana genérica acá (2026-09-09): Acabar la Esperanza es un
+	# Sin ventana genérica aquí (2026-09-09): Acabar la Esperanza es un
 	# Talismán — TriggerSystem.resolve_talisman() ya abrió UNA ventana para
 	# toda la carta antes de siquiera llegar a este patrón.
 	chosen_target.is_converted = true
 	await KeywordManager.silence_card(chosen_target, card, "permanent")
 
-	if controller_id != 0 or not main:
-		return true  # el bot no usa esta habilidad todavía (revelado interactivo)
+	if not main:
+		return true
 
 	var deck: Array = CardManager.get_deck(controller_id)
 	var revealed: Array = []
@@ -92,6 +92,10 @@ func try_execute_convert_then_reveal_until_same_type_pattern(ability_text: Strin
 	for c in revealed:
 		deck.append(c)
 	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (Acabar la Esperanza)"
+	})
 
 	if main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
@@ -109,8 +113,6 @@ func try_execute_wielder_attack_gold_or_draw_pattern(ability_text: String, card:
 	var lower := ability_text.to_lower()
 	if not ("si es de coste 1 o más, genera un oro o roba una carta" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var wielder: Node = card.get("wielder") if card.get("wielder") != null else null
 	if not is_instance_valid(wielder) or ContinuousEffectManager.get_modified_cost(wielder) < 1:
@@ -120,11 +122,13 @@ func try_execute_wielder_attack_gold_or_draw_pattern(ability_text: String, card:
 	if not main or not main._gold_manager:
 		return true
 	var choose_gold: bool = await SelectionManager.await_two_choice(
-		main, str(card.get("card_name")), "Generar un Oro", "Robar una carta")
+		main, str(card.get("card_name")), "Generar un Oro", "Robar una carta", controller_id)
 	if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
 		return true
 	if choose_gold:
-		main._gold_manager.generar_oros_virtuales(1)
+		# 2026-10-06: generar_oros_virtuales() ya es por jugador (ver
+		# arquitectura.md §33).
+		main._gold_manager.generar_oros_virtuales(1, controller_id)
 	else:
 		await ActionModule.draw(controller_id, 1, "on_attack_trigger", true)
 	return true
@@ -145,39 +149,41 @@ func try_execute_gold_for_allies_or_shuffle_cost_max_pattern(ability_text: Strin
 	var m := cost_rx.search(lower)
 	if not m:
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager or not main._card_interaction:
 		return true
 	var max_cost: int = int(m.get_string(1))
 	var choose_gold: bool = await SelectionManager.await_two_choice(
-		main, "manuel rodriguez", "Generar un Oro para Aliados", "Barajar una carta de coste %d o menos" % max_cost)
+		main, "manuel rodriguez", "Generar un Oro para Aliados", "Barajar una carta de coste %d o menos" % max_cost, controller_id)
 
 	if choose_gold:
 		if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
 			return true
 		var predicate := func(card_type: int, _card_race: String, _card_cost: int) -> bool:
 			return card_type == Constants.CardType.ALIADO
-		main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Aliados")
+		# 2026-10-06: generar_oro_virtual_restringido() ya es por jugador
+		# (ver arquitectura.md §33).
+		main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Aliados", controller_id)
 	else:
 		var filter := func(c: Node) -> bool:
 			if c.get("card_type") not in [Constants.CardType.ALIADO, Constants.CardType.ARMA, Constants.CardType.TOTEM]:
 				return false
-			var parent = c.get_parent()
-			var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-				main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-			if parent not in valid_zones:
+			# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+			if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 				return false
 			return ContinuousEffectManager.get_modified_cost(c) <= max_cost
-		var target: Node = await main._card_interaction.await_target("Elige una carta de coste %d o menos para barajar" % max_cost, filter)
-		# Sin ventana genérica acá (2026-09-09): return_to_deck() ya consulta
+		var target: Node = await main._card_interaction.await_target("Elige una carta de coste %d o menos para barajar" % max_cost, filter, true, controller_id)
+		# Sin ventana genérica aquí (2026-09-09): return_to_deck() ya consulta
 		# Prevención adentro por su cuenta.
 		if target and is_instance_valid(target):
 			var target_owner: int = target.controller_id if target.get("controller_id") != null else 0
 			if await ActionModule.return_to_deck(target, target_owner, true, card):
 				CardManager.shuffle_deck(target_owner)
+				AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+					"callable": Callable(AnimationQueue, "animate_shuffle").bind(target_owner),
+					"description": "Barajar mazo (manuel rodriguez)"
+				})
 	return true
 
 
@@ -195,14 +201,12 @@ func try_execute_convert_two_top_castillo_to_allies_pattern(ability_text: String
 	var lower := ability_text.to_lower()
 	if not ("convierte dos cartas del tope de un castillo en aliados de fuerza 2 sin habilidad" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main:
 		return true
 	var zone_owner: int = await _main._targeted_executor._choose_search_zone_owner(controller_id, Constants.Zone.CASTILLO)
-	# Sin ventana genérica acá (2026-09-09): silence_card() (dentro del loop
+	# Sin ventana genérica aquí (2026-09-09): silence_card() (dentro del loop
 	# de abajo) ya consulta Prevención adentro por su cuenta.
 	var deck: Array = CardManager.get_deck(zone_owner)
 	var converted := 0
@@ -258,8 +262,6 @@ func try_execute_convert_gold_or_opponent_cost_max_draw_pattern(ability_text: St
 	var m := cost_rx.search(lower)
 	if not m:
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._card_interaction:
@@ -276,7 +278,7 @@ func try_execute_convert_gold_or_opponent_cost_max_draw_pattern(ability_text: St
 		if c.get("owner_id") != opponent_id:
 			return false
 		return ContinuousEffectManager.get_modified_cost(c) <= max_cost
-	var target: Node = await main._card_interaction.await_target("Elige un Oro (cualquiera) o una carta oponente de coste %d o menos para convertir" % max_cost, filter)
+	var target: Node = await main._card_interaction.await_target("Elige un Oro (cualquiera) o una carta oponente de coste %d o menos para convertir" % max_cost, filter, true, controller_id)
 	# Ventana única para todo el efecto (convertir + robar) — silence_card()
 	# abajo consulta Prevención por su cuenta para el objetivo puntual, pero
 	# el Robo no está cubierto por nada más.
@@ -301,8 +303,6 @@ func try_execute_gold_for_allies_or_weapons_pattern(ability_text: String, contro
 	var lower := ability_text.to_lower()
 	if not ("genera un oro por el turno para jugar aliados o armas" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if await TriggerSystem.open_response_window(card, str(card.get("card_name")) if card else "almirante akari", controller_id):
 		return true
 
@@ -311,7 +311,9 @@ func try_execute_gold_for_allies_or_weapons_pattern(ability_text: String, contro
 		return true
 	var predicate := func(card_type: int, _card_race: String, _card_cost: int) -> bool:
 		return card_type == Constants.CardType.ALIADO or card_type == Constants.CardType.ARMA
-	main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Aliados o Armas")
+	# 2026-10-06: generar_oro_virtual_restringido() ya es por jugador (ver
+	# arquitectura.md §33).
+	main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Aliados o Armas", controller_id)
 	return true
 
 
@@ -326,8 +328,6 @@ func try_execute_espiritu_maquina_conditional_gold_pattern(ability_text: String,
 	var lower := ability_text.to_lower()
 	if not ("si no es tu primer turno" in lower and "genera un oro para jugar armas o tótem" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if GameManager.current_turn <= 1:
 		return true
 	if await TriggerSystem.open_response_window(card, str(card.get("card_name")) if card else "Espíritu de la Máquina", controller_id):
@@ -340,7 +340,9 @@ func try_execute_espiritu_maquina_conditional_gold_pattern(ability_text: String,
 		if card_type == Constants.CardType.ARMA or card_type == Constants.CardType.TOTEM:
 			return card_cost >= 2
 		return false
-	main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Armas o Tótem de coste 2 o más")
+	# 2026-10-06: generar_oro_virtual_restringido() ya es por jugador (ver
+	# arquitectura.md §33) — esta habilidad se desbloquea.
+	main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Armas o Tótem de coste 2 o más", controller_id)
 	return true
 
 

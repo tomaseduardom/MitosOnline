@@ -200,19 +200,31 @@ func _process_deck_data(player_id: int, deck_data: Dictionary) -> void:
 	var main_deck: Dictionary = datos_json.get("main", {})
 	var side_deck: Dictionary = datos_json.get("side", {})
 
-	# Alternativa: {"entries": [{"myl_id"/"card_id"/"id", "quantity"}, ...]}
+	# Alternativa: {"entries": [{"card_detail": {"myl_id": ...}, "quantity"}, ...]}
 	# (2026-08-24, mazos preset descargados de /decks/public/{id}/ — ver
 	# DeckSelector._get_preset_decks()). Mismo fallback que ya tenía
-	# _process_external_deck_data() para /external/my-decks/, pero acá
+	# _process_external_deck_data() para /external/my-decks/, pero aquí
 	# faltaba: los mazos locales solo miraban datos_json.main y fallaban con
 	# 'El mazo no tiene cartas en el main deck' aunque el archivo sí tuviera
 	# cartas, solo que en forma de entries en vez de datos_json.main.
+	#
+	# 2026-09-23, bug real confirmado con curl contra la API real: "id" en
+	# cada entry es la fila de ShadowForge (DeckEntry.id, ej. 25652), NO la
+	# carta — el myl_id real está anidado en entry.card_detail.myl_id (ej.
+	# "20584"). Usarlo directamente hacía que ningún mazo de ShadowForge
+	# cargara nunca sus propias cartas (caía siempre al mazo aleatorio de
+	# respaldo, en silencio).
 	if main_deck.is_empty() and deck_data.get("entries") is Array:
 		var main_dict := {}
 		for entry in deck_data.entries:
 			if not entry is Dictionary:
 				continue
-			var cid = str(entry.get("myl_id", entry.get("card_id", entry.get("id", ""))))
+			var card_detail = entry.get("card_detail", {})
+			var cid: String
+			if card_detail is Dictionary and card_detail.get("myl_id") != null:
+				cid = str(card_detail.get("myl_id", ""))
+			else:
+				cid = str(entry.get("myl_id", entry.get("card_id", entry.get("id", ""))))
 			if cid.is_empty():
 				continue
 			var qty = int(entry.get("quantity", entry.get("qty", 1)))
@@ -278,13 +290,19 @@ func _process_external_deck_data(player_id: int, deck_data: Dictionary) -> void:
 	if not main_deck is Dictionary:
 		main_deck = {}
 
-	# Forma real confirmada de /external/my-decks/: {"entries": [{"myl_id","card_id","quantity",...}], "sideboard": [...]}
+	# Forma real confirmada con curl contra /decks/my/{id}/ y /decks/public/{id}/:
+	# {"entries": [{"id": <DeckEntry.id, NO es la carta>, "card_detail": {"myl_id": "..."}, "quantity"}]}
 	if main_deck.is_empty() and deck_data.get("entries") is Array:
 		var main_dict := {}
 		for entry in deck_data.entries:
 			if not entry is Dictionary:
 				continue
-			var cid = str(entry.get("myl_id", entry.get("card_id", entry.get("id", ""))))
+			var card_detail = entry.get("card_detail", {})
+			var cid: String
+			if card_detail is Dictionary and card_detail.get("myl_id") != null:
+				cid = str(card_detail.get("myl_id", ""))
+			else:
+				cid = str(entry.get("myl_id", entry.get("card_id", entry.get("id", ""))))
 			if cid.is_empty():
 				continue
 			var qty = int(entry.get("quantity", entry.get("qty", 1)))

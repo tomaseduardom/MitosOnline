@@ -79,6 +79,18 @@ func setup_public_zone_viewers() -> void:
 	CardManager.card_exiled.connect(func(_pid, _c): refresh_castillo_top_reveal())
 	if not PriorityManager.priority_changed.is_connected(_on_priority_changed_refresh_castillo_top):
 		PriorityManager.priority_changed.connect(_on_priority_changed_refresh_castillo_top)
+	# 2026-09-14, a pedido del usuario (La Ouija): CardManager.take_damage()
+	# (alias mill_cards(), usado por daño de combate normal Y por 'Botar N
+	# cartas') saca del TOPE real (pop_front()) pero solo emitía
+	# deck_count_changed — nadie escuchaba esa señal para refrescar el
+	# revelado del tope, solo UIManager.update_castillo_count() (el número).
+	# Conectar aquí cubre de una ese caso Y cualquier otro sitio que ya siga
+	# la convención de CardManager (_emit_deck_changed()/take_damage()) sin
+	# tener que parchear cada uno a mano (a diferencia de ActionSearch.gd/
+	# ActionModule.shuffle_deck(), que tocan el mazo SIN pasar por esa señal
+	# — esos se arreglaron aparte, llamando _update_castillo_counts() directo).
+	if not CardManager.deck_count_changed.is_connected(_on_deck_count_changed_refresh_castillo_top):
+		CardManager.deck_count_changed.connect(_on_deck_count_changed_refresh_castillo_top)
 
 
 func _show_zone_popup(title: String, player_id: int, zone_type: String) -> void:
@@ -397,6 +409,16 @@ func _on_exhumar_card_clicked(card_data: Dictionary, popup_canvas: CanvasLayer) 
 	desde la mano, no el ActionPipeline/ExhumarSystem huérfanos."""
 	if not _main._gold_manager:
 		return
+	# 2026-09-25, bug real reportado por el usuario ("con lobo sagrado no me
+	# permite jugar armas del cementerio"): si hay una selección de objetivo
+	# real esperando esta misma carta (p.ej. Lobo Sagrado eligiendo un Arma
+	# del Cementerio), resolverla ahí en vez de intentar Exhumar — el
+	# jugador clickea el visor de Cementerio de siempre, no un popup nuevo
+	# que no conoce. Ver CardInteractionModule.try_resolve_cemetery_click().
+	if _main._card_interaction and _main._card_interaction.try_resolve_cemetery_click(card_data):
+		if popup_canvas and is_instance_valid(popup_canvas):
+			popup_canvas.queue_free()
+		return
 	var cost: int = PaymentManager.get_exhumar_cost(card_data)
 	var card_name: String = card_data.get("nombre", "???")
 	if _main._gold_manager.get_oro_disponible() < cost:
@@ -412,7 +434,7 @@ func _on_exile_card_clicked(card_data: Dictionary, popup_canvas: CanvasLayer) ->
 	popup (2026-09-04) — cierra el popup y la juega vía GoldManager.
 	play_card_from_exile() (paga el coste real, no un pago especial como
 	Exhumar). GoldManager.play_card_from_exile() ya valida fase/prioridad/
-	Oro disponible y avisa por _update_debug() si algo falla, así que acá
+	Oro disponible y avisa por _update_debug() si algo falla, así que aquí
 	no hace falta duplicar esos chequeos."""
 	if not _main._gold_manager:
 		return
@@ -420,6 +442,454 @@ func _on_exile_card_clicked(card_data: Dictionary, popup_canvas: CanvasLayer) ->
 		popup_canvas.queue_free()
 	var discount: int = PaymentManager.get_exile_play_discount(card_data)
 	await _main._gold_manager.play_card_from_exile(card_data, discount)
+
+
+func open_cemetery_target_picker(prompt: String, filter: Callable, max_count: int = 1, zone_type: String = "cemetery", lock_to_one_side: bool = false, show_select_all: bool = false, chooser_id: int = 0) -> Array:
+	"""Popup de selección de objetivo mostrando AMBOS Cementerios (o
+	Destierros, o ambas zonas combinadas) lado a lado, con click directo
+	sobre las cartas reales — reemplaza el patrón viejo de 'modal
+	preguntando primero de cuál Cementerio, después otro modal con la
+	lista de cartas' (2026-09-13, a pedido del usuario: Espada de
+	O'Higgins, Hanta el Samurai — 'poder ver los cementerios por mi cuenta
+	y hacer objetivos, para mejor visibilidad y control del efecto').
+	Reutiliza CardInteractionModule.await_multi_target() para la mecánica
+	de click + brillo celeste — las cartas aquí son Nodos TEMPORALES que
+	solo existen mientras el popup está abierto (a diferencia de player_
+	field/mano), su card_data es la fuente de verdad real; 'filter' recibe
+	estos Nodos temporales, no los permanentes del campo.
+	'zone_type': "cemetery", "exile", o "cemetery_and_exile" (2026-09-13,
+	Abrazo de Maipú: 'Baraja cualquier cantidad de cartas de tu Cementerio
+	Y Destierro' — ambas zonas en el MISMO pool, no una elección aparte).
+	'filter' decide qué cartas son objetivo válido (recibe el Card Node
+	temporal — usar card.get('card_type')/card.get('card_data'), etc.).
+	'show_select_all' (2026-09-13, mismo pedido: 'que no tenga que elegir
+	una a una si tuviera 20 cartas') agrega un botón que llama a
+	CardInteractionModule.request_select_all() — toma TODO lo que quede
+	elegible de una sola vez. Ver la advertencia sobre 'lock_to_one_side +
+	select_all antes del primer click' en el docstring de await_multi_
+	target() antes de combinar ambas opciones en un caso nuevo.
+	Devuelve un Array de {data: Dictionary, owner_id: int, zone_type:
+	"cemetery"/"exile"} en el orden en que se clickearon o, con select-all,
+	en el orden en que estaban listadas (vacío si no había candidatos o se
+	canceló sin elegir ninguna)."""
+	var combine_zones: bool = zone_type == "cemetery_and_exile"
+	var own_data: Array = []
+	var opp_data: Array = []
+	if combine_zones:
+		for d in CardManager.get_cemetery(0):
+			own_data.append({"data": d, "zone_type": "cemetery"})
+		for d in CardManager.get_exile(0):
+			own_data.append({"data": d, "zone_type": "exile"})
+		for d in CardManager.get_cemetery(1):
+			opp_data.append({"data": d, "zone_type": "cemetery"})
+		for d in CardManager.get_exile(1):
+			opp_data.append({"data": d, "zone_type": "exile"})
+	else:
+		var raw_own: Array = CardManager.get_cemetery(0) if zone_type == "cemetery" else CardManager.get_exile(0)
+		var raw_opp: Array = CardManager.get_cemetery(1) if zone_type == "cemetery" else CardManager.get_exile(1)
+		for d in raw_own:
+			own_data.append({"data": d, "zone_type": zone_type})
+		for d in raw_opp:
+			opp_data.append({"data": d, "zone_type": zone_type})
+	if own_data.is_empty() and opp_data.is_empty():
+		return []
+
+	# Fase 3 del plan de paridad remota (docs/plans/2026-09-20-remote-
+	# multiplayer-parity.md), mismo criterio que SelectionManager._delegate_
+	# selection_to_remote(): si quien elige es el jugador 1 y hay un Remoto
+	# real conectado, no se abre esta UI local (que igual asume SIEMPRE
+	# "jugador 0 = propio, jugador 1 = rival", sin mirar chooser_id) — se
+	# delega por red.
+	if chooser_id == 1 and NetworkClient.room_code != "" and NetworkClient.is_host:
+		return await _delegate_cemetery_picker_to_remote(prompt, filter, max_count, own_data, opp_data)
+
+	if not _main._card_interaction:
+		return []
+
+	var existing = _main.get_node_or_null("ZoneViewerPopup")
+	if existing:
+		existing.queue_free()
+
+	var vp = get_viewport().get_visible_rect().size
+	var popup_canvas = CanvasLayer.new()
+	popup_canvas.name = "ZoneViewerPopup"
+	popup_canvas.layer = 55
+	_main.add_child(popup_canvas)
+
+	var bg = ColorRect.new()
+	bg.size = vp
+	bg.color = Color(0.01, 0.01, 0.02, 0.78)
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
+	bg.gui_input.connect(func(ev):
+		if ev is InputEventMouseButton and ev.pressed and _main._card_interaction.is_selecting_target:
+			_main._card_interaction.cancel_target_selection()
+	)
+	popup_canvas.add_child(bg)
+
+	var panel = Panel.new()
+	panel.size = Vector2(minf(vp.x * 0.92, 1000.0), minf(vp.y * 0.86, 620.0))
+	panel.position = (vp - panel.size) / 2.0
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var pstyle = StyleBoxFlat.new()
+	pstyle.bg_color = Color(0.04, 0.03, 0.06, 0.98)
+	pstyle.border_color = Color(0.85, 0.72, 0.28, 0.95)
+	pstyle.set_border_width_all(2)
+	pstyle.set_corner_radius_all(18)
+	pstyle.shadow_color = Color(0, 0, 0, 0.90)
+	pstyle.shadow_size = 30
+	panel.add_theme_stylebox_override("panel", pstyle)
+	popup_canvas.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.set_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 18)
+	vbox.add_theme_constant_override("separation", 10)
+	panel.add_child(vbox)
+
+	var prompt_lbl = Label.new()
+	prompt_lbl.text = prompt
+	prompt_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prompt_lbl.add_theme_font_override("font", FONT_TITLE)
+	prompt_lbl.add_theme_font_size_override("font_size", 16)
+	prompt_lbl.add_theme_color_override("font_color", Color(1.0, 0.90, 0.60, 1.0))
+	vbox.add_child(prompt_lbl)
+
+	var columns = HBoxContainer.new()
+	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	columns.add_theme_constant_override("separation", 20)
+	vbox.add_child(columns)
+
+	var zone_word: String
+	match zone_type:
+		"cemetery": zone_word = "Cementerio"
+		"exile": zone_word = "Destierro"
+		_: zone_word = "Cementerio + Destierro"
+	var sides: Array = [
+		{"pid": 0, "label": "Tu %s" % zone_word, "data": own_data},
+		{"pid": 1, "label": "%s Rival" % zone_word, "data": opp_data},
+	]
+	var candidates: Array = []
+	for side in sides:
+		var col = VBoxContainer.new()
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		col.add_theme_constant_override("separation", 8)
+		columns.add_child(col)
+		var lbl = Label.new()
+		lbl.text = "%s (%d)" % [side.label, side.data.size()]
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.add_theme_font_override("font", FONT_TITLE)
+		lbl.add_theme_font_size_override("font_size", 13)
+		lbl.add_theme_color_override("font_color", Color(0.85, 0.80, 0.75, 1.0))
+		col.add_child(lbl)
+		if side.data.is_empty():
+			var empty_lbl = Label.new()
+			empty_lbl.text = "(vacío)"
+			empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			empty_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55, 1.0))
+			col.add_child(empty_lbl)
+			continue
+		var scroll = ScrollContainer.new()
+		scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		col.add_child(scroll)
+		var grid = GridContainer.new()
+		grid.columns = 3
+		grid.add_theme_constant_override("h_separation", 10)
+		grid.add_theme_constant_override("v_separation", 10)
+		scroll.add_child(grid)
+		for entry in side.data:
+			var node: Node = _create_selectable_popup_card(entry.data, side.pid, entry.zone_type, grid)
+			node.set_meta("source_zone_type", entry.zone_type)
+			if filter.call(node):
+				candidates.append(node)
+
+	if show_select_all:
+		var select_all_btn = Button.new()
+		select_all_btn.text = "Seleccionar todo"
+		select_all_btn.focus_mode = Control.FOCUS_NONE
+		select_all_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		select_all_btn.pressed.connect(func(): _main._card_interaction.request_select_all())
+		vbox.add_child(select_all_btn)
+
+	var lock_key: Callable = (func(c: Node) -> Variant: return c.owner_id) if lock_to_one_side else Callable()
+	var chosen: Array = await _main._card_interaction.await_multi_target(prompt, candidates, max_count, lock_key)
+
+	if is_instance_valid(popup_canvas):
+		popup_canvas.queue_free()
+
+	var result: Array = []
+	for node in chosen:
+		if is_instance_valid(node):
+			result.append({"data": node.card_data, "owner_id": node.owner_id, "zone_type": node.get_meta("source_zone_type", "cemetery")})
+	return result
+
+
+func _delegate_cemetery_picker_to_remote(prompt: String, filter: Callable, max_count: int, own_data: Array, opp_data: Array) -> Array:
+	"""Contraparte en red de open_cemetery_target_picker() — ver el
+	comentario ahí. El filtro espera un Node (lee .owner_id/.card_type/
+	etc.), no un Dictionary, así que SÍ hace falta construir los Nodos
+	temporales para evaluarlo correctamente — pero nunca se agregan al
+	árbol real ni se muestran: se descartan apenas se junta la lista de
+	candidatos que de verdad pasan el filtro. 'own_data'/'opp_data' ya
+	vienen con pid 0/1 fijo (mismo criterio que el resto de la función);
+	acá 'own' para el Remoto es pid 1, así que se etiqueta así en el
+	payload que se manda."""
+	var temp_container := Control.new()
+	var sides := [{"pid": 0, "data": own_data}, {"pid": 1, "data": opp_data}]
+	var candidates_payload: Array = []  # {data, owner_id, zone_type} — mismo shape que el resultado final
+	for side in sides:
+		for entry in side.data:
+			var node: Node = _create_selectable_popup_card(entry.data, side.pid, entry.zone_type, temp_container)
+			if filter.call(node):
+				candidates_payload.append({"data": entry.data, "owner_id": side.pid, "zone_type": entry.zone_type})
+	temp_container.queue_free()
+
+	if candidates_payload.is_empty():
+		return []
+
+	var display_payload: Array = []
+	for c in candidates_payload:
+		var d: Dictionary = c.data
+		display_payload.append({
+			"nombre": str(d.get("nombre", d.get("name", "?"))),
+			"coste": d.get("coste", d.get("cost", "?")),
+			"zone_type": c.zone_type,
+			"side": "own" if c.owner_id == 1 else "opponent",
+		})
+
+	NetworkClient.send_message({
+		"op": "prompt", "kind": "select_cemetery_cards",
+		"title": prompt,
+		"candidates": display_payload,
+		"max_selections": max_count,
+	})
+	var intent: Dictionary = await NetworkClient.await_intent(["select_cemetery_cards_choice"])
+	var result: Array = []
+	for pos in intent.get("indices", []):
+		var p: int = int(pos)
+		if p >= 0 and p < candidates_payload.size():
+			result.append(candidates_payload[p])
+	return result
+
+
+func _create_selectable_popup_card(card_data: Dictionary, player_id: int, zone_type: String, container: Control) -> Node:
+	"""Igual que _create_popup_card() pero interactiva (can_interact=true,
+	conectada vía _main._connect_card_signals() como cualquier carta del
+	campo) — usada por open_cemetery_target_picker() para que el mecanismo
+	genérico de selección de objetivo (is_selecting_target/await_target())
+	funcione igual sobre estos Nodos temporales."""
+	var wrapper = Control.new()
+	wrapper.custom_minimum_size = Vector2(110.0, 154.0)
+	wrapper.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	wrapper.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+
+	var card = CardScene.instantiate()
+	card.load_from_data(card_data)
+	card.set_zone(Constants.Zone.CEMENTERIO if zone_type == "cemetery" else Constants.Zone.DESTIERRO)
+	card.owner_id = player_id
+	card.controller_id = player_id
+	card.can_interact = true
+	card.drag_enabled = false
+	card.custom_minimum_size = Vector2(150.0, 210.0)
+	card.size = Vector2(150.0, 210.0)
+	card.scale = Vector2(0.733, 0.733)
+	card.base_scale = Vector2(0.733, 0.733)
+	card.position = Vector2.ZERO
+	card.pivot_offset = Vector2.ZERO
+	_main._connect_card_signals(card)
+
+	wrapper.add_child(card)
+	container.add_child(wrapper)
+	return card
+
+
+func open_reveal_picker(prompt: String, data_list: Array, owner_id: int, filter: Callable = Callable(), max_count: int = 1, cancellable: bool = true, chooser_id: int = -1) -> Array:
+	"""Popup de una sola fila mostrando cartas YA REVELADAS (miradas del
+	tope del Castillo con 'Mira'/'Muestra' — Dictionaries sueltos, sin
+	Nodo ni zona real hasta este popup) con click directo — reemplaza el
+	patrón viejo de SelectionManager.open_selection()/await_single_pick()/
+	await_multi_pick() sobre una lista de card_data (2026-09-14,
+	continuación del barrido de pickers modales → click directo, ver
+	docs/plans/2026-09-09-pila-respuesta-universal-design.md). Mismo
+	mecanismo que open_cemetery_target_picker() pero de un solo pool (no
+	hay 'lado rival' para cartas reveladas del propio Castillo).
+	'filter' (opcional): Callable(Node) -> bool, recibe el Nodo temporal —
+	mismo criterio que open_cemetery_target_picker().
+	'max_count'==1 usa await_target() (single pick); >1 o -1 usa
+	await_multi_target() (mismo criterio 'hasta N'/'exacto N' que ya
+	documenta esa función — pasar cancellable=false para forzar exacto
+	max_count, igual que el viejo min=max=N/can_cancel=false).
+	Devuelve un Array de card_data (Dictionary) elegidos, en orden de
+	click (vacío si no había candidatos o se canceló sin elegir ninguno)."""
+	if data_list.is_empty():
+		return []
+
+	# Fase 3 del plan de paridad remota, mismo criterio que
+	# open_cemetery_target_picker()/SelectionManager._delegate_selection_
+	# to_remote() — default -1 usa 'owner_id' (todo llamador existente ya
+	# pasa su propio controller_id ahí, así que ninguno necesita cambiar).
+	var effective_chooser: int = chooser_id if chooser_id >= 0 else owner_id
+	if effective_chooser == 1 and NetworkClient.room_code != "" and NetworkClient.is_host:
+		return await _delegate_reveal_picker_to_remote(prompt, data_list, filter, max_count)
+
+	if not _main._card_interaction:
+		return []
+
+	var existing = _main.get_node_or_null("RevealPickerPopup")
+	if existing:
+		existing.queue_free()
+
+	var vp = get_viewport().get_visible_rect().size
+	var popup_canvas = CanvasLayer.new()
+	popup_canvas.name = "RevealPickerPopup"
+	popup_canvas.layer = 55
+	_main.add_child(popup_canvas)
+
+	var bg = ColorRect.new()
+	bg.size = vp
+	bg.color = Color(0.01, 0.01, 0.02, 0.78)
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
+	bg.gui_input.connect(func(ev):
+		if ev is InputEventMouseButton and ev.pressed and _main._card_interaction.is_selecting_target:
+			_main._card_interaction.cancel_target_selection()
+	)
+	popup_canvas.add_child(bg)
+
+	var panel = Panel.new()
+	panel.size = Vector2(minf(vp.x * 0.92, 960.0), 300.0)
+	panel.position = (vp - panel.size) / 2.0
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var pstyle = StyleBoxFlat.new()
+	pstyle.bg_color = Color(0.04, 0.03, 0.06, 0.98)
+	pstyle.border_color = Color(0.85, 0.72, 0.28, 0.95)
+	pstyle.set_border_width_all(2)
+	pstyle.set_corner_radius_all(18)
+	pstyle.shadow_color = Color(0, 0, 0, 0.90)
+	pstyle.shadow_size = 30
+	panel.add_theme_stylebox_override("panel", pstyle)
+	popup_canvas.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.set_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 18)
+	vbox.add_theme_constant_override("separation", 10)
+	panel.add_child(vbox)
+
+	var prompt_lbl = Label.new()
+	prompt_lbl.text = prompt
+	prompt_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prompt_lbl.add_theme_font_override("font", FONT_TITLE)
+	prompt_lbl.add_theme_font_size_override("font_size", 15)
+	prompt_lbl.add_theme_color_override("font_color", Color(1.0, 0.90, 0.60, 1.0))
+	vbox.add_child(prompt_lbl)
+
+	var scroll = ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vbox.add_child(scroll)
+
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 12)
+	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(hbox)
+
+	var candidates: Array = []
+	for data in data_list:
+		var card = CardScene.instantiate()
+		card.load_from_data(data)
+		card.set_zone(Constants.Zone.CASTILLO)
+		card.owner_id = owner_id
+		card.controller_id = owner_id
+		card.can_interact = true
+		card.drag_enabled = false
+		card.custom_minimum_size = Vector2(150.0, 210.0)
+		card.size = Vector2(150.0, 210.0)
+		card.pivot_offset = Vector2.ZERO
+		_main._connect_card_signals(card)
+		var wrapper = Control.new()
+		wrapper.custom_minimum_size = Vector2(150.0, 210.0)
+		wrapper.add_child(card)
+		hbox.add_child(wrapper)
+		var is_eligible: bool = not filter.is_valid() or filter.call(card)
+		if is_eligible:
+			candidates.append(card)
+		else:
+			# 2026-09-19, a pedido del usuario ("restringir las cartas que no
+			# puedo jugar, como Oros o cartas de coste 3 o más" — Tangata
+			# Manu): el filtro YA excluía estas cartas de poder elegirse
+			# (candidates más abajo), pero visualmente quedaban idénticas a
+			# las elegibles — el jugador solo se enteraba de que una era
+			# inválida al clickearla y leer "Objetivo no válido". Mismo
+			# tratamiento que SelectionManager._create_selection_card() ya
+			# usaba para 'cartas no seleccionables' antes del barrido de
+			# pickers modales → click directo (2026-09-14, §10.14) — se
+			# perdió al migrar a este popup nuevo. can_interact=false evita
+			# también el hover/hand-cursor en cartas que de todos modos
+			# nunca se pueden elegir.
+			card.can_interact = false
+			card.modulate = Color(0.5, 0.5, 0.5, 0.7)
+
+	var chosen: Array = []
+	if max_count == 1:
+		var node_filter := func(c: Node) -> bool: return c in candidates
+		var picked_node: Node = await _main._card_interaction.await_target(prompt, node_filter, cancellable)
+		if picked_node and is_instance_valid(picked_node):
+			chosen = [picked_node]
+	else:
+		chosen = await _main._card_interaction.await_multi_target(prompt, candidates, max_count, Callable(), Callable(), cancellable)
+
+	if is_instance_valid(popup_canvas):
+		popup_canvas.queue_free()
+
+	var result: Array = []
+	for node in chosen:
+		if is_instance_valid(node):
+			result.append(node.card_data)
+	return result
+
+
+func _delegate_reveal_picker_to_remote(prompt: String, data_list: Array, filter: Callable, max_count: int) -> Array:
+	"""Contraparte en red de open_reveal_picker() — mismo criterio que
+	_delegate_cemetery_picker_to_remote() (hace falta un Node temporal
+	para evaluar 'filter', nunca se agrega al árbol real ni se muestra).
+	Reusa el mismo prompt/intent 'select_cemetery_cards' del lado del
+	Remoto — el payload no necesita 'zone_type'/'side' acá (un solo pool,
+	sin lado rival), RemoteMirrorController los trata como opcionales."""
+	var temp_container := Control.new()
+	var candidates_data: Array = []
+	for data in data_list:
+		var card = CardScene.instantiate()
+		card.load_from_data(data)
+		card.set_zone(Constants.Zone.CASTILLO)
+		temp_container.add_child(card)
+		if not filter.is_valid() or filter.call(card):
+			candidates_data.append(data)
+	temp_container.queue_free()
+
+	if candidates_data.is_empty():
+		return []
+
+	var display_payload: Array = []
+	for d in candidates_data:
+		display_payload.append({
+			"nombre": str(d.get("nombre", d.get("name", "?"))),
+			"coste": d.get("coste", d.get("cost", "?")),
+		})
+
+	NetworkClient.send_message({
+		"op": "prompt", "kind": "select_cemetery_cards",
+		"title": prompt,
+		"candidates": display_payload,
+		"max_selections": max_count,
+	})
+	var intent: Dictionary = await NetworkClient.await_intent(["select_cemetery_cards_choice"])
+	var result2: Array = []
+	for pos in intent.get("indices", []):
+		var p: int = int(pos)
+		if p >= 0 and p < candidates_data.size():
+			result2.append(candidates_data[p])
+	return result2
 
 
 func _on_zone_cemetery_changed(player_id: int, _count: int) -> void:
@@ -465,6 +935,10 @@ func _refresh_zone_top_card(panel: Panel, cards_data: Array) -> void:
 
 
 func _on_priority_changed_refresh_castillo_top(_player_id: int) -> void:
+	refresh_castillo_top_reveal()
+
+
+func _on_deck_count_changed_refresh_castillo_top(_player_id: int, _new_count: int) -> void:
 	refresh_castillo_top_reveal()
 
 

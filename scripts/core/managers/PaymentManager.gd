@@ -93,8 +93,8 @@ var oros_mas_modifiers: Array = []
 ## Barajar una carta de tu mano para nombrar una carta. Esa carta cuesta un
 ## Oro adicional el próximo turno"). Registro APARTE de oros_mas_modifiers a
 ## propósito: ese Array se limpia entero en CADA turn_started (pensado para
-## 'por el turno actual'), pero acá el efecto todavía NO debe estar activo
-## en el momento de registrarse — recién arranca cuando empiece el turno
+## 'por el turno actual'), pero aquí el efecto todavía NO debe estar activo
+## en el momento de registrarse — arranca solo cuando empiece el turno
 ## siguiente, y dura exactamente ese turno. {nombre_lower: número_de_turno}.
 var _named_surcharge_next_turn: Dictionary = {}
 
@@ -128,11 +128,11 @@ func _on_turn_started_clear_modifiers(_player_id: int, _turn_num: int) -> void:
 	oros_mas_modifiers.clear()
 	oro_gastado_este_turno = 0
 	# Los recargos diferidos por nombre (Tesoro de los Césares) no se
-	# limpian acá — _get_named_surcharge_next_turn() se auto-expira sola
+	# limpian aquí — _get_named_surcharge_next_turn() se auto-expira sola
 	# comparando contra GameManager.current_turn. Pero si uno de esos
 	# recargos recién arranca o recién expira justo este turno, la insignia
 	# de coste de la carta en mano (si la tienes) no se enteraría hasta el
-	# próximo refresh puntual — se refresca toda la mano acá para no
+	# próximo refresh puntual — se refresca toda la mano aquí para no
 	# depender de que algo más la dispare.
 	refresh_all_hand_cost_badges()
 
@@ -168,22 +168,23 @@ func puede_jugar_carta(card: Node, player_id: int = 0) -> bool:
 	# Oro físico disponible en reserva ahora mismo
 	var oro_reserva: int = GameState.get_oro_reserva(player_id)
 
-	# Oro Virtual (genérico + restringido) — solo existe para el jugador 0
-	# hoy (GoldManager es su sistema, el oponente no tiene uno propio
-	# todavía). 2026-08-28, corrige bug real: acá se leía
-	# 'main.get("oros_virtuales")', pero esa propiedad vive en
-	# main._gold_manager.oros_virtuales, no en Main — siempre daba null/0,
-	# así que el Oro Virtual de Lobo Sagrado NUNCA contaba para decidir si
-	# se podía siquiera INTENTAR jugar una carta, aunque GoldManager.pagar_
-	# coste() sí lo hubiera cobrado bien después.
+	# Oro Virtual (genérico + restringido) — 2026-10-06: GoldManager.
+	# oros_virtuales/restricted_gold_pools ya son por jugador (ver
+	# arquitectura.md §33), así que esto deja de limitarse al jugador 0.
+	# 2026-08-28, corrige bug real: aquí se leía 'main.get("oros_virtuales")',
+	# pero esa propiedad vive en main._gold_manager.oros_virtuales, no en
+	# Main — siempre daba null/0, así que el Oro Virtual de Lobo Sagrado
+	# NUNCA contaba para decidir si se podía siquiera INTENTAR jugar una
+	# carta, aunque GoldManager.pagar_coste() sí lo hubiera cobrado bien
+	# después.
 	var oros_virtuales: int = 0
 	var oro_restringido: int = 0
-	if player_id == 0 and main._gold_manager:
-		oros_virtuales = main._gold_manager.oros_virtuales
+	if main._gold_manager:
+		oros_virtuales = main._gold_manager.oros_virtuales.get(player_id, 0)
 		var card_type: int = card.get("card_type") if card.get("card_type") != null else -1
 		var card_race: String = str(card.get("card_raza")) if card.get("card_raza") != null else ""
 		var card_cost: int = card.get("card_cost") if card.get("card_cost") != null else -1
-		oro_restringido = main._gold_manager._restricted_gold_available_for(card_type, card_race, card_cost)
+		oro_restringido = main._gold_manager._restricted_gold_available_for(card_type, card_race, card_cost, player_id)
 
 	var disponible = oro_reserva + oros_virtuales + oro_restringido
 	return coste <= disponible
@@ -272,7 +273,7 @@ func _self_scaling_oro_discount(card: Node) -> int:
 func _conditional_boolean_discount(card: Node) -> int:
 	"""Descuentos intrínsecos de 1 Oro condicionados a un booleano del
 	tablero (2026-09-06) — a diferencia de _self_scaling_oro_discount()
-	(escala con una cantidad), acá el descuento es 0 o 1 según se cumpla o
+	(escala con una cantidad), aquí el descuento es 0 o 1 según se cumpla o
 	no una condición puntual. Lista chica y explícita, mismo criterio que
 	el resto de detectores por texto de este archivo. 'jugaste este turno'
 	(Cetro Demoniaco) NO se evalúa — no existe todavía un registro
@@ -304,6 +305,25 @@ func _conditional_boolean_discount(card: Node) -> int:
 					return 1
 		return 0
 
+	# "Reduce su coste en un Oro si controlas Armas" (sable corto, 2026-09-20,
+	# arquitectura.md "539 cartas sin cobertura") — las Armas son hijas de su
+	# portador, no children directos del campo (mismo motivo documentado en
+	# ContinuousEffectParser.gd para el bono de Manuel Bulnes), así que se
+	# revisa 'equipped_weapons' de cada Aliado en vez de recorrer field.
+	# get_children() buscando tipo ARMA directo (eso nunca encontraría nada).
+	if "reduce su coste en un oro si controlas armas" in habilidad:
+		var fields_sc: Array = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo] \
+			if controller_id == 0 else [main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
+		for field in fields_sc:
+			if not field:
+				continue
+			for c in field.get_children():
+				if is_instance_valid(c):
+					var w = c.get("equipped_weapons")
+					if w is Array and not w.is_empty():
+						return 1
+		return 0
+
 	# "Si controlas Dragones reduce su coste en un Oro" (Azi Raoiota).
 	if "si controlas dragones reduce su coste en un oro" in habilidad:
 		var fields_b: Array = [main.player_field, main.player_linea_ataque] if controller_id == 0 \
@@ -318,7 +338,14 @@ func _conditional_boolean_discount(card: Node) -> int:
 		return 0
 
 	# "Si no controlas Aliados de coste 1 o menos, reduce su coste en un
-	# Oro" (Jabberwocky).
+	# Oro" (Jabberwocky). 2026-09-30, bug real reportado por el usuario
+	# ("Stack overflow... en PaymentManager"): usaba calcular_coste_real(c)
+	# para revisar el coste de cada Aliado — si Jabberwocky mismo ya está
+	# en el campo (o cualquier otro Aliado cuyo propio coste dependa de
+	# este mismo chequeo), esa llamada vuelve a entrar a esta función y
+	# nunca termina. Se revisa el coste BASE (card_cost, sin modificadores)
+	# en vez del efectivo — mismo criterio que los chequeos hermanos de
+	# arriba (Armas/Dragones), que tampoco llaman calcular_coste_real().
 	if "si no controlas aliados de coste 1 o menos, reduce su coste en un oro" in habilidad:
 		var fields_c: Array = [main.player_field, main.player_linea_ataque] if controller_id == 0 \
 			else [main.opponent_field, main.opponent_linea_ataque]
@@ -327,7 +354,7 @@ func _conditional_boolean_discount(card: Node) -> int:
 				continue
 			for c in field.get_children():
 				if is_instance_valid(c) and c.get("card_type") == Constants.CardType.ALIADO \
-						and int(calcular_coste_real(c)) <= 1:
+						and c.get("card_cost") != null and int(c.card_cost) <= 1:
 					return 0
 		return 1
 
@@ -536,7 +563,7 @@ func get_exile_play_discount(card_data: Dictionary) -> int:
 # (2026-08-28, "módulos gordos": _card_is_unique/_validate_unique_card/
 # _check_unique_in_play/_check_unique_in_stack/_get_cards_in_zone/
 # _get_player_cemetery/_get_player_available_gold se movieron ahí, acceso vía
-# _validation. Se quedaron acá porque son consultas sin estado — nada que ver
+# _validation. Se quedaron aquí porque son consultas sin estado — nada que ver
 # con _current_card/_payment_popup/etc., que sí están entrelazados con
 # ExhumarSystem.gd/XCostSelector.gd como blackboard compartido.)
 
@@ -546,7 +573,7 @@ func get_exile_play_discount(card_data: Dictionary) -> int:
 # "módulos gordos"): show_payment_options/_detect_payment_options/
 # _create_payment_popup/_process_payment/_pay_with_*/etc. se movieron ahí,
 # acceso vía _payment_ui. El estado (_current_card/_payment_popup/_state/
-# etc.) se quedó acá — ver nota arriba.
+# etc.) se quedó aquí — ver nota arriba.
 # =============================================================================
 
 

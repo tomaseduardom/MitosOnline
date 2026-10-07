@@ -75,7 +75,7 @@ func _init_card(card: Node) -> void:
 	card.can_interact  = false
 	card.scale         = Vector2(card_scale, card_scale)
 	card.base_scale    = Vector2(card_scale, card_scale)
-	card.pivot_offset  = Vector2(CARD_W / 2.0, CARD_H / 2.0)
+	card.pivot_offset  = Vector2(CARD_W / 2.0, 0.0)
 	card.actualizar_aspecto()
 	if card.has_method("_refresh_disabled_rotation"):
 		card._refresh_disabled_rotation()
@@ -113,7 +113,7 @@ func _arrange() -> void:
 	for i in range(n):
 		var card := _cards[i]
 		var px := start_x + float(i) * step
-		var py := 0.0  # Pegada directamente al borde superior del mapa (Y = 0)
+		var py := 8.0  # Posicionada limpiamente bajo el borde superior sin cortarse
 
 		card.z_index = i
 
@@ -152,4 +152,4 @@ func get_card_target_position(card: Node) -> Vector2:
 	var total_w := effective_width + float(n - 1) * step if n > 1 else effective_width
 	var start_x := cx - total_w / 2.0
 	var target_x := start_x + float(idx) * step
-	return Vector2(target_x, 0.0)
+	return Vector2(target_x, 8.0)

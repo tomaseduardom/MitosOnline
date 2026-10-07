@@ -4,10 +4,10 @@ extends RefCounted
 ## archivo es una de las 2 mitades de una de las 7 mitades de
 ## LookAndPlayResolver.gd). Cubre de try_execute_look_dynamic_gold_count_pattern
 ## a try_execute_look_play_or_hand_pattern (alfabético) — el corte no cae
-## justo a la mitad de los 16 patrones (6 acá, 10 en la mitad B) porque los
+## justo a la mitad de los 16 patrones (6 aquí, 10 en la mitad B) porque los
 ## try_execute_look_play_* (free/or_gold/or_hand) son, con su filtro
 ## compartido _make_look_play_free_filter(), los 3 patrones más largos de
-## todo el grupo; agruparlos acá balancea el tamaño real de ambos archivos
+## todo el grupo; agruparlos aquí balancea el tamaño real de ambos archivos
 ## en vez del simple conteo de funciones. Llamada solo desde
 ## LookRevealPatterns.gd (facade) — ver ese archivo para la lista completa y
 ## la mitad hermana (LookRevealPatternsB.gd).
@@ -27,7 +27,7 @@ func try_execute_look_dynamic_gold_count_pattern(ability_text: String, controlle
 	"""Detecta 'Mira cartas del tope de tu Castillo como Oros controles. Pon
 	dos cartas de ahí en tu mano y ordena el resto' (2026-08-29, Tesoro de
 	los Césares) — a diferencia de try_execute_look_pick_pattern() (cantidad
-	FIJA a mirar, reparto 1 mano/1 Cementerio), acá la cantidad a MIRAR es
+	FIJA a mirar, reparto 1 mano/1 Cementerio), aquí la cantidad a MIRAR es
 	dinámica (= Oros que el jugador controla, Reserva + Oro Pagado) y las no
 	elegidas vuelven TODAS al Castillo, no hay Cementerio involucrado.
 	'Ordena el resto' queda pendiente (mismo gap ya documentado en
@@ -86,17 +86,17 @@ func _resolve_look_pick_hand_only(player_id: int, top_cards: Array, pick_amount:
 	var remaining: Array = top_cards.duplicate()
 	pick_amount = mini(pick_amount, remaining.size())
 
-	SelectionManager.open_selection(remaining, SelectionManager.SelectionMode.CUSTOM, {
-		"title": "Elige %d carta(s) para tu mano (de %d miradas)" % [pick_amount, remaining.size()],
-		"max_selections": pick_amount,
-		"min_selections": pick_amount,
-		"can_cancel": false
-	})
-	var to_hand: Array = await SelectionManager.selection_completed
+	var main = _main.get_node_or_null("/root/Main")
+	# 2026-09-14, a pedido del usuario: click directo sobre las cartas
+	# reveladas (open_reveal_picker) en vez del modal de lista viejo.
+	var to_hand: Array = []
+	if main and main._zone_viewer:
+		to_hand = await main._zone_viewer.open_reveal_picker(
+			"Elige %d carta(s) para tu mano (de %d miradas)" % [pick_amount, remaining.size()],
+			remaining, player_id, Callable(), pick_amount, false)
 	for picked_data in to_hand:
 		_remove_data_from_array(remaining, picked_data)
 
-	var main = _main.get_node_or_null("/root/Main")
 	if main and main.has_method("_create_card"):
 		for picked_data in to_hand:
 			var card_node = main._create_card(picked_data)
@@ -117,17 +117,18 @@ func try_execute_look_opponent_hand_discard_then_search_ally_pattern(ability_tex
 	carta que no sea Oro. Si Descartaste un Aliado, busca en tu Castillo un
 	Aliado y ponlo en tu mano o Cementerio' (kitsune - sp, 2026-09-04) —
 	mismo picker de mano rival que _activate_chakram_look_and_lock()
-	(SearchAbilityHandler.gd), acá sin costo/candado, con Descarte real."""
+	(SearchAbilityHandler.gd), aquí sin costo/candado, con Descarte real."""
 	var lower := ability_text.to_lower()
 	if not ("mira la mano de tu oponente y descarta una carta que no sea oro" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
-
 	var main := _main.get_node_or_null("/root/Main")
-	if not main or not main._opponent_fan or not main._opponent_fan.has_method("get_cards"):
+	if not main:
 		return true
-	var opponent_hand: Array = main._opponent_fan.get_cards()
+	var opponent_id: int = 1 - controller_id
+	var opponent_hand_container = main.player_hand if opponent_id == 0 else main._opponent_fan
+	if not opponent_hand_container or not opponent_hand_container.has_method("get_cards"):
+		return true
+	var opponent_hand: Array = opponent_hand_container.get_cards()
 	var candidates: Array = []
 	for c in opponent_hand:
 		if is_instance_valid(c):
@@ -137,31 +138,25 @@ func try_execute_look_opponent_hand_discard_then_search_ally_pattern(ability_tex
 	if not candidates.any(func(c): return c.get("card_type") != Constants.CardType.ORO):
 		return true
 
-	var candidate_data: Array = candidates.map(func(c): return c.card_data)
-	var not_oro_filter := func(d: Dictionary) -> bool:
-		return d.get("tipo") != Constants.CardType.ORO
-	var picked: Dictionary = await SelectionManager.await_single_pick(
-		candidate_data, "Mira la mano rival: elige una carta que no sea Oro para Descartar", true, 1, not_oro_filter)
-	if picked.is_empty():
+	# 2026-09-14, a pedido del usuario: click directo sobre la mano rival
+	# (Nodos ya visibles en el abanico) en vez del modal de lista viejo.
+	if not main._card_interaction:
 		return true
-
-	var chosen: Node = null
-	for c in candidates:
-		if is_instance_valid(c) and c.card_data == picked:
-			chosen = c
-			break
-	if not chosen:
+	var not_oro_filter := func(c: Node) -> bool:
+		return c in candidates and c.get("card_type") != Constants.CardType.ORO
+	var chosen: Node = await main._card_interaction.await_target(
+		"Mira la mano rival: elige una carta que no sea Oro para Descartar", not_oro_filter, true, controller_id)
+	if not chosen or not is_instance_valid(chosen):
 		return true
 	if await TriggerSystem.open_response_window(card, "kitsune - sp", controller_id):
 		return true
 
 	var discarded_was_ally: bool = chosen.get("card_type") == Constants.CardType.ALIADO
-	var opponent_id: int = 1 - controller_id
 	await ActionModule.discard(opponent_id, [chosen], "etb_trigger", true)
 
 	if discarded_was_ally:
 		var to_hand: bool = await SelectionManager.await_two_choice(
-			main, "kitsune - sp", "Poner el Aliado encontrado en tu mano", "Ponerlo en tu Cementerio")
+			main, "kitsune - sp", "Poner el Aliado encontrado en tu mano", "Ponerlo en tu Cementerio", controller_id)
 		var destination: int = Constants.Zone.MANO if to_hand else Constants.Zone.CEMENTERIO
 		await ActionModule.search(controller_id, Constants.Zone.CASTILLO, {"type": Constants.CardType.ALIADO}, 1, true, false, false, card, destination)
 	return true
@@ -221,28 +216,26 @@ func _resolve_look_pick_hand_and_mill(player_id: int, top_cards: Array) -> void:
 			deck.pop_front()
 
 	var remaining: Array = top_cards.duplicate()
+	var main = _main.get_node_or_null("/root/Main")
 
-	SelectionManager.open_selection(remaining, SelectionManager.SelectionMode.CUSTOM, {
-		"title": "Elige 1 carta para tu mano (de %d miradas)" % remaining.size(),
-		"max_selections": 1,
-		"min_selections": 1,
-		"can_cancel": false
-	})
-	var to_hand: Dictionary = await SelectionManager.card_selected
+	# 2026-09-14, a pedido del usuario: click directo sobre las cartas
+	# reveladas (open_reveal_picker) en vez del modal de lista viejo.
+	var to_hand: Dictionary = {}
+	if main and main._zone_viewer:
+		var picked1: Array = await main._zone_viewer.open_reveal_picker(
+			"Elige 1 carta para tu mano (de %d miradas)" % remaining.size(), remaining, player_id, Callable(), 1, false)
+		if not picked1.is_empty():
+			to_hand = picked1[0]
 	_remove_data_from_array(remaining, to_hand)
 
 	var to_cemetery: Dictionary = {}
-	if not remaining.is_empty():
-		SelectionManager.open_selection(remaining, SelectionManager.SelectionMode.CUSTOM, {
-			"title": "Elige 1 carta para el Cementerio",
-			"max_selections": 1,
-			"min_selections": 1,
-			"can_cancel": false
-		})
-		to_cemetery = await SelectionManager.card_selected
+	if not remaining.is_empty() and main and main._zone_viewer:
+		var picked2: Array = await main._zone_viewer.open_reveal_picker(
+			"Elige 1 carta para el Cementerio", remaining, player_id, Callable(), 1, false)
+		if not picked2.is_empty():
+			to_cemetery = picked2[0]
 		_remove_data_from_array(remaining, to_cemetery)
 
-	var main = _main.get_node_or_null("/root/Main")
 	if main and not to_hand.is_empty() and main.has_method("_create_card"):
 		var card_node = main._create_card(to_hand)
 		main.player_hand.add_card(card_node)
@@ -305,22 +298,29 @@ func try_execute_look_play_free_pattern(ability_text: String, source_card: Node,
 			deck.pop_front()
 	var remaining: Array = top_cards.duplicate()
 
+	var main := _main.get_node_or_null("/root/Main")
 	var to_play: Dictionary = {}
 	if controller_id == 0:
 		# Una sola ventana (2026-08-26, a pedido del usuario — "más visual,
 		# menos texto"): antes eran dos ventanas seguidas, una de solo mirar
-		# (sin poder hacer click en nada) y recién en la segunda se podía
+		# (sin poder hacer click en nada) y solo en la segunda se podía
 		# elegir. Ahora se ven las N cartas reveladas de una — es información
 		# pública (DAR) — con las que cumplen coste ya clickeables a color, y
 		# el resto atenuada como cualquier carta no seleccionable.
-		to_play = await SelectionManager.await_single_pick(
-			top_cards, "Juega una carta de coste %d o menos gratis" % max_cost, true, 0, is_eligible)
+		# 2026-09-14, a pedido del usuario: click directo (open_reveal_picker)
+		# en vez del modal de lista viejo.
+		if main and main._zone_viewer:
+			var node_filter := func(c: Node) -> bool: return is_eligible.call(c.card_data)
+			var picked: Array = await main._zone_viewer.open_reveal_picker(
+				"Juega una carta de coste %d o menos gratis" % max_cost, top_cards, controller_id, node_filter, 1, true)
+			if not picked.is_empty():
+				to_play = picked[0]
 	else:
 		# El bot resuelve solo, sin abrir el diálogo al jugador humano
 		# (2026-09-09, bug real reportado por el usuario: SelectionManager no
 		# distingue de quién es la carta, así que este trigger del BOT
 		# terminaba dejando elegir al humano en su lugar). Solo Aliados
-		# (mismo alcance v1 que EasyBotController — un Arma acá necesitaría
+		# (mismo alcance v1 que EasyBotController — un Arma aquí necesitaría
 		# elegir portador, algo que el bot no resuelve todavía), al azar
 		# entre lo elegible.
 		var bot_eligible: Array = top_cards.filter(func(c: Dictionary) -> bool:
@@ -341,7 +341,6 @@ func try_execute_look_play_free_pattern(ability_text: String, source_card: Node,
 		deck.append(c)
 	cm.shuffle_deck(controller_id)
 
-	var main = _main.get_node_or_null("/root/Main")
 	if main and main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 
@@ -364,7 +363,7 @@ func _make_look_play_free_filter(source_card: Node, max_cost: int, exclude_self:
 	comparable en los datos de la API), sin Talismanes de solo-respuesta
 	(Red de Plata, Sacrificio Solar, etc. — misma detección que
 	GoldManager._is_response_only_talisman(), adaptada a Dictionary porque
-	acá todavía no existe el nodo Card). exclude_self controla si además se
+	aquí todavía no existe el nodo Card). exclude_self controla si además se
 	excluye una copia de la carta fuente misma entre lo revelado — por
 	defecto sí (Tangata Manu, Presente), pero Perder la Razón sí puede
 	jugarse a sí mismo (2026-08-27, a pedido del usuario)."""
@@ -375,10 +374,10 @@ func _make_look_play_free_filter(source_card: Node, max_cost: int, exclude_self:
 		# Un Arma sin ningún Aliado libre en juego para portarla no es una
 		# jugada válida (2026-08-29, a pedido del usuario) — antes se ofrecía
 		# igual como clickeable, y GoldManager.play_card_for_free() la
-		# rechazaba recién AL EJECUTAR (chequea _player_has_ally_in_play()),
+		# rechazaba solo AL EJECUTAR (chequea _player_has_ally_in_play()),
 		# momento en el que la carta ya se había sacado de 'remaining' dando
 		# por hecho que la jugada iba a funcionar — quedaba destruida
-		# (card.queue_free()) sin ir a ningún lado. Se descarta acá antes,
+		# (card.queue_free()) sin ir a ningún lado. Se descarta aquí antes,
 		# para que ni siquiera aparezca como opción.
 		if c.get("tipo", -1) == Constants.CardType.ARMA:
 			var main := _main.get_node_or_null("/root/Main")
@@ -412,7 +411,7 @@ func try_execute_look_play_or_gold_pattern(ability_text: String, source_card: No
 	"""Detecta y resuelve 'Muestra seis cartas del tope de tu Castillo.
 	Puedes jugar una carta de coste X o menos de ahí sin pagar su coste o
 	poner un Oro de ahí en tu Oro Pagado' (2026-08-27, p.ej. Perder la
-	Razón). Variante de look_play_free: la alternativa acá es tomar UN Oro
+	Razón). Variante de look_play_free: la alternativa aquí es tomar UN Oro
 	puntual de lo revelado y ponerlo directo en la Reserva, no toda la
 	pila ni a la mano. Misma ventana única: los no-Oro jugables (coste ≤X)
 	y CUALQUIER Oro revelado quedan clickeables a la vez — según qué tipo
@@ -443,11 +442,11 @@ func try_execute_look_play_or_gold_pattern(ability_text: String, source_card: No
 			return true
 		return play_filter.call(c)
 
-	# Igual que Presente (2026-08-29, a pedido del usuario): el 'Puedes' acá
+	# Igual que Presente (2026-08-29, a pedido del usuario): el 'Puedes' aquí
 	# también autoriza la alternativa de jugar gratis, no autoriza declinar
 	# el efecto entero — mientras exista AL MENOS UNA acción legal (un Oro
 	# revelado, o una carta jugable gratis), can_cancel queda en false. Pero
-	# a diferencia de Presente, acá no hay un tercer botón de respaldo tipo
+	# a diferencia de Presente, aquí no hay un tercer botón de respaldo tipo
 	# 'Poner' — si de las 6 reveladas ninguna es un Oro y ninguna es jugable
 	# gratis (p.ej. 6 Armas sin ningún portador libre), no hay NINGUNA acción
 	# legal posible. Ahí can_cancel SÍ va en true (2026-08-29, corregido a
@@ -461,11 +460,18 @@ func try_execute_look_play_or_gold_pattern(ability_text: String, source_card: No
 			any_legal_action = true
 			break
 
+	var main := _main.get_node_or_null("/root/Main")
 	var picked: Dictionary = {}
 	if controller_id == 0:
-		picked = await SelectionManager.await_single_pick(
-			top_cards, "Juega una carta de coste %d o menos gratis, o pon un Oro directo en tu Oro Pagado" % max_cost,
-			not any_legal_action, 0, is_pickable)
+		# 2026-09-14, a pedido del usuario: click directo (open_reveal_picker)
+		# en vez del modal de lista viejo.
+		if main and main._zone_viewer:
+			var node_filter := func(c: Node) -> bool: return is_pickable.call(c.card_data)
+			var picked_list: Array = await main._zone_viewer.open_reveal_picker(
+				"Juega una carta de coste %d o menos gratis, o pon un Oro directo en tu Oro Pagado" % max_cost,
+				top_cards, controller_id, node_filter, 1, not any_legal_action)
+			if not picked_list.is_empty():
+				picked = picked_list[0]
 	else:
 		# El bot resuelve solo (mismo criterio que try_execute_look_play_free_
 		# pattern) — al azar entre lo pickeable (Oro directo, o un Aliado
@@ -490,7 +496,6 @@ func try_execute_look_play_or_gold_pattern(ability_text: String, source_card: No
 		deck.append(c)
 	cm.shuffle_deck(controller_id)
 
-	var main = _main.get_node_or_null("/root/Main")
 	if main and main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 
@@ -573,7 +578,19 @@ func try_execute_look_play_or_hand_pattern(ability_text: String, source_card: No
 	if top_cards.is_empty():
 		return true
 
-	var is_eligible := _make_look_play_free_filter(source_card, max_cost)
+	# exclude_self=false (2026-09-19, bug real reportado por el usuario: "no
+	# puedo jugar presente con el presente"). Texto real (card_cache/cards.json,
+	# id 19936): "Puedes jugar una carta de coste 3 o menos de ahí sin pagar su
+	# coste o ponerlas en tu mano" — sin ninguna cláusula que excluya otra
+	# copia de sí misma. El default true de _make_look_play_free_filter()
+	# (pensado originalmente para Presente, según el comentario de la función)
+	# no tiene base en el texto real de la carta — mismo caso que Perder la
+	# Razón, que ya pasa false explícito. No se tocó el default compartido de
+	# la función ni el llamador de Tangata Manu (línea ~293): ese sí usa el
+	# default sin haberse verificado todavía contra su propio texto — no
+	# cambiar sin que el usuario lo confirme primero (mismo criterio que
+	# arquitectura.md §10.3).
+	var is_eligible := _make_look_play_free_filter(source_card, max_cost, false)
 	var to_play: Dictionary = {}
 	var to_hand: bool = false
 
@@ -583,6 +600,12 @@ func try_execute_look_play_or_hand_pattern(ability_text: String, source_card: No
 		# gratis (mismo filtro/estilo que Tangata Manu) — y se agrega un botón
 		# extra "Poner en tu mano" al panel de SelectionManager para la otra
 		# alternativa, sin abrir un popup de elección aparte primero.
+		# DEJADO A PROPÓSITO en SelectionManager (2026-09-14, barrido de
+		# pickers modales → click directo): este panel inyecta un tercer
+		# botón custom ("Poner", ver más abajo) que open_reveal_picker() no
+		# soporta (solo pick-por-click puro) — mismo criterio de complejidad
+		# real que Duelo de Dragones/Ofrendas al Dragón en el barrido de
+		# triggers (ver docs/plans/2026-09-09-pila-respuesta-universal-design.md).
 		SelectionManager.open_selection(top_cards, SelectionManager.SelectionMode.CUSTOM, {
 			"title": "Juega una carta de coste %d o menos gratis, o llévate las %d a tu mano" % [max_cost, top_cards.size()],
 			"max_selections": 1,

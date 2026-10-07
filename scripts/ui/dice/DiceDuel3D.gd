@@ -4,6 +4,27 @@ extends CanvasLayer
 ## Vista cenital estilo mesa de juego y simulación de rodado dinámico multiciclo.
 
 signal duel_completed(winner_id: int)
+## Emitida apenas se decide el resultado (antes de la animación de tirada) —
+## 2026-09-20, multiplayer: el Anfitrión escucha esto para mandarle el
+## resultado real al Remoto por red, así los dos ven la MISMA tirada en vez
+## de cada lado tirando la suya propia por separado.
+signal result_decided(result1: int, result2: int, winner_id: int)
+
+## Resultado forzado (2026-09-20, multiplayer): si ambos son > 0, se usan
+## estos valores en vez de tirar al azar — el Remoto reproduce aquí la MISMA
+## tirada que el Anfitrión ya resolvió, en vez de tirar la suya propia
+## (antes cada pantalla mostraba 2 dados random sin relación con la otra).
+## Dejar en -1 (default) para el camino de siempre (partida local contra el
+## bot: cada lado tira de verdad).
+var forced_result1: int = -1
+var forced_result2: int = -1
+
+## Textos del banner "quién parte" (2026-09-20, multiplayer): "¡TÚ PARTES!"
+## solo tiene sentido en la pantalla de quien de verdad controla al jugador 0
+## (el Anfitrión) — la vista espejo del Remoto necesita su propio texto,
+## ver RemoteMirrorController._show_dice_roll_mirror().
+var winner_text_p0: String = "¡TÚ PARTES!"
+var winner_text_p1: String = "¡OPONENTE PARTE!"
 
 const FONT_TITLE := preload("res://assets/fonts/Cinzel-Bold.ttf")
 const FONT_BODY := preload("res://assets/fonts/Marcellus-Regular.ttf")
@@ -357,11 +378,21 @@ func _create_ground_shadow() -> Dictionary:
 # =============================================================================
 func start_roll() -> void:
 	"""Lanza ambos dados D20 con simulación multiciclo de rodado, giros 3D y asentamiento exacto."""
-	_result1 = randi_range(1, 20)
-	_result2 = randi_range(1, 20)
-	if _result1 == _result2:
-		_result1 = 20 if _result1 < 20 else 19
+	# 2026-09-20: restaurado el sorteo real (el "DEBUG TEMPORAL" de 2026-09-11
+	# —resultado fijo 20/1— nunca se sacó pese a la nota de "sacar antes de
+	# jugar en serio", así que TODO sorteo hasta hoy era 100% determinístico).
+	# forced_result1/2 (multiplayer, ver docstring arriba) tienen prioridad
+	# sobre el azar cuando vienen seteados desde afuera.
+	if forced_result1 > 0 and forced_result2 > 0:
+		_result1 = forced_result1
+		_result2 = forced_result2
+	else:
+		_result1 = randi_range(1, 20)
+		_result2 = randi_range(1, 20)
+		while _result2 == _result1:
+			_result2 = randi_range(1, 20)
 	_winner_id = 0 if _result1 > _result2 else 1
+	result_decided.emit(_result1, _result2, _winner_id)
 
 	# Normal orientada directamente hacia la cámara cenital desde la posición final de reposo
 	var facing_dir1 = (_camera.global_position - _target_pos1).normalized()
@@ -485,10 +516,7 @@ func _on_dice_settled() -> void:
 	_p1_score_label.text = str(_result1)
 	_p2_score_label.text = str(_result2)
 
-	if _winner_id == 0:
-		_winner_title_label.text = "¡TÚ PARTES!"
-	else:
-		_winner_title_label.text = "¡OPONENTE PARTE!"
+	_winner_title_label.text = winner_text_p0 if _winner_id == 0 else winner_text_p1
 
 	# Animar paneles de puntuación
 	var p_tween = create_tween()

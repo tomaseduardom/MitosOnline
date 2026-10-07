@@ -16,7 +16,7 @@ class_name GameStateBroadcaster
 ## para eso todavía). Mano/Castillo (privados) quedan fuera a propósito: el
 ## Remoto ya ve su PROPIA mano vía los prompts de RemotePlayerController
 ## (mulligan/vigilia), y la mano/mazo del Anfitrión nunca deben viajar por
-## acá de todos modos (niebla de guerra) — mandar solo un card_id sin data
+## aquí de todos modos (niebla de guerra) — mandar solo un card_id sin data
 ## para esos casos queda para un incremento posterior.
 
 var _active: bool = false

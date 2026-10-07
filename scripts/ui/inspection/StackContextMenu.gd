@@ -61,23 +61,23 @@ func _show_context_menu(stack_id: int, position: Vector2) -> void:
 	var can_be_cancelled = _main._can_be_cancelled(stack_obj)
 
 	# Opciones del menú
-	_context_popup.add_item("👁 Ver carta: %s" % obj_name, ContextMenuID.VIEW_CARD)
+	_context_popup.add_item("Ver carta: %s" % obj_name, ContextMenuID.VIEW_CARD)
 	_context_popup.add_separator()
-	_context_popup.add_item("🎯 Verificar como objetivo", ContextMenuID.CHECK_VALID_TARGET)
+	_context_popup.add_item("Verificar como objetivo", ContextMenuID.CHECK_VALID_TARGET)
 
 	# Opciones de Anular/Cancelar (Sección 8)
 	_context_popup.add_separator()
 
 	if can_be_annulled:
-		_context_popup.add_item("⛔ Seleccionar para ANULAR", ContextMenuID.SELECT_AS_ANNUL_TARGET)
+		_context_popup.add_item("Seleccionar para ANULAR", ContextMenuID.SELECT_AS_ANNUL_TARGET)
 	else:
-		_context_popup.add_item("⛔ No puede ser anulado", ContextMenuID.SELECT_AS_ANNUL_TARGET)
+		_context_popup.add_item("No puede ser anulado", ContextMenuID.SELECT_AS_ANNUL_TARGET)
 		_context_popup.set_item_disabled(_context_popup.item_count - 1, true)
 
 	if can_be_cancelled:
-		_context_popup.add_item("🚫 Seleccionar para CANCELAR", ContextMenuID.SELECT_AS_CANCEL_TARGET)
+		_context_popup.add_item("Seleccionar para CANCELAR", ContextMenuID.SELECT_AS_CANCEL_TARGET)
 	else:
-		_context_popup.add_item("🚫 No puede ser cancelado", ContextMenuID.SELECT_AS_CANCEL_TARGET)
+		_context_popup.add_item("No puede ser cancelado", ContextMenuID.SELECT_AS_CANCEL_TARGET)
 		_context_popup.set_item_disabled(_context_popup.item_count - 1, true)
 
 	# Mostrar popup
@@ -240,14 +240,14 @@ func _update_card_preview_content(stack_obj: Dictionary) -> void:
 	var cost_label = content.get_node_or_null("StatsBox/CostLabel")
 	if cost_label:
 		var cost = card_data.get("coste", 0)
-		cost_label.text = "💰 Coste: %d" % cost
+		cost_label.text = "Coste: %d" % cost
 
 	# Fuerza
 	var strength_label = content.get_node_or_null("StatsBox/StrengthLabel")
 	if strength_label:
 		var strength = card_data.get("fuerza", 0)
 		if card_data.get("tipo", -1) == Constants.CardType.ALIADO:
-			strength_label.text = "⚔️ Fuerza: %d" % strength
+			strength_label.text = "Fuerza: %d" % strength
 		else:
 			strength_label.text = ""
 
@@ -269,9 +269,9 @@ func _update_card_preview_content(stack_obj: Dictionary) -> void:
 			info_parts.append("Objetivos: %d" % targets.size())
 
 		if _main._can_be_annulled(stack_obj):
-			info_parts.append("✓ Puede ser ANULADO")
+			info_parts.append("Puede ser ANULADO")
 		if _main._can_be_cancelled(stack_obj):
-			info_parts.append("✓ Puede ser CANCELADO")
+			info_parts.append("Puede ser CANCELADO")
 
 		stack_info.text = "\n".join(info_parts)
 
@@ -290,14 +290,14 @@ func _check_valid_target(stack_obj: Dictionary) -> void:
 	var message = "%s:\n" % stack_obj.get("name", "???")
 
 	if is_valid_annul:
-		message += "✓ VÁLIDO para Anular\n"
+		message += "VÁLIDO para Anular\n"
 	else:
-		message += "✗ NO puede ser Anulado\n"
+		message += "NO puede ser Anulado\n"
 
 	if is_valid_cancel:
-		message += "✓ VÁLIDO para Cancelar"
+		message += "VÁLIDO para Cancelar"
 	else:
-		message += "✗ NO puede ser Cancelado"
+		message += "NO puede ser Cancelado"
 
 	# Mostrar feedback visual
 	_show_validation_popup(message, stack_obj.get("id", -1))
@@ -334,8 +334,8 @@ func _show_target_selection_feedback(stack_id: int, action_type: String) -> void
 	if indicator:
 		indicator.visible = true
 		if action_type == "annul":
-			indicator.text = "⛔ OBJETIVO DE ANULACIÓN"
+			indicator.text = "[OBJETIVO DE ANULACIÓN]"
 			indicator.add_theme_color_override("font_color", Color.RED)
 		else:
-			indicator.text = "🚫 OBJETIVO DE CANCELACIÓN"
+			indicator.text = "[OBJETIVO DE CANCELACIÓN]"
 			indicator.add_theme_color_override("font_color", Color.ORANGE)

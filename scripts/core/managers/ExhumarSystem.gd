@@ -50,9 +50,14 @@ func scan_cemetery_for_exhumar(player_id: int) -> Array[Dictionary]:
 	_exhumar_cache[player_id] = playable_cards
 	_cache_dirty = false
 
-	print("[PaymentManager] Cementerio J%d: %d cartas con Exhumar disponibles" % [
-		player_id + 1, playable_cards.size()
-	])
+	# 2026-09-25, a pedido del usuario ("elimina logs redundantes"): este
+	# chequeo corre en CADA ventana de prioridad — con 0 cartas (el caso
+	# normal la mayor parte de la partida) no dice nada nuevo. Con 1+ sí es
+	# información real (hay algo jugable esperando).
+	if playable_cards.size() > 0 or Constants.VERBOSE_DIAG_LOGS:
+		print("[PaymentManager] Cementerio J%d: %d cartas con Exhumar disponibles" % [
+			player_id + 1, playable_cards.size()
+		])
 
 	return playable_cards
 
@@ -245,7 +250,7 @@ func _create_exhumar_popup(cards: Array) -> void:
 
 	_exhumar_popup = Window.new()
 	_exhumar_popup.name = "ExhumarPopup"
-	_exhumar_popup.title = "💀 EXHUMAR - Jugar desde Cementerio"
+	_exhumar_popup.title = "EXHUMAR - Jugar desde Cementerio"
 	_exhumar_popup.size = Vector2i(400, 350)
 	_exhumar_popup.close_requested.connect(_close_exhumar_popup)
 	_main.add_child(_exhumar_popup)
@@ -306,7 +311,7 @@ func _create_exhumar_card_button(card_info: Dictionary, index: int) -> Button:
 	var cost = card_info.get("exhumar_cost", 0)
 	var can_play = card_info.get("can_play", false)
 
-	btn.text = "%s  |  Coste: %d 💰" % [name, cost]
+	btn.text = "%s  |  Coste: %d Oro" % [name, cost]
 	btn.disabled = not can_play
 
 	if can_play:
@@ -333,7 +338,7 @@ func _on_exhumar_card_selected(index: int) -> void:
 	if not card_info.can_play:
 		return
 
-	print("[PaymentManager] 💀 Carta seleccionada para Exhumar: %s" % card_info.name)
+	print("[PaymentManager] Carta seleccionada para Exhumar: %s" % card_info.name)
 
 	_main.emit_signal("exhumar_card_selected", card_info.card_data, _main._current_player_id)
 
@@ -350,7 +355,7 @@ func _show_exhumar_confirmation(card_info: Dictionary) -> void:
 	# Crear opciones específicas de Exhumar
 	var options = [{
 		"method": PaymentManager.PaymentMethod.EXHUMAR,
-		"label": "💀 Exhumar por %d Oro" % cost,
+		"label": "Exhumar por %d Oro" % cost,
 		"cost": cost,
 		"available": card_info.can_afford,
 		"description": "Jugar desde el Cementerio. Irá al DESTIERRO tras resolver."

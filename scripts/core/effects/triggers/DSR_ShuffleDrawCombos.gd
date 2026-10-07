@@ -33,8 +33,6 @@ func try_execute_shuffle_exile_and_draw_pattern(ability_text: String, controller
 	var lower := ability_text.to_lower()
 	if not ("de tu destierro" in lower and "baraja" in lower):
 		return false
-	if controller_id != 0:
-		return true
 	if await TriggerSystem.open_response_window(card, str(card.get("card_name")) if card else "El Rey y el Verdugo", controller_id):
 		return true
 
@@ -63,6 +61,12 @@ func try_execute_shuffle_exile_and_draw_pattern(ability_text: String, controller
 		i -= 1
 	if moved > 0:
 		CardManager.shuffle_deck(controller_id)
+		# 2026-09-30, mismo criterio que el fix de Azi Sruvara: sin esto no
+		# había ninguna retroalimentación visual del barajado.
+		AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+			"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+			"description": "Barajar mazo (El Rey y el Verdugo)"
+		})
 		var main := _executor._main.get_node_or_null("/root/Main")
 		if main and main.get("_zone_manager"):
 			main._zone_manager._update_castillo_counts()
@@ -96,26 +100,32 @@ func try_execute_shuffle_hand_and_draw_plus_two_pattern(ability_text: String, co
 		return true
 
 	var shuffled_amount := 0
-	if controller_id == 0 and main.player_hand and not main.player_hand.cards.is_empty():
-		var hand_cards: Array = main.player_hand.cards.duplicate()
-		var card_data_list: Array = []
-		for c in hand_cards:
-			card_data_list.append(c.card_data)
-		var result: Dictionary = await SelectionManager.await_multi_pick(
-			card_data_list, "Baraja cualquier cantidad de cartas de tu mano en tu Castillo (puedes no elegir ninguna)",
-			hand_cards.size(), 0, false)
-		for picked_data in result.picked:
-			for c in hand_cards:
-				if is_instance_valid(c) and c.card_data == picked_data:
-					main.player_hand.remove_card(c, true)
-					CardManager.get_deck(controller_id).append(picked_data)
+	# 2026-09-30, bug real expuesto al convertir esto a la Fase 3: 'main.
+	# player_hand' hardcodeado sin mirar controller_id — para el jugador 1
+	# (bot/Remoto) había que usar _opponent_fan en su lugar.
+	var hand_container = main.player_hand if controller_id == 0 else main.get("_opponent_fan")
+	if hand_container and main._card_interaction:
+		var hand_cards: Array = (main.player_hand.cards if controller_id == 0 else hand_container.get_cards()).duplicate()
+		if not hand_cards.is_empty():
+			# 2026-09-13, a pedido del usuario: click directo en la mano en vez
+			# del modal de lista viejo.
+			var chosen: Array = await main._card_interaction.await_multi_target(
+				"Baraja cualquier cantidad de cartas de tu mano en tu Castillo", hand_cards, -1, Callable(), Callable(), true, null, controller_id)
+			for c in chosen:
+				if is_instance_valid(c):
+					var data: Dictionary = c.card_data
+					hand_container.remove_card(c, true)
+					CardManager.get_deck(controller_id).append(data)
 					shuffled_amount += 1
-					break
-		if shuffled_amount > 0:
-			CardManager.shuffle_deck(controller_id)
+			if shuffled_amount > 0:
+				CardManager.shuffle_deck(controller_id)
+				AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+					"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+					"description": "Barajar mazo (Aaru)"
+				})
 
-	# El bot todavía no usa la elección interactiva (2026-08-30) — equivale
-	# a barajar 0, sigue siendo una resolución completa según el texto.
+	# Equivale a barajar 0 si no había candidatos — sigue siendo una
+	# resolución completa según el texto ('cualquier cantidad' incluye 0).
 	await ActionModule.draw(controller_id, shuffled_amount + 2, "talisman_resolve", true)
 	return true
 
@@ -149,27 +159,36 @@ func try_execute_draw_and_shuffle_hand_pattern(ability_text: String, controller_
 	if draw_amount > 0:
 		await ActionModule.draw(controller_id, draw_amount, "etb_trigger", true)
 
-	if shuffle_amount > 0 and controller_id == 0:
+	if shuffle_amount > 0:
 		var main := _executor._main.get_node_or_null("/root/Main")
-		if main and main.player_hand and not main.player_hand.cards.is_empty():
-			var hand_cards: Array = main.player_hand.cards.duplicate()
-			var card_data_list: Array = []
-			for c in hand_cards:
-				card_data_list.append(c.card_data)
-			var pick_amount: int = mini(shuffle_amount, hand_cards.size())
-			var result: Dictionary = await SelectionManager.await_multi_pick(
-				card_data_list, "Baraja %d carta(s) de tu mano en tu Castillo" % shuffle_amount,
-				pick_amount, pick_amount, false)
-			var shuffled := 0
-			for picked_data in result.picked:
-				for c in hand_cards:
-					if is_instance_valid(c) and c.card_data == picked_data:
-						main.player_hand.remove_card(c, true)
-						CardManager.get_deck(controller_id).append(picked_data)
+		# 2026-09-30, mismo bug que Aaru más arriba: hardcodeado a player_hand
+		# sin mirar controller_id.
+		var hand_container = main.player_hand if (main and controller_id == 0) else (main.get("_opponent_fan") if main else null)
+		if main and hand_container and main._card_interaction:
+			var hand_cards: Array = (main.player_hand.cards if controller_id == 0 else hand_container.get_cards()).duplicate()
+			if not hand_cards.is_empty():
+				# 2026-09-13, a pedido del usuario: click directo en la mano en
+				# vez del modal de lista viejo. Mandatorio (sin "puedes"): se
+				# pide sin ESC ("cancellable=false", mismo criterio que
+				# _select_hand_cards_for_discard(), §10.29) — no debería poder
+				# esquivarse un barajado mandatorio de la mano.
+				var pick_amount: int = mini(shuffle_amount, hand_cards.size())
+				var chosen: Array = await main._card_interaction.await_multi_target(
+					"Baraja %d carta(s) de tu mano en tu Castillo" % shuffle_amount, hand_cards, pick_amount,
+					Callable(), Callable(), false, null, controller_id)
+				var shuffled := 0
+				for c in chosen:
+					if is_instance_valid(c):
+						var data: Dictionary = c.card_data
+						hand_container.remove_card(c, true)
+						CardManager.get_deck(controller_id).append(data)
 						shuffled += 1
-						break
-			if shuffled > 0:
-				CardManager.shuffle_deck(controller_id)
+				if shuffled > 0:
+					CardManager.shuffle_deck(controller_id)
+					AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+						"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+						"description": "Barajar mazo (Manuel Bulnes)"
+					})
 
 	return true
 
@@ -185,7 +204,7 @@ func try_execute_draw_and_shuffle_opponent_card_pattern(ability_text: String, co
 	las cartas en juego son información PÚBLICA (a diferencia de una mano
 	oculta), el jugador humano elige con clic en vez de al azar.
 	A diferencia del resto de la familia 'y' de esta sesión (Manuel
-	Bulnes, Aaru — ambas partes ocurren siempre), acá el orden LÓGICO real
+	Bulnes, Aaru — ambas partes ocurren siempre), aquí el orden LÓGICO real
 	es al revés del orden impreso: el 'Barajar' es la parte que puede
 	fallar (si el rival no controla ninguna carta de ese coste o menos), y
 	si falla, el 'Robar' NO se ejecuta — regla confirmada explícitamente
@@ -245,18 +264,18 @@ func try_execute_draw_and_shuffle_opponent_card_pattern(ability_text: String, co
 		return true
 
 	var chosen: Node = null
-	if controller_id == 0 and main._card_interaction:
+	if main._card_interaction:
 		var filter := func(c: Node) -> bool:
 			return c in candidates
 		chosen = await main._card_interaction.await_target(
-			"Elige una carta rival en juego (coste %d o menos) para barajar" % ally_count, filter)
+			"Elige una carta rival en juego (coste %d o menos) para barajar" % ally_count, filter, true, controller_id)
 	else:
 		candidates.shuffle()
 		chosen = candidates[0]
 
 	if not chosen or not is_instance_valid(chosen):
 		return true
-	# Sin ventana genérica acá (2026-09-09): return_to_deck() ya consulta
+	# Sin ventana genérica aquí (2026-09-09): return_to_deck() ya consulta
 	# Prevención adentro por su cuenta.
 	var true_owner: int = chosen.owner_id if chosen.get("owner_id") != null else opponent_id
 	await ActionModule.return_to_deck(chosen, true_owner, true, card)
@@ -273,7 +292,7 @@ func try_execute_shuffle_hand_then_draw_pattern(ability_text: String, controller
 	p.ej. Trono del Dragón: 'Cuando entra en juego, Baraja dos cartas de tu
 	mano y Roba tres cartas') — orden INVERSO al ya existente try_execute_
 	draw_and_shuffle_hand_pattern() (Manuel Bulnes: 'Roba... y Baraja... de
-	tu mano EN TU CASTILLO', roba primero) — acá el texto imprime Barajar
+	tu mano EN TU CASTILLO', roba primero) — aquí el texto imprime Barajar
 	primero, así que se resuelve en ese orden (el jugador elige QUÉ cartas
 	barajar antes de robar; DAR: sin 'puedes', mandatorio en las dos
 	partes). Gate distinto ('de tu mano y roba', sin 'en tu castillo') para
@@ -296,27 +315,33 @@ func try_execute_shuffle_hand_then_draw_pattern(ability_text: String, controller
 	if await TriggerSystem.open_response_window(card, str(card.get("card_name")) if card else "Trono del Dragón", controller_id):
 		return true
 
-	if shuffle_amount > 0 and controller_id == 0:
+	if shuffle_amount > 0:
 		var main := _executor._main.get_node_or_null("/root/Main")
-		if main and main.player_hand and not main.player_hand.cards.is_empty():
-			var hand_cards: Array = main.player_hand.cards.duplicate()
-			var card_data_list: Array = []
-			for c in hand_cards:
-				card_data_list.append(c.card_data)
-			var pick_amount: int = mini(shuffle_amount, hand_cards.size())
-			var result: Dictionary = await SelectionManager.await_multi_pick(
-				card_data_list, "Baraja %d carta(s) de tu mano en tu Castillo" % shuffle_amount,
-				pick_amount, pick_amount, false)
-			var shuffled := 0
-			for picked_data in result.picked:
-				for c in hand_cards:
-					if is_instance_valid(c) and c.card_data == picked_data:
-						main.player_hand.remove_card(c, true)
-						CardManager.get_deck(controller_id).append(picked_data)
+		# 2026-09-30, mismo bug que Aaru/Manuel Bulnes más arriba: hardcodeado
+		# a player_hand sin mirar controller_id.
+		var hand_container = main.player_hand if (main and controller_id == 0) else (main.get("_opponent_fan") if main else null)
+		if main and hand_container and main._card_interaction:
+			var hand_cards: Array = (main.player_hand.cards if controller_id == 0 else hand_container.get_cards()).duplicate()
+			if not hand_cards.is_empty():
+				# 2026-09-13, a pedido del usuario: click directo en la mano en
+				# vez del modal de lista viejo. Mandatorio, sin ESC (§10.29).
+				var pick_amount: int = mini(shuffle_amount, hand_cards.size())
+				var chosen: Array = await main._card_interaction.await_multi_target(
+					"Baraja %d carta(s) de tu mano en tu Castillo" % shuffle_amount, hand_cards, pick_amount,
+					Callable(), Callable(), false, null, controller_id)
+				var shuffled := 0
+				for c in chosen:
+					if is_instance_valid(c):
+						var data: Dictionary = c.card_data
+						hand_container.remove_card(c, true)
+						CardManager.get_deck(controller_id).append(data)
 						shuffled += 1
-						break
-			if shuffled > 0:
-				CardManager.shuffle_deck(controller_id)
+				if shuffled > 0:
+					CardManager.shuffle_deck(controller_id)
+					AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+						"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+						"description": "Barajar mazo (Trono del Dragón)"
+					})
 
 	if draw_amount > 0:
 		await ActionModule.draw(controller_id, draw_amount, "etb_trigger", true)

@@ -3,6 +3,20 @@ extends Node
 ## Revisión Septiembre 2025 - Imperio
 
 # =============================================================================
+# LOGGING
+# =============================================================================
+## 2026-09-23, a pedido del usuario ("eliminar tanto log innecesario, quiero
+## entender lo que está pasando"): varios prints "[DIAG]" (gui_input de cada
+## click, estado del botón ¿Paso? en cada cambio de prioridad, etc.) se
+## agregaron para cazar bugs puntuales de la fase de Guerra de Talismanes
+## (ver arquitectura.md §12/§13.4/§13.6) y quedaron encendidos siempre,
+## inundando la consola en cualquier partida normal. En vez de borrarlos (esa
+## visibilidad ya sirvió para arreglar varios bugs reales), se apagan por
+## defecto aquí — si vuelve a hacer falta cazar algo similar, alcanza con
+## poner esto en `true`, sin tener que reescribir el logging desde cero.
+const VERBOSE_DIAG_LOGS: bool = false
+
+# =============================================================================
 # CONSTRUCCIÓN DE MAZO
 # =============================================================================
 const DECK_SIZE: int = 50
@@ -19,8 +33,12 @@ const STARTING_HAND_SIZE: int = 8
 const MAX_HAND_SIZE: int = 8
 const CARDS_DRAWN_PER_TURN: int = 1
 
-## Escala de las cartas de Oro en Reserva y Oro Pagado (1.0 = tamaño completo estándar)
-const GOLD_CARD_SCALE: Vector2 = Vector2(1.0, 1.0)
+## Escala de las cartas de Oro en Reserva y Oro Pagado (0.80 = proporción balanceada sin solapamiento vertical)
+const GOLD_CARD_SCALE: Vector2 = Vector2(0.80, 0.80)
+
+## Desplazamiento vertical para Armas equipadas a un Aliado (asoman discretamente por abajo)
+const WEAPON_OFFSET_Y: float = 48.0
+const WEAPON_STACK_STEP_Y: float = 20.0
 
 # =============================================================================
 # TIPOS DE CARTA

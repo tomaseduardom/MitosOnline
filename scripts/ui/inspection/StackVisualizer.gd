@@ -437,13 +437,7 @@ func _create_stack_item_node(stack_obj: Dictionary) -> Control:
 
 
 func _get_type_icon(type: int) -> String:
-	"""Retorna icono según tipo de objeto"""
-	match type:
-		0: return "🃏"  # CARD_PLAYED
-		1: return "⚡"  # TRIGGERED_ABILITY
-		2: return "🎯"  # ACTIVATED_ABILITY
-		3: return "🛡️"  # RESPONSE_CARD
-		_: return "❓"
+	return ""
 
 
 func _get_state_text(step: int) -> String:
@@ -452,9 +446,9 @@ func _get_state_text(step: int) -> String:
 		4: return "En pila"
 		5: return "Esperando..."
 		6: return "Resolviendo"
-		7: return "✓ Resuelto"
-		8: return "✗ Anulado"
-		9: return "✗ Fizzled"
+		7: return "Resuelto"
+		8: return "Anulado"
+		9: return "Fizzled"
 		_: return ""
 
 
@@ -535,16 +529,16 @@ func _update_item_state(item: Control, stack_obj: Dictionary, state: String) -> 
 				state_label.text = "Resolviendo"
 				state_label.add_theme_color_override("font_color", Color.GREEN)
 			"resolved":
-				state_label.text = "✓ Resuelto"
+				state_label.text = "Resuelto"
 				state_label.add_theme_color_override("font_color", Color(0.5, 1.0, 0.5))
 			"annulled":
-				state_label.text = "✗ Anulado"
+				state_label.text = "Anulado"
 				state_label.add_theme_color_override("font_color", Color.RED)
 			"cancelled":
-				state_label.text = "✗ Cancelado"
+				state_label.text = "Cancelado"
 				state_label.add_theme_color_override("font_color", Color.ORANGE)
 			"fizzled":
-				state_label.text = "✗ Fizzled"
+				state_label.text = "Fizzled"
 				state_label.add_theme_color_override("font_color", Color.GRAY)
 
 	# Actualizar color de fondo según estado
@@ -559,7 +553,7 @@ func _update_waiting_indicator(item: Control, priority_player: int) -> void:
 	var indicator = item.find_child("WaitIndicator", true, false)
 	if indicator:
 		indicator.visible = true
-		indicator.text = "⏳ Esperando Jugador %d" % (priority_player + 1)
+		indicator.text = "Esperando Jugador %d" % (priority_player + 1)
 
 
 func _highlight_item(item: Control, highlight: bool) -> void:
@@ -613,7 +607,7 @@ func _update_empty_state() -> void:
 # =============================================================================
 # INTERACCIÓN - Click derecho para ver carta y validar objetivo (Sección 8)
 # Implementación en StackContextMenu.gd. _can_be_annulled/_can_be_cancelled
-# y los helpers de abajo quedan acá porque los usan tanto el menú contextual
+# y los helpers de abajo quedan aquí porque los usan tanto el menú contextual
 # como el tooltip de hover (StackTargetHighlight.gd).
 # =============================================================================
 func _can_be_annulled(stack_obj: Dictionary) -> bool:

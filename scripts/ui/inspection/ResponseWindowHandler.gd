@@ -12,131 +12,104 @@ class_name ResponseWindowHandler
 
 var _inspector: CardInspectionLayer
 
-var _step_d_overlay: Node = null
-var _trigger_response_overlay: Node = null
-
 
 func setup(inspector: CardInspectionLayer) -> void:
 	_inspector = inspector
 
 
 func _on_step_d_waiting(stack_obj: Dictionary, priority_player: int) -> void:
-	if _step_d_overlay and is_instance_valid(_step_d_overlay):
-		_step_d_overlay.queue_free()
-		_step_d_overlay = null
-
 	# Pila de Respuesta Universal (2026-09-09, Capa 1 — ver docs/plans/
 	# 2026-09-09-pila-respuesta-universal-design.md): con la migración de los
 	# patrones de trigger, esta ventana ya puede abrirse para CUALQUIERA de
 	# los dos jugadores (antes, en la práctica, priority_player siempre
 	# terminaba siendo el humano, porque nada disparado por el bot llegaba
-	# hasta acá). Si le toca al bot, todavía no tiene ninguna lógica real de
+	# hasta aquí). Si le toca al bot, todavía no tiene ninguna lógica real de
 	# "¿quiero responder con algo?" (Capa 2, pendiente) — pasa siempre, pero
 	# por el camino REAL de PriorityManager (no el auto-pase ciego de antes),
 	# para no romper la secuencia de "ambos pasan consecutivamente" que
 	# ActionPipeline espera.
 	if priority_player != 0:
-		_bot_pass_after(0.3)
+		# 2026-09-15: se captura la generación de ESTA ventana (ver
+		# PriorityManager._window_generation) — mismo motivo que
+		# PhaseFlowController._human_pass_after(), ver ese comentario.
+		_bot_pass_after(0.15, PriorityManager._window_generation)  # bajado de 0.3s, 2026-09-11 — cadenas de varias cartas acumulaban demora
 		return
 
-	var ability_name = stack_obj.get("name", "Habilidad")
-	var layer = CanvasLayer.new()
-	layer.layer = 90
-	_inspector._main.add_child(layer)
-	_step_d_overlay = layer
-	var panel = PanelContainer.new()
-	panel.set_anchor(SIDE_LEFT,   0.5)
-	panel.set_anchor(SIDE_TOP,    0.0)
-	panel.set_anchor(SIDE_RIGHT,  0.5)
-	panel.set_anchor(SIDE_BOTTOM, 0.0)
-	panel.set_offset(SIDE_LEFT,  -210)
-	panel.set_offset(SIDE_TOP,     8)
-	panel.set_offset(SIDE_RIGHT,  210)
-	panel.set_offset(SIDE_BOTTOM, 88)
-	layer.add_child(panel)
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 4)
-	panel.add_child(vbox)
-	var title = Label.new()
-	title.text = "⏸ Ventana de Respuesta"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
-	title.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(title)
-	var name_lbl = Label.new()
-	name_lbl.text = ability_name
-	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_lbl.add_theme_font_size_override("font_size", 11)
-	name_lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
-	vbox.add_child(name_lbl)
-	var status_lbl = Label.new()
-	status_lbl.text = "¿Querés responder? (5s)"
-	status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status_lbl.add_theme_font_size_override("font_size", 10)
-	status_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	vbox.add_child(status_lbl)
-	var btn_row = HBoxContainer.new()
-	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	btn_row.add_theme_constant_override("separation", 12)
-	vbox.add_child(btn_row)
-	var btn_pass = Button.new()
-	btn_pass.text = "Pasar ▶"
-	btn_pass.pressed.connect(_pass_both_priority.bind(status_lbl))
-	btn_row.add_child(btn_pass)
-
-	# Signo Amarillo (2026-08-26): mientras esta ventana de respuesta esté
-	# abierta por una habilidad de Oro o de fuera del juego (mano, destierro,
-	# cementerio, castillo), si quien tiene prioridad para responder controla
-	# un Oro con ese texto sin convertir todavía, se le ofrece el botón para
-	# convertirlo y cancelar lo que está en la Pila.
+	# 2026-09-11 (a pedido del usuario): el botón único ¿Paso?/Atacar del HUD
+	# (GameHUDModule) ya se pone visible y brilla solo apenas la prioridad es
+	# tuya, y PhaseFlowController._on_priority_changed_glow() ya se encarga
+	# del auto-pase "no hay nada que decidir" — dejó de hacer falta un panel
+	# propio aquí solo para pasar. Lo único que sigue necesitando UI propia es
+	# la oferta de Signo Amarillo (cancelar convirtiendo un Oro): es una
+	# decisión real, así que se ofrece como diálogo reactivo, y suprime ese
+	# auto-pase mientras espera tu click (ver _offer_signo_amarillo_for_step_d).
 	if _qualifies_for_signo_amarillo(stack_obj):
-		var signo_card := _find_signo_amarillo_in_reserve(priority_player)
-		if signo_card:
-			var btn_signo = Button.new()
-			btn_signo.text = "Convertir Oro (cancelar)"
-			btn_signo.tooltip_text = "Convertir %s en un Oro sin habilidad para cancelar esta habilidad" % str(signo_card.card_name)
-			btn_signo.pressed.connect(func():
-				signo_card.is_converted = true
-				ActionPipeline.cancel_stack_object(stack_obj.get("id", -1))
-				_pass_both_priority(status_lbl)
-			)
-			btn_row.add_child(btn_signo)
-
-	# Timer real de 5 segundos (2026-09-09, antes 2s ciegos que se auto-
-	# pasaban sin importar nada): el botón "Pasar" ya es clickeable desde el
-	# instante 0 arriba, así que esto es solo el límite superior de espera si
-	# el jugador no toca nada — no un retraso artificial en el camino feliz.
-	_inspector.get_tree().create_timer(5.0).timeout.connect(func():
-		if _step_d_overlay and is_instance_valid(_step_d_overlay):
-			_pass_both_priority(null)
-	)
-	panel.modulate.a = 0.0
-	var tw = _inspector.create_tween()
-	tw.tween_property(panel, "modulate:a", 1.0, 0.2)
+		_offer_signo_amarillo_for_step_d(stack_obj)
 
 
-func _bot_pass_after(delay: float) -> void:
+func _offer_signo_amarillo_for_step_d(stack_obj: Dictionary) -> void:
+	var signo_card := _find_signo_amarillo_in_reserve(0)
+	if not signo_card:
+		return
+	# Suprime cualquier auto-pase "no hay nada que decidir" mientras este
+	# diálogo real está esperando un click — ver PriorityManager.
+	# suppress_human_autopass (2026-09-11).
+	#
+	# 'scheduled_for_generation' (mismo motivo que _bot_pass_after(), ver su
+	# comentario): si se abre una ventana NUEVA mientras este diálogo
+	# esperaba el click (dos oportunidades de Signo Amarillo seguidas), esa
+	# ventana nueva puede haber puesto suppress_human_autopass=true para SU
+	# PROPIO diálogo — resetearlo sin este chequeo lo apaga por debajo.
+	var scheduled_for_generation: int = PriorityManager._window_generation
+	PriorityManager.suppress_human_autopass = true
+	var ability_name: String = stack_obj.get("name", "esta habilidad")
+	var use_it: bool = await SelectionManager.await_two_choice(
+		_inspector._main,
+		"¿Convertir %s en un Oro sin habilidad para cancelar %s?" % [str(signo_card.card_name), ability_name],
+		"Sí, cancelar", "No")
+	if PriorityManager._window_generation == scheduled_for_generation:
+		PriorityManager.suppress_human_autopass = false
+	if not use_it:
+		return
+	if not PriorityManager.priority_window_active:
+		return  # la ventana ya se cerró mientras decidías (p.ej. pasaste con el botón)
+	signo_card.is_converted = true
+	ActionPipeline.cancel_stack_object(stack_obj.get("id", -1))
+	if PriorityManager.priority_window_active:
+		PriorityManager.pass_priority()
+
+
+func _bot_pass_after(delay: float, scheduled_for_generation: int) -> void:
 	"""Capa 2 de la Pila de Respuesta Universal (2026-09-09): antes de pasar,
 	el bot intenta responder de verdad con una habilidad activada propia
 	(ver EasyBotController.try_respond_with_activated_ability(), alcance v1
 	documentado ahí) — Prevención se maneja aparte, en su propio choke point
-	(EffectController.offer_prevention_for_player()), no acá. Si usó algo,
+	(EffectController.offer_prevention_for_player()), no aquí. Si usó algo,
 	ese objeto ya quedó en el tope de ActionPipeline y el propio loop de
 	StackStepResolver lo detecta solo como "hubo respuesta" — no corresponde
 	pasar. Si no, pasa por el camino REAL de PriorityManager (no un atajo
 	que ignore de quién es el turno), con un pequeño delay solo para que no
 	se sienta instantáneo/confuso en pantalla — sin ninguna intención de
 	ocultar información (el usuario confirmó que el timing contra el bot no
-	importa)."""
+	importa).
+	'scheduled_for_generation' (2026-09-15, bug real reportado por el
+	usuario: "se traba en Guerra de Talismanes" sin ningún click — ver
+	PriorityManager._window_generation): si la ventana para la que se
+	programó este timer ya cerró y se abrió una ventana NUEVA antes de que
+	termine la espera, no hay que tocarla — aunque priority_window_active
+	siga siendo true, es de la ventana NUEVA, no la que este timer estaba
+	mirando."""
 	await _inspector.get_tree().create_timer(delay).timeout
+	if PriorityManager._window_generation != scheduled_for_generation:
+		return
 	if not PriorityManager.priority_window_active:
 		return
 	if _inspector._main._easy_bot and await _inspector._main._easy_bot.try_respond_with_activated_ability():
 		return
-	if PriorityManager.priority_window_active:
+	if PriorityManager._window_generation == scheduled_for_generation and PriorityManager.priority_window_active:
 		PriorityManager.pass_priority()
-		await _inspector.get_tree().create_timer(0.35).timeout
-		if PriorityManager.priority_window_active:
+		await _inspector.get_tree().create_timer(0.15).timeout  # bajado de 0.35s, 2026-09-11
+		if PriorityManager._window_generation == scheduled_for_generation and PriorityManager.priority_window_active:
 			PriorityManager.pass_priority()
 
 
@@ -171,92 +144,48 @@ func _find_signo_amarillo_in_reserve(player_id: int) -> Node:
 	return null
 
 
-func _pass_both_priority(status_label) -> void:
-	if not PriorityManager.priority_window_active:
-		return
-	PriorityManager.pass_priority()
-	if status_label and is_instance_valid(status_label):
-		status_label.text = "Resolviendo..."
-	await _inspector.get_tree().create_timer(0.35).timeout
-	if PriorityManager.priority_window_active:
-		PriorityManager.pass_priority()
-
-
-func _on_step_d_completed(_stack_obj: Dictionary, _had_response: bool) -> void:
-	if _step_d_overlay and is_instance_valid(_step_d_overlay):
-		_step_d_overlay.queue_free()
-		_step_d_overlay = null
-
-
 func _on_trigger_waiting_for_responses(trigger: Dictionary, responding_player: int) -> void:
 	"""Ventana de respuesta para triggers ETB de Oro/fuera del juego
-	(2026-08-26) — TriggerResolution._wait_for_response_window() solo emite
-	esta señal cuando de verdad hay algo que pueda responder (un Signo
-	Amarillo sin convertir), así que si no lo encontramos acá algo cambió
-	de estado entremedio — no mostrar nada en vez de romper."""
-	if _trigger_response_overlay and is_instance_valid(_trigger_response_overlay):
-		_trigger_response_overlay.queue_free()
+	(2026-08-26).
+
+	2026-09-19, §10.53: SIN LLAMADOR HOY A PROPÓSITO — TriggerSystem.
+	waiting_for_responses ya no se emite (TriggerResolution.resolve_next_
+	trigger() pasó a abrir una ventana real vía open_response_window(), a
+	pedido del usuario), así que esta función no se vuelve a llamar. NO
+	BORRAR sin más: si volviera a emitirse esa señal por error, el 'Sí,
+	cancelar' de este diálogo llamaría a TriggerSystem.cancel_current_
+	trigger(), que solo _wait_for_response_window() (huérfana también, ver su
+	docstring) llegaba a leer — quedaría un diálogo clickeable que no cancela
+	nada de verdad. Signo Amarillo para triggers se sigue ofreciendo bien hoy
+	por el camino nuevo: _offer_signo_amarillo_for_step_d() más abajo, que
+	escucha ActionPipeline.step_d_waiting (open_response_window() sí la
+	emite, para cualquier objeto de la Pila).
+
+	Antes (2026-08-26 a 2026-09-19): TriggerResolution._wait_for_response_
+	window() solo emitía esta señal cuando de verdad había algo que pudiera
+	responder (un Signo Amarillo sin convertir), así que si no lo encontraba
+	aquí algo había cambiado de estado entremedio.
+
+	2026-09-11 (a pedido del usuario): reemplazó el panel flotante por un
+	diálogo reactivo (mismo criterio que _offer_signo_amarillo_for_step_d) —
+	esta ventana no tenía botón ¿Paso? propio (se resolvía sola a los 8s vía
+	TriggerResolution._wait_for_response_window()), así que responder "No"
+	ahí adelantaba ese pase en vez de forzar la espera completa."""
+	if responding_player != 0:
+		return  # el bot no usa Signo Amarillo todavía
 	var signo_card := _find_signo_amarillo_in_reserve(responding_player)
 	if not signo_card:
 		return
 	var source_card: Node = trigger.get("card")
-	var card_name: String = str(source_card.card_name) if source_card and is_instance_valid(source_card) else "Habilidad"
-	var is_oro: bool = source_card and source_card.get("card_type") == Constants.CardType.ORO
-
-	var layer = CanvasLayer.new()
-	layer.layer = 90
-	_inspector._main.add_child(layer)
-	_trigger_response_overlay = layer
-	var panel = PanelContainer.new()
-	panel.set_anchor(SIDE_LEFT,   0.5)
-	panel.set_anchor(SIDE_TOP,    0.0)
-	panel.set_anchor(SIDE_RIGHT,  0.5)
-	panel.set_anchor(SIDE_BOTTOM, 0.0)
-	panel.set_offset(SIDE_LEFT,  -210)
-	panel.set_offset(SIDE_TOP,     8)
-	panel.set_offset(SIDE_RIGHT,  210)
-	panel.set_offset(SIDE_BOTTOM, 96)
-	layer.add_child(panel)
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 4)
-	panel.add_child(vbox)
-	var title = Label.new()
-	title.text = "⏸ Ventana de Respuesta"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
-	title.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(title)
-	var name_lbl = Label.new()
-	name_lbl.text = "%s (habilidad de %s)" % [card_name, "Oro" if is_oro else "fuera del juego"]
-	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_lbl.add_theme_font_size_override("font_size", 11)
-	name_lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
-	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(name_lbl)
-	var btn_row = HBoxContainer.new()
-	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	btn_row.add_theme_constant_override("separation", 12)
-	vbox.add_child(btn_row)
-	var btn_pass = Button.new()
-	btn_pass.text = "Pasar ▶"
-	btn_pass.pressed.connect(func():
-		TriggerSystem.pass_response()
-	)
-	btn_row.add_child(btn_pass)
-	var btn_signo = Button.new()
-	btn_signo.text = "Convertir Oro (cancelar)"
-	btn_signo.tooltip_text = "Convertir %s en un Oro sin habilidad para cancelar esta habilidad" % str(signo_card.card_name)
-	btn_signo.pressed.connect(func():
+	var card_name: String = str(source_card.card_name) if source_card and is_instance_valid(source_card) else "esta habilidad"
+	var use_it: bool = await SelectionManager.await_two_choice(
+		_inspector._main,
+		"¿Convertir %s en un Oro sin habilidad para cancelar %s?" % [str(signo_card.card_name), card_name],
+		"Sí, cancelar", "No")
+	if not TriggerSystem.awaiting_response:
+		return  # ya se resolvió solo (timeout de 8s) mientras decidías
+	if use_it:
 		signo_card.is_converted = true
 		TriggerSystem.cancel_current_trigger(signo_card)
-	)
-	btn_row.add_child(btn_signo)
-	panel.modulate.a = 0.0
-	var tw = _inspector.create_tween()
-	tw.tween_property(panel, "modulate:a", 1.0, 0.2)
-
-
-func _on_trigger_response_window_closed(_trigger: Dictionary, _was_cancelled: bool) -> void:
-	if _trigger_response_overlay and is_instance_valid(_trigger_response_overlay):
-		_trigger_response_overlay.queue_free()
-		_trigger_response_overlay = null
+	else:
+		TriggerSystem.pass_response()

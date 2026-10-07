@@ -12,6 +12,14 @@ var _main: Node = null
 
 func setup(main: Node) -> void:
 	_main = main
+	if EffectController and EffectController.has_signal("on_card_left_play"):
+		if not EffectController.on_card_left_play.is_connected(_on_card_left_play):
+			EffectController.on_card_left_play.connect(_on_card_left_play)
+
+
+func _on_card_left_play(_player_id: int, _card: Node, from_zone: int) -> void:
+	if from_zone in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
+		call_deferred("compact_all_fields", true)
 
 
 # =============================================================================
@@ -48,6 +56,22 @@ func draw_card(player_id: int = 0, animated: bool = true) -> bool:
 		card.owner_id = 1
 		card.controller_id = 1
 		_main._opponent_fan.add_card(card)
+		# 2026-09-14, bug real reportado por el usuario: "puedo hacer objetivo
+		# a mis Aliados pero no a los del rival", en TODAS las habilidades de
+		# objetivo sin excepción. Causa: a diferencia de la rama del jugador
+		# 0 (arriba), aquí nunca se llamaba _main._connect_card_signals(card)
+		# — card_clicked/card_double_clicked/etc. quedaban sin NINGÚN listener
+		# conectado desde el momento en que la carta se roba (incluida la
+		# mano inicial completa, ver draw_initial_hand() más abajo, que solo
+		# llama a esta misma función). El click SÍ llegaba a Card._on_gui_
+		# input() (can_interact quedaba en true vía _force_board_
+		# interactable()) y emitía la señal, pero nadie escuchaba — la carta
+		# se veía "brillando" como objetivo válido y el click no hacía nada,
+		# en cualquier ability que pidiera un objetivo en juego. Se arrastraba
+		# incluso después de que la carta pasara de la mano al campo (mismo
+		# Node reparentado, las conexiones de señal no se pierden pero nunca
+		# existieron para empezar).
+		_main._connect_card_signals(card)
 		_update_castillo_counts()
 		if animated:
 			await _animate_opponent_card_draw(card)
@@ -183,7 +207,7 @@ func _update_castillo_counts() -> void:
 	"""Actualiza los contadores de cartas en los Castillos."""
 	UIManager.sync_castillo_counts(_main.player_deck.size(), _main.opponent_deck.size())
 	# Único punto de verdad para "el Castillo cambió" (robo normal, Destierra
-	# N del tope de Aho, la habilidad de La Ouija, etc.) — refrescar acá el
+	# N del tope de Aho, la habilidad de La Ouija, etc.) — refrescar aquí el
 	# revelado del tope (2026-08-31) evita tener que llamarlo a mano en cada
 	# sitio que toca player_deck directo. Ver ZoneViewerModule.
 	# refresh_castillo_top_reveal().
@@ -193,7 +217,7 @@ func _update_castillo_counts() -> void:
 	# solo se chequeaba al INTENTAR robar con el mazo ya vacío (2026-08-31,
 	# reportado por el usuario: desterrar el Castillo rival a 0 con Aho no
 	# declaraba ganada la partida). Ver GameManager.check_victory() — ya
-	# tiene su propio guard is_game_active, no hace falta repetirlo acá.
+	# tiene su propio guard is_game_active, no hace falta repetirlo aquí.
 	GameManager.check_victory()
 
 
@@ -203,6 +227,271 @@ func shuffle_deck(player_id: int = 0) -> void:
 		_main.player_deck.shuffle()
 	else:
 		_main.opponent_deck.shuffle()
+
+
+# =============================================================================
+# ANIMACIONES CINEMÁTICAS DE SALIDA DE CARTAS
+# =============================================================================
+func get_zone_panel(zone_name: String, player_id: int) -> Control:
+	"""Devuelve el panel de la zona correspondiente (Castillo, Cementerio, Destierro)."""
+	if not _main:
+		return null
+	var area_name = "PlayerArea" if player_id == 0 else "OpponentArea"
+	var prefix = "Player" if player_id == 0 else "Opponent"
+	return _main.get_node_or_null("GameBoard/%s/%s%s" % [area_name, prefix, zone_name])
+
+
+func _pulse_zone_panel(panel: Control, color: Color) -> void:
+	"""Produce un pulso cinemático de escala y brillo en el pedestal de destino."""
+	if not is_instance_valid(panel):
+		return
+	panel.pivot_offset = panel.size / 2.0
+	var tw = panel.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(panel, "modulate", color, 0.10)
+	tw.tween_property(panel, "scale", Vector2(1.10, 1.10), 0.10)
+	tw.chain().set_parallel(true)
+	tw.tween_property(panel, "modulate", Color.WHITE, 0.20)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.20)
+
+
+func animate_card_return_to_deck(card: Node, player_id: int = 0) -> void:
+	"""Trayectoria parabólica 3D de vuelta al Castillo con giro sobre su eje (ocultando cara)."""
+	if not is_instance_valid(card) or not card.is_inside_tree() or not card.visible:
+		return
+	if not _main:
+		return
+
+	# Desactivar interacción durante el trayecto
+	if card.get("can_interact") != null:
+		card.can_interact = false
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	# Desacoplar de la mano o campo para reorganizar la formación de inmediato
+	if _main.player_hand and _main.player_hand.cards.has(card):
+		_main.player_hand.remove_card(card, false)
+	elif _main.get("_opponent_fan") and _main._opponent_fan and _main._opponent_fan.has_method("get_cards") and _main._opponent_fan.get_cards().has(card):
+		_main._opponent_fan.remove_card(card, false)
+	else:
+		var gb = _main.game_board if _main.get("game_board") else _main.get_node_or_null("GameBoard")
+		var old_parent = card.get_parent()
+		if gb and old_parent and old_parent != gb:
+			var cur_gpos = card.global_position
+			old_parent.remove_child(card)
+			gb.add_child(card)
+			card.global_position = cur_gpos
+			compact_all_fields(true)
+
+	var target_panel = get_zone_panel("Castillo", player_id)
+	var end_scale = Vector2(0.66, 0.66)
+	var fallback_y = 680.0 if player_id == 0 else 260.0
+	var target_pos = Vector2(1685.0, fallback_y)
+	if target_panel:
+		target_pos = target_panel.global_position + Vector2(
+			(target_panel.size.x - 150.0 * end_scale.x) / 2.0,
+			(target_panel.size.y - 210.0 * end_scale.y) / 2.0
+		)
+
+	var start_pos: Vector2 = card.global_position
+	var start_scale: Vector2 = card.scale
+
+	card.top_level = true
+	card.z_index = 500
+
+	var duration: float = 0.40
+	var arc_dir: float = -1.0 if player_id == 0 else 1.0
+	var tw = card.create_tween()
+
+	tw.tween_method(func(t: float):
+		if not is_instance_valid(card):
+			return
+		var ease_t = 1.0 - pow(1.0 - t, 2.8)
+		var current_x = lerpf(start_pos.x, target_pos.x, ease_t)
+		var base_y = lerpf(start_pos.y, target_pos.y, ease_t)
+		var arc_lift = arc_dir * sin(t * PI) * 110.0
+		card.global_position = Vector2(current_x, base_y + arc_lift)
+
+		var cur_scale_y = lerpf(start_scale.y, end_scale.y, t) + sin(t * PI) * 0.15
+
+		var flip_factor: float = 1.0
+		if t >= 0.35 and t <= 0.65:
+			var phase = (t - 0.35) / 0.30
+			flip_factor = absf(cos(phase * PI))
+			if t >= 0.50 and not card.esta_oculta:
+				card.esta_oculta = true
+				card.actualizar_aspecto()
+		elif t > 0.65:
+			if not card.esta_oculta:
+				card.esta_oculta = true
+				card.actualizar_aspecto()
+
+		card.scale = Vector2(cur_scale_y * flip_factor, cur_scale_y)
+	, 0.0, 1.0, duration).set_trans(Tween.TRANS_LINEAR)
+
+	await tw.finished
+
+	if is_instance_valid(card):
+		var sink_tw = card.create_tween().set_parallel(true)
+		sink_tw.tween_property(card, "scale", end_scale * 0.85, 0.08)
+		sink_tw.tween_property(card, "modulate:a", 0.0, 0.08)
+		await sink_tw.finished
+
+	if target_panel:
+		_pulse_zone_panel(target_panel, Color(1.0, 0.85, 0.3, 1.0))
+	_update_castillo_counts()
+
+
+func animate_card_exile(card: Node, player_id: int = 0) -> void:
+	"""Vuelo cósmico con aura mística púrpura/cian y desmaterialización astral hacia el Destierro."""
+	if not is_instance_valid(card) or not card.is_inside_tree() or not card.visible:
+		return
+	if not _main:
+		return
+
+	if card.get("can_interact") != null:
+		card.can_interact = false
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	if _main.player_hand and _main.player_hand.cards.has(card):
+		_main.player_hand.remove_card(card, false)
+	elif _main.get("_opponent_fan") and _main._opponent_fan and _main._opponent_fan.has_method("get_cards") and _main._opponent_fan.get_cards().has(card):
+		_main._opponent_fan.remove_card(card, false)
+	else:
+		var gb = _main.game_board if _main.get("game_board") else _main.get_node_or_null("GameBoard")
+		var old_parent = card.get_parent()
+		if gb and old_parent and old_parent != gb:
+			var cur_gpos = card.global_position
+			old_parent.remove_child(card)
+			gb.add_child(card)
+			card.global_position = cur_gpos
+			compact_all_fields(true)
+
+	var target_panel = get_zone_panel("Destierro", player_id)
+	var end_scale = Vector2(0.35, 0.35)
+	var fallback_y = 850.0 if player_id == 0 else 90.0
+	var target_pos = Vector2(1805.0, fallback_y)
+	if target_panel:
+		target_pos = target_panel.global_position + Vector2(
+			(target_panel.size.x - 150.0 * end_scale.x) / 2.0,
+			(target_panel.size.y - 210.0 * end_scale.y) / 2.0
+		)
+
+	var start_pos: Vector2 = card.global_position
+	var start_scale: Vector2 = card.scale
+
+	card.top_level = true
+	card.z_index = 500
+
+	var duration: float = 0.44
+	var target_rotation: float = deg_to_rad(15.0 if player_id == 0 else -15.0)
+	var arc_dir: float = -1.0 if player_id == 0 else 1.0
+	var tw = card.create_tween()
+
+	tw.tween_method(func(t: float):
+		if not is_instance_valid(card):
+			return
+		var ease_t = 1.0 - pow(1.0 - t, 2.5)
+		var current_x = lerpf(start_pos.x, target_pos.x, ease_t)
+		var base_y = lerpf(start_pos.y, target_pos.y, ease_t)
+		var arc_lift = arc_dir * sin(t * PI) * 85.0
+		card.global_position = Vector2(current_x, base_y + arc_lift)
+
+		var s = lerpf(start_scale.x, end_scale.x, ease_t)
+		card.scale = Vector2(s, s)
+		card.rotation = lerpf(0.0, target_rotation, ease_t)
+
+		var alpha = 1.0
+		if t > 0.40:
+			alpha = clampf(1.0 - (t - 0.40) / 0.60, 0.0, 1.0)
+		var cosmic_glow = Color(1.2, 0.7, 1.8, alpha)
+		card.modulate = cosmic_glow
+	, 0.0, 1.0, duration).set_trans(Tween.TRANS_LINEAR)
+
+	await tw.finished
+
+	if target_panel:
+		_pulse_zone_panel(target_panel, Color(0.85, 0.45, 1.0, 1.0))
+	UIManager.update_destierro_count(player_id, CardManager.get_exile_count(player_id))
+
+
+func animate_card_to_cemetery(card: Node, player_id: int = 0) -> void:
+	"""Sacudida de impacto sombrío y vuelo en arco directo hacia el Cementerio descendiendo a la cripta."""
+	if not is_instance_valid(card) or not card.is_inside_tree() or not card.visible:
+		return
+	if not _main:
+		return
+
+	if card.get("can_interact") != null:
+		card.can_interact = false
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	if _main.player_hand and _main.player_hand.cards.has(card):
+		_main.player_hand.remove_card(card, false)
+	elif _main.get("_opponent_fan") and _main._opponent_fan and _main._opponent_fan.has_method("get_cards") and _main._opponent_fan.get_cards().has(card):
+		_main._opponent_fan.remove_card(card, false)
+	else:
+		var gb = _main.game_board if _main.get("game_board") else _main.get_node_or_null("GameBoard")
+		var old_parent = card.get_parent()
+		if gb and old_parent and old_parent != gb:
+			var cur_gpos = card.global_position
+			old_parent.remove_child(card)
+			gb.add_child(card)
+			card.global_position = cur_gpos
+			compact_all_fields(true)
+
+	var target_panel = get_zone_panel("Cementerio", player_id)
+	var end_scale = Vector2(0.66, 0.66)
+	var fallback_y = 680.0 if player_id == 0 else 260.0
+	var target_pos = Vector2(1805.0, fallback_y)
+	if target_panel:
+		target_pos = target_panel.global_position + Vector2(
+			(target_panel.size.x - 150.0 * end_scale.x) / 2.0,
+			(target_panel.size.y - 210.0 * end_scale.y) / 2.0
+		)
+
+	var start_pos: Vector2 = card.global_position
+	var start_scale: Vector2 = card.scale
+
+	card.top_level = true
+	card.z_index = 500
+
+	# 1. Sacudida de impacto sombrío
+	var shudder_tw = card.create_tween()
+	var shake_offset = Vector2(randf_range(-5.0, 5.0), randf_range(-4.0, 4.0))
+	shudder_tw.tween_property(card, "global_position", start_pos + shake_offset, 0.04)
+	shudder_tw.parallel().tween_property(card, "modulate", Color(0.6, 0.58, 0.65, 1.0), 0.04)
+	shudder_tw.chain().tween_property(card, "global_position", start_pos, 0.03)
+	await shudder_tw.finished
+
+	if not is_instance_valid(card):
+		return
+
+	# 2. Vuelo en arco y hundimiento en la cripta
+	var duration: float = 0.36
+	var arc_dir: float = -1.0 if player_id == 0 else 1.0
+	var tw = card.create_tween()
+
+	tw.tween_method(func(t: float):
+		if not is_instance_valid(card):
+			return
+		var ease_t = 1.0 - pow(1.0 - t, 2.6)
+		var current_x = lerpf(start_pos.x, target_pos.x, ease_t)
+		var base_y = lerpf(start_pos.y, target_pos.y, ease_t)
+		var arc_lift = arc_dir * sin(t * PI) * 90.0
+		card.global_position = Vector2(current_x, base_y + arc_lift)
+
+		var s = lerpf(start_scale.x, end_scale.x, ease_t)
+		card.scale = Vector2(s, s)
+
+		if t > 0.75:
+			card.modulate.a = clampf(1.0 - (t - 0.75) / 0.25, 0.0, 1.0)
+	, 0.0, 1.0, duration).set_trans(Tween.TRANS_LINEAR)
+
+	await tw.finished
+
+	if target_panel:
+		_pulse_zone_panel(target_panel, Color(0.75, 0.75, 0.85, 1.0))
+	UIManager.update_cementerio_count(player_id, CardManager.get_cemetery_count(player_id))
 
 
 func move_card(from_zone: Constants.Zone, to_zone: Constants.Zone, amount: int = 1) -> void:
@@ -429,74 +718,22 @@ func _get_associated_attack_container(container: Control) -> Control:
 
 
 func pin_card_to_field_slot(card: Node, container: Control) -> Vector2:
-	"""Asigna a 'card' un slot fijo dentro de 'container' (Línea de Defensa o
-	de Apoyo), la desacopla del layout del HBoxContainer para siempre
-	(top_level=true) y deja su global_position en ese slot.
-	Elige el slot libre más cercano al centro y preserva los slots de cartas que
-	están atacando en la Línea de Ataque para que ninguna otra carta se mueva en X a su puesto."""
+	"""Asigna a 'card' su slot en 'container' (Línea de Defensa o de Apoyo),
+	desacoplándola del layout del HBoxContainer (top_level=true), compactando
+	y separando limpiamente a todas las cartas de la mesa con espacio positivo
+	para evitar cualquier superposición."""
 	if not is_instance_valid(card) or not container:
 		return card.global_position if is_instance_valid(card) else Vector2.ZERO
 
-	var max_slots: int = maxi(1, int(container.size.x / _FIELD_SLOT_WIDTH))
-	var base_container: Control = _get_base_field_container(container)
-	var occupants: Array = _field_slot_occupants.get(base_container, [])
-	occupants.resize(max_slots)
-
-	# Si la carta ya tenía un slot asignado en este campo y sigue siendo válido, conservarlo
-	var existing_slot: int = card.get_meta("field_slot_index", -1)
-	var slot_index: int = -1
-	if existing_slot >= 0 and existing_slot < max_slots and (occupants[existing_slot] == card or occupants[existing_slot] == null):
-		slot_index = existing_slot
-	else:
-		var atk_container = _get_associated_attack_container(base_container)
-		for i in range(max_slots):
-			var occ = occupants[i]
-			if occ != null:
-				var is_valid_occ = is_instance_valid(occ) and (occ.get_parent() == base_container or (atk_container and occ.get_parent() == atk_container))
-				if not is_valid_occ:
-					occupants[i] = null
-
-		var center: float = (max_slots - 1) / 2.0
-		var order: Array = range(max_slots)
-		order.sort_custom(func(a, b): return absf(a - center) < absf(b - center))
-
-		for i in order:
-			if occupants[i] == null or occupants[i] == card:
-				slot_index = i
-				break
-
-	if slot_index == -1:
-		slot_index = 0
-
-	occupants[slot_index] = card
-	_field_slot_occupants[base_container] = occupants
-	card.set_meta("field_slot_index", slot_index)
-
-	var center_val: float = (max_slots - 1) / 2.0
-	var target_scale: Vector2 = Vector2(0.8, 0.8) if card.get("card_type") == Constants.CardType.TOTEM else Vector2.ONE
-	var card_size: Vector2 = (card.custom_minimum_size if card.custom_minimum_size != Vector2.ZERO else Vector2(150.0, 210.0)) * target_scale
-	var local_center_x: float = container.size.x / 2.0 + (slot_index - center_val) * _FIELD_SLOT_WIDTH
-	var local_pos: Vector2 = Vector2(
-		local_center_x - card_size.x / 2.0,
-		(container.size.y - card_size.y) / 2.0
-	)
-	card.top_level = true
-	var target_pos: Vector2 = container.global_position + local_pos
-	card.set_meta("field_slot_x", target_pos.x)
-	card.set_meta("field_slot_pos", target_pos)
-	card.global_position = target_pos
-	if card.has_method("set_click_clip_right"):
-		card.set_click_clip_right(-1.0)
-
-	card._refresh_disabled_rotation()
-	return target_pos
+	return compact_field_slots(container, true, card)
 
 
-func compact_field_slots(container: Control, animate: bool = true) -> void:
+func compact_field_slots(container: Control, animate: bool = true, exclude_anim_card: Node = null) -> Vector2:
 	"""Reordena y compacta de izquierda a derecha (centrado continuo) todos los aliados/tótems
-	que quedan en juego cuando una carta abandona el campo, rellenando los espacios vacíos."""
+	en juego, garantizando una separación fija y limpia (_FIELD_SLOT_WIDTH) sin solapamiento alguno.
+	Si exclude_anim_card se especifica, calcula su target_pos sin interrumpir la animación del llamador."""
 	if not container or not _main:
-		return
+		return Vector2.ZERO
 	var base_container: Control = _get_base_field_container(container)
 	var atk_container: Control = _get_associated_attack_container(base_container)
 
@@ -509,14 +746,17 @@ func compact_field_slots(container: Control, animate: bool = true) -> void:
 			if is_instance_valid(child) and not child.is_queued_for_deletion():
 				active_cards.append(child)
 
+	if exclude_anim_card and is_instance_valid(exclude_anim_card) and exclude_anim_card not in active_cards:
+		active_cards.append(exclude_anim_card)
+
 	if active_cards.is_empty():
 		_field_slot_occupants[base_container] = []
-		return
+		return Vector2.ZERO
 
-	# Ordenar de izquierda a derecha según su posición X actual
+	# Ordenar de izquierda a derecha según su posición X asignada o actual
 	active_cards.sort_custom(func(a, b):
-		var pos_a: float = a.get_meta("field_slot_x", a.global_position.x)
-		var pos_b: float = b.get_meta("field_slot_x", b.global_position.x)
+		var pos_a: float = a.get_meta("field_slot_x", a.global_position.x if is_instance_valid(a) else 0.0)
+		var pos_b: float = b.get_meta("field_slot_x", b.global_position.x if is_instance_valid(b) else 0.0)
 		return pos_a < pos_b
 	)
 
@@ -527,6 +767,7 @@ func compact_field_slots(container: Control, animate: bool = true) -> void:
 
 	var new_occupants: Array = []
 	new_occupants.resize(max_slots)
+	var returned_target_pos: Vector2 = Vector2.ZERO
 
 	for i in range(count):
 		var card: Node = active_cards[i]
@@ -538,26 +779,47 @@ func compact_field_slots(container: Control, animate: bool = true) -> void:
 		var card_parent: Control = card.get_parent() as Control
 		var current_container: Control = card_parent if (card_parent == atk_container or card_parent == base_container) else base_container
 		var target_y: float = current_container.global_position.y + (current_container.size.y - card_size.y) / 2.0
+		var target_pos: Vector2 = Vector2(target_x, target_y)
 
+		card.top_level = true
 		var int_slot: int = int(round(slot_pos_idx))
 		if int_slot >= 0 and int_slot < max_slots:
 			new_occupants[int_slot] = card
 		card.set_meta("field_slot_index", int_slot)
 		card.set_meta("field_slot_x", target_x)
-		var current_pos: Vector2 = card.global_position
-		card.set_meta("field_slot_pos", Vector2(target_x, target_y))
+		card.set_meta("field_slot_pos", target_pos)
 
-		card._refresh_disabled_rotation()
+		if card.has_method("set_click_clip_right"):
+			card.set_click_clip_right(-1.0)
+		if card.has_method("_refresh_disabled_rotation"):
+			card._refresh_disabled_rotation()
 
-		if animate and (absf(current_pos.x - target_x) > 1.0 or absf(current_pos.y - target_y) > 1.0):
-			var tw = card.create_tween()
-			tw.set_parallel(true)
-			tw.tween_property(card, "global_position:x", target_x, 0.28).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-			tw.tween_property(card, "global_position:y", target_y, 0.28).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
-		elif not animate:
-			card.global_position = Vector2(target_x, target_y)
+		# Revalidar posición de armas equipadas en el Aliado
+		if "equipped_weapons" in card and card.equipped_weapons is Array:
+			for w_idx in range(card.equipped_weapons.size()):
+				var w: Node = card.equipped_weapons[w_idx]
+				if is_instance_valid(w):
+					w.top_level = false
+					w.position = Vector2(0.0, Constants.WEAPON_OFFSET_Y + w_idx * Constants.WEAPON_STACK_STEP_Y)
+					if "base_scale" in card and "base_scale" in w:
+						w.scale = card.base_scale
+						w.base_scale = card.base_scale
+
+		if card == exclude_anim_card:
+			card.global_position = target_pos
+			returned_target_pos = target_pos
+		else:
+			var current_pos: Vector2 = card.global_position
+			if animate and (absf(current_pos.x - target_x) > 1.0 or absf(current_pos.y - target_y) > 1.0):
+				var tw = card.create_tween()
+				tw.set_parallel(true)
+				tw.tween_property(card, "global_position:x", target_x, 0.28).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+				tw.tween_property(card, "global_position:y", target_y, 0.28).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+			elif not animate:
+				card.global_position = target_pos
 
 	_field_slot_occupants[base_container] = new_occupants
+	return returned_target_pos
 
 
 func compact_all_fields(animate: bool = true) -> void:

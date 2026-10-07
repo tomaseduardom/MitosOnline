@@ -67,8 +67,23 @@ var _card_name_search: RefCounted
 ## el comentario de arriba sobre CardNameSearchDialogScript.
 const DrawShuffleResolverScript = preload("res://scripts/core/effects/triggers/DrawShuffleResolver.gd")
 const ConvertAndMiscResolverScript = preload("res://scripts/core/effects/triggers/ConvertAndMiscResolver.gd")
+## Patrones de Tótems detectados sin cobertura en la auditoría de 539 cartas
+## (2026-09-20, ver arquitectura.md) — script nuevo de esta sesión, preload()
+## por el mismo motivo que CardNameSearchDialogScript arriba.
+const TotemAbilityPatternsScript = preload("res://scripts/core/effects/triggers/TotemAbilityPatterns.gd")
+## Patrones de Armas detectados sin cobertura en la misma auditoría de 539
+## cartas (2026-09-20) — mismo criterio y mismo motivo de preload() que
+## TotemAbilityPatternsScript arriba.
+const WeaponAbilityPatternsScript = preload("res://scripts/core/effects/triggers/WeaponAbilityPatterns.gd")
+## Patrones de Oros detectados sin cobertura en la misma auditoría de 539
+## cartas (2026-09-20) — mismo criterio y mismo motivo de preload() que
+## TotemAbilityPatternsScript/WeaponAbilityPatternsScript arriba.
+const OroAbilityPatternsScript = preload("res://scripts/core/effects/triggers/OroAbilityPatterns.gd")
 var _draw_shuffle_resolver: RefCounted
 var _convert_misc_resolver: RefCounted
+var _totem_patterns: RefCounted
+var _weapon_patterns: RefCounted
+var _oro_patterns: RefCounted
 
 
 func _ready() -> void:
@@ -80,6 +95,12 @@ func _ready() -> void:
 	_draw_shuffle_resolver.setup(_targeted_executor)
 	_convert_misc_resolver = ConvertAndMiscResolverScript.new()
 	_convert_misc_resolver.setup(_targeted_executor)
+	_totem_patterns = TotemAbilityPatternsScript.new()
+	_totem_patterns.setup(self)
+	_weapon_patterns = WeaponAbilityPatternsScript.new()
+	_weapon_patterns.setup(self)
+	_oro_patterns = OroAbilityPatternsScript.new()
+	_oro_patterns.setup(self)
 	_restrictions = TriggerRestrictions.new()
 	_restrictions.setup(self)
 	_buffs = TemporaryBuffSystem.new()
@@ -90,7 +111,7 @@ func _ready() -> void:
 	_card_name_search.setup(self)
 
 	# Conectar a señales de EffectController para recolectar triggers.
-	# on_card_entered_play y on_card_attacks NO se conectan acá — esos dos
+	# on_card_entered_play y on_card_attacks NO se conectan aquí — esos dos
 	# los llama el código que juega/ataca directamente (GoldManager,
 	# GameManager) con 'await', para que el trigger termine de resolverse
 	# ANTES de que el juego siga de fase. Conectados por señal (fire-and-
@@ -156,11 +177,11 @@ func end_collecting_and_queue() -> void:
 
 func _prompt_trigger_order(triggers: Array[Dictionary]) -> Array[Dictionary]:
 	"""Deja elegir al jugador el orden de resolución entre varios triggers
-	simultáneos propios — reutiliza que SelectionManager.await_multi_pick()
-	preserva el ORDEN DE CLICK (mismo truco que usa Infernum Vox para
-	'mirar 6 y repartir/ordenar entre tope y fondo'): forzar max=min=total
-	convierte la selección en un simple 'elegí el orden clickeando', sin
-	necesitar ninguna UI de arrastre nueva.
+	simultáneos propios clickeando DIRECTO sobre las cartas reales que van
+	a disparar (2026-09-13, a pedido del usuario: 'hacer click en la carta
+	que vaya a disparar... luego en la siguiente y así', en vez del modal
+	de lista viejo) — cada carta con un trigger pendiente ya es un Nodo
+	real y visible en juego, no hace falta ningún dato intermedio.
 	Returns: los mismos triggers, en el orden elegido (o el orden original
 	si algo falla, para no perder ningún trigger en el camino).
 
@@ -169,24 +190,33 @@ func _prompt_trigger_order(triggers: Array[Dictionary]) -> Array[Dictionary]:
 	pending_active_triggers, que SÍ está tipado Array[Dictionary]; GDScript
 	rechaza en tiempo de ejecución asignar un Array sin tipar a una variable
 	tipada, aunque el contenido real fueran todo Dictionary."""
-	var candidates: Array[Dictionary] = []
-	var by_data: Dictionary = {}
+	var main := get_node_or_null("/root/Main")
+	if not main or not main._card_interaction:
+		return triggers
+	var candidates: Array = []
+	var by_card: Dictionary = {}
 	for t in triggers:
 		var card: Node = t.get("card")
-		if not is_instance_valid(card) or card.get("card_data") == null:
+		if not is_instance_valid(card):
 			return triggers  # falta algo para armar el picker — no arriesgar el orden
-		var data: Dictionary = card.card_data
-		candidates.append(data)
-		by_data[data] = t
+		candidates.append(card)
+		by_card[card] = t
 
-	var result: Dictionary = await SelectionManager.await_multi_pick(
-		candidates, "Elige el orden en que se resuelven (primero la que quieras que actúe antes)",
-		candidates.size(), candidates.size(), false)
+	# cancellable=false (mismo criterio que descartes mandatorios, ver
+	# arquitectura.md §10.29): el orden hay que elegirlo entero, ESC a
+	# mitad de camino perdería triggers reales sin resolver.
+	# glow_color_override = dorado (2026-09-15, a pedido del usuario): esto
+	# no es "elegir un objetivo propio/rival" (celeste/rojo, el default) —
+	# son triggers PROPIOS ya disparados esperando orden, mismo significado
+	# que el brillo dorado de "habilidad activable disponible".
+	var chosen: Array = await main._card_interaction.await_multi_target(
+		"Elige el orden en que se resuelven (clickea primero la que quieras que actúe antes)",
+		candidates, candidates.size(), Callable(), Callable(), false, CardBadges.GLOW_COLOR_GOLD)
 
 	var ordered: Array[Dictionary] = []
-	for data in result.picked:
-		if by_data.has(data):
-			ordered.append(by_data[data])
+	for card in chosen:
+		if by_card.has(card):
+			ordered.append(by_card[card])
 	return ordered if ordered.size() == triggers.size() else triggers
 
 
@@ -244,7 +274,7 @@ func resolve_talisman(card: Node) -> bool:
 	"""Resuelve el efecto impreso de un Talismán al jugarlo (DAR Sección 8).
 	A diferencia de una habilidad disparada (Sección 7.4), un Talismán no
 	'dispara' nada — su texto ES el efecto de jugarlo, se resuelve directo
-	acá, sin pasar por has_trigger(), register_trigger() ni la cola
+	aquí, sin pasar por has_trigger(), register_trigger() ni la cola
 	compartida de triggers (2026-08-27, a pedido del usuario). Llamado
 	desde GoldManager._trigger_enter_play() para cartas tipo TALISMAN.
 
@@ -266,6 +296,12 @@ func resolve_talisman(card: Node) -> bool:
 		return false
 	var controller_id: int = card.get("owner_id") if card.get("owner_id") != null else 0
 	if await open_response_window(card, str(card.card_name) if card.get("card_name") else "", controller_id):
+		return true
+	# kotoku-in (2026-09-20): "el próximo Talismán que juegue tu oponente
+	# este turno se resuelva sin efecto" — se consume ANTES de resolver,
+	# mismo canal de retorno que Anular/Cancelar (true = va al Cementerio
+	# sin resolver su efecto).
+	if _totem_patterns.consume_kotoku_in_talisman_fizzle(controller_id):
 		return true
 	await _resolution._resolve_look_and_play_patterns(card, ability_text, ability_text, controller_id, {"card": card})
 	return false
@@ -312,7 +348,7 @@ func _collect_triggers_for_event(event_type: String, event_data: Dictionary) -> 
 	encolar SOBRE la misma cola que el primer resolve_all_triggers() todavía
 	estaba vaciando en su propio bucle — dos bucles compitiendo por el mismo
 	trigger_queue. Resultado real reportado: el efecto del oro se resolvía
-	recién al intentar atacar, y la ventana de prioridad quedaba en un estado
+	solo al intentar atacar, y la ventana de prioridad quedaba en un estado
 	que ya no dejaba pasar. Se espera a que la recolección/resolución anterior
 	termine antes de empezar una nueva — así siempre queda serializado."""
 	# Reentrada segura (2026-08-23): si esta llamada ocurre DENTRO de la
@@ -387,7 +423,7 @@ func _collect_triggers_for_event(event_type: String, event_data: Dictionary) -> 
 		# event_card puede llegar ya liberada (p.ej. una carta que salió de
 		# juego) — _get_related_triggers() declara 'event_card: Node'
 		# tipado, y pasarle una instancia liberada tira un error de tipo en
-		# Godot ("previously freed") que corta la función ACÁ MISMO, antes
+		# Godot ("previously freed") que corta la función AQUÍ MISMO, antes
 		# de llegar a end_collecting_and_queue() (2026-08-26 — causa real de
 		# que is_collecting quedara trabado en true para siempre y ningún
 		# trigger volviera a dispararse en lo que quedaba de partida). El
@@ -417,7 +453,7 @@ func _collect_triggers_for_event(event_type: String, event_data: Dictionary) -> 
 	# Si hay triggers, resolverlos — con 'await': sin esto, esta función
 	# volvía a quien la llamó apenas EMPEZABA a resolver, no cuando terminaba
 	# (ese era el resto del bug de Drácula/Signo Amarillo resolviendo fases
-	# después de jugarse — la cadena de espera se cortaba justo acá).
+	# después de jugarse — la cadena de espera se cortaba justo aquí).
 	#
 	# EXCEPTO si esta recolección fue anidada (ver guardia de reentrada más
 	# arriba): en ese caso NO se llama a resolve_all_triggers() de nuevo —
@@ -425,7 +461,7 @@ func _collect_triggers_for_event(event_type: String, event_data: Dictionary) -> 
 	# triggers, un 'while not trigger_queue.is_empty()') ya sigue drenando
 	# la cola sola y va a recoger lo que acabamos de encolar en su próxima
 	# vuelta, apenas esta cadena de await retorne. Lanzar OTRO
-	# resolve_all_triggers() acá competiría por la misma cola compartida.
+	# resolve_all_triggers() aquí competiría por la misma cola compartida.
 	if not is_nested_reentry and has_pending_triggers():
 		await resolve_all_triggers()
 
@@ -669,7 +705,7 @@ func _check_trigger_conditions(card: Node, trigger_type: String, event_data: Dic
 	if _named_trigger_already_used_this_turn(card):
 		return false
 	# Tamales: 'tu oponente... ni disparar' (2026-09-04) — mismo chequeo
-	# que _validate_ability() usa para habilidades ACTIVADAS, acá para
+	# que _validate_ability() usa para habilidades ACTIVADAS, aquí para
 	# DISPARADAS. No bloquea auras/efectos continuos (esos no pasan por
 	# este choke point).
 	if not ContinuousEffectManager.tamales_ability_restriction_reason(card).is_empty():
@@ -688,10 +724,10 @@ func _named_trigger_already_used_this_turn(card: Node) -> bool:
 	compartida entre TODAS las copias que entren ese turno, no por
 	instancia. turn_registry ya evita el reuso de una habilidad ACTIVADA
 	por card_id/ability_index (CardInspectionLayer._validate_ability()),
-	pero nunca se consultaba desde acá para TRIGGERs — este es el único
+	pero nunca se consultaba desde aquí para TRIGGERs — este es el único
 	choke point real por el que pasa cualquier trigger antes de encolarse
 	(ver register_trigger() más abajo), así que alcanza con chequear Y
-	registrar acá mismo, una sola vez por intento de disparo real."""
+	registrar aquí mismo, una sola vez por intento de disparo real."""
 	if card.get("card_data") == null:
 		return false
 	var habilidad_text: String = card.card_data.get("habilidad", "")
@@ -764,7 +800,8 @@ func bind_card_to_triggers(card: Node) -> void:
 	if card.has_method("parse_triggers_from_ability"):
 		card.parse_triggers_from_ability()
 
-	print("[TriggerSystem] Carta %s vinculada al sistema de triggers" % card.card_name)
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[TriggerSystem] Carta %s vinculada al sistema de triggers" % card.card_name)
 
 
 # =============================================================================
@@ -856,5 +893,5 @@ func resolve_ability_effect(card: Node, effect_text: String, controller_id: int)
 	return await _resolution._resolve_look_and_play_patterns(card, effect_text, effect_text, controller_id, {})
 
 
-func _select_hand_cards_for_discard(hand_cards: Array, amount: int) -> Array:
-	return await _targeted_executor._select_hand_cards_for_discard(hand_cards, amount)
+func _select_hand_cards_for_discard(hand_cards: Array, amount: int, chooser_id: int = 0) -> Array:
+	return await _targeted_executor._select_hand_cards_for_discard(hand_cards, amount, chooser_id)

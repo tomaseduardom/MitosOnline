@@ -24,6 +24,13 @@ var player_passed: Array[bool] = [false, false]
 ## Indica si hay una ventana de prioridad activa
 var priority_window_active: bool = false
 
+## 2026-09-11: true mientras hay un diálogo reactivo real esperando decisión
+## del humano (p.ej. Signo Amarillo, ResponseWindowHandler) — el auto-pase
+## "no hay nada que decidir aquí" (PhaseFlowController/ResponseWindowHandler)
+## lo respeta para no cerrar la ventana por abajo mientras el diálogo sigue
+## abierto esperando un click.
+var suppress_human_autopass: bool = false
+
 ## Contexto actual de la prioridad (para UI)
 var current_context: String = ""
 
@@ -42,6 +49,22 @@ enum PriorityContext {
 }
 
 var current_priority_context: int = PriorityContext.NONE
+
+## Contador que sube en CADA start_priority_window() (2026-09-15, bug real
+## reportado por el usuario: "se traba en Guerra de Talismanes" — con log
+## en vivo confirmando visible=true dos veces seguidas y luego, sin ningún
+## click del jugador, priority_window_active=false). Causa real:
+## PhaseFlowController._human_pass_after()/_bot_pass_after() son timers de
+## 0.2s "fire and forget" — si la ventana para la que se programaron (p.ej.
+## la Ventana de Respuesta corta de un trigger 'cuando entra en juego') ya
+## se cerró SOLA antes de que el timer termine, el timer sigue vivo y
+## dispara tarde sobre lo que sea que esté activo en ESE momento — si para
+## entonces ya abrió una ventana NUEVA (p.ej. Guerra de Talismanes) con el
+## mismo jugador con prioridad, el timer viejo le pasa la prioridad SIN que
+## el jugador haya hecho nada. Los llamadores capturan esta generación al
+## programarse y la comparan al disparar — si cambió, la ventana para la
+## que se programaron ya no es la actual, no hacen nada.
+var _window_generation: int = 0
 
 
 func _ready() -> void:
@@ -63,6 +86,7 @@ func start_priority_window(context: int, starting_player: int = -1) -> void:
 	current_priority_context = context
 	player_passed = [false, false]
 	priority_window_active = true
+	_window_generation += 1
 
 	# Determinar quién empieza según contexto
 	if starting_player >= 0:
@@ -74,9 +98,10 @@ func start_priority_window(context: int, starting_player: int = -1) -> void:
 	valid_actions = _get_valid_actions_for_context(context)
 	current_context = _get_context_name(context)
 
-	print("[PriorityManager] Ventana de prioridad: %s - Jugador %d" % [
-		current_context, current_priority_player + 1
-	])
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[PriorityManager] Ventana de prioridad: %s - Jugador %d" % [
+			current_context, current_priority_player + 1
+		])
 
 	emit_signal("priority_window_opened", current_priority_player, current_context)
 	emit_signal("priority_changed", current_priority_player)
@@ -186,14 +211,16 @@ func pass_priority() -> void:
 	var passing_player = current_priority_player
 	player_passed[passing_player] = true
 
-	print("[PriorityManager] Jugador %d pasa prioridad" % (passing_player + 1))
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[PriorityManager] Jugador %d pasa prioridad" % (passing_player + 1))
 	emit_signal("priority_passed", passing_player)
 
 	# Verificar si ambos han pasado consecutivamente (DAR 5.C3: pila vacía →
 	# la fase termina — este motor no usa una pila de efectos real en
 	# PriorityManager, ver ActionPipeline para la pila LIFO que sí se usa).
 	if player_passed[0] and player_passed[1]:
-		print("[PriorityManager] Ambos jugadores pasaron consecutivamente → Fase termina")
+		if Constants.VERBOSE_DIAG_LOGS:
+			print("[PriorityManager] Ambos jugadores pasaron consecutivamente → Fase termina")
 		emit_signal("both_players_passed")
 		_close_priority_window(false)  # false: señal ya emitida arriba, evitar doble disparo
 		return
@@ -207,9 +234,10 @@ func _switch_priority() -> void:
 	var old_player = current_priority_player
 	current_priority_player = 1 - current_priority_player
 
-	print("[PriorityManager] Prioridad: Jugador %d → Jugador %d" % [
-		old_player + 1, current_priority_player + 1
-	])
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[PriorityManager] Prioridad: Jugador %d → Jugador %d" % [
+			old_player + 1, current_priority_player + 1
+		])
 
 	emit_signal("priority_changed", current_priority_player)
 

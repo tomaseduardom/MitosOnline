@@ -141,7 +141,7 @@ func get_destierro_count(player_id: int) -> int:
 
 
 func update_oro_reserva(player_id: int, amount: int) -> void:
-	var text = "RESERVA: %d" % amount
+	var text = "RESERVA · %d" % amount
 	if player_id == 0:
 		_blink_label(player_oro_reserva_label, text)
 	else:
@@ -149,7 +149,7 @@ func update_oro_reserva(player_id: int, amount: int) -> void:
 
 
 func update_oro_pagado(player_id: int, amount: int) -> void:
-	var text = "PAGADO: %d" % amount
+	var text = "PAGADO · %d" % amount
 	if player_id == 0:
 		_blink_label(player_oro_pagado_label, text)
 	else:

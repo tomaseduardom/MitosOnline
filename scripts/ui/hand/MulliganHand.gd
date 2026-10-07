@@ -19,7 +19,7 @@ signal card_right_clicked(card: Node)
 # =============================================================================
 @export var entry_duration: float = 0.4  # Duración de animación de entrada
 @export var entry_delay_per_card: float = 0.08  # Delay entre cada carta
-@export var hover_scale: float = 1.18  # Escala moderada al hover; la inspección de cerca se hace con click derecho
+@export var hover_scale: float = 1.06  # Escala sutil al hover; la inspección de cerca se hace con click derecho
 @export var hover_duration: float = 0.15  # Duración del hover
 
 # =============================================================================
@@ -339,7 +339,7 @@ func _on_card_hovered(card: Node) -> void:
 	var tween = create_tween()
 	tween.set_parallel(true)
 	tween.tween_property(card, "scale", target.scale * hover_scale, hover_duration).set_ease(Tween.EASE_OUT)
-	tween.tween_property(card, "position:y", target.position.y - 14.0, hover_duration).set_ease(Tween.EASE_OUT)
+	tween.tween_property(card, "position:y", target.position.y - 5.0, hover_duration).set_ease(Tween.EASE_OUT)
 	_tweens[card] = tween
 
 	emit_signal("card_hovered", card)

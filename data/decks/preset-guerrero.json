@@ -1,0 +1,144 @@
+{
+    "slug": "preset-guerrero",
+    "nombre": "Guerrero meh (publico)",
+    "arquetipo": "Guerrero",
+    "formato": "imp",
+    "entries": [
+        {
+            "myl_id": "20593",
+            "quantity": 2
+        },
+        {
+            "myl_id": "20812",
+            "quantity": 2
+        },
+        {
+            "myl_id": "20857",
+            "quantity": 1
+        },
+        {
+            "myl_id": "20345",
+            "quantity": 1
+        },
+        {
+            "myl_id": "20275",
+            "quantity": 1
+        },
+        {
+            "myl_id": "20296",
+            "quantity": 1
+        },
+        {
+            "myl_id": "20578",
+            "quantity": 1
+        },
+        {
+            "myl_id": "19888",
+            "quantity": 1
+        },
+        {
+            "myl_id": "19020",
+            "quantity": 1
+        },
+        {
+            "myl_id": "18987",
+            "quantity": 1
+        },
+        {
+            "myl_id": "18781",
+            "quantity": 2
+        },
+        {
+            "myl_id": "custom_tk26_20",
+            "quantity": 2
+        },
+        {
+            "myl_id": "custom_mig_14",
+            "quantity": 3
+        },
+        {
+            "myl_id": "custom_mig_15",
+            "quantity": 2
+        },
+        {
+            "myl_id": "custom_mig_22",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mig_27",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mig_29",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mig_31",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mig_33",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mig_34",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mig_35",
+            "quantity": 2
+        },
+        {
+            "myl_id": "custom_mig_37",
+            "quantity": 2
+        },
+        {
+            "myl_id": "custom_mid_27",
+            "quantity": 2
+        },
+        {
+            "myl_id": "custom_mid_33",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mid_34",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mid_38",
+            "quantity": 3
+        },
+        {
+            "myl_id": "custom_mid_39",
+            "quantity": 2
+        },
+        {
+            "myl_id": "custom_mid_42",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mig_03",
+            "quantity": 2
+        },
+        {
+            "myl_id": "custom_mig_10",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_mig_12",
+            "quantity": 2
+        },
+        {
+            "myl_id": "cbg001",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_aydv_xl004",
+            "quantity": 1
+        },
+        {
+            "myl_id": "custom_aydv_xl006",
+            "quantity": 2
+        }
+    ]
+}

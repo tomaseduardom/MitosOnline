@@ -28,10 +28,14 @@ func _activate_aho_banish_ally_and_deck(source_card: Node, ability: Dictionary) 
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
 	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
+		# 2026-09-30: a diferencia de otras habilidades de este archivo, esta
+		# no se puede abrir todavía para el Remoto — depende de
+		# await_castillo_pick()/start_castillo_pick(), que el plan de
+		# paridad remota deja fuera de la Fase 3 (ver arquitectura.md).
+		return
 
 	var target: Node = await TriggerSystem._targeted_executor._select_ally_or_totem_target(
-		"Elige un Aliado o Tótem para desterrar")
+		"Elige un Aliado o Tótem para desterrar", owner_id)
 
 	var look_own: bool = await SelectionManager.await_castillo_pick(_inspector._main, "Aho — destierra 5 del tope")
 	var deck_owner: int = owner_id if look_own else (1 - owner_id)
@@ -65,13 +69,13 @@ func _activate_asmodeus_gold_and_banish_bottom(source_card: Node, ability: Dicti
 	if not is_instance_valid(source_card) or not _inspector._main._gold_manager or not TriggerSystem._targeted_executor:
 		return
 	var controller_id: int = source_card.controller_id if source_card.get("controller_id") != null else 0
-	if controller_id != 0:
-		return  # el bot no usa esta habilidad todavía
 
 	if await TriggerSystem.open_response_window(source_card, "Asmodeus", controller_id):
 		return
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
-	_inspector._main._gold_manager.generar_oros_virtuales(1)
+	# 2026-10-06: generar_oros_virtuales() ya es por jugador (ver
+	# arquitectura.md §33) — esta habilidad se desbloquea.
+	_inspector._main._gold_manager.generar_oros_virtuales(1, controller_id)
 	var zone_owner: int = await TriggerSystem._targeted_executor._choose_search_zone_owner(controller_id, Constants.Zone.CASTILLO)
 	var deck: Array = CardManager.get_deck(zone_owner)
 	var exile: Array = CardManager.get_exile(zone_owner)
@@ -97,8 +101,6 @@ func _activate_belcebu_banish_bottom_and_steal(source_card: Node, ability: Dicti
 	if not is_instance_valid(source_card) or not _inspector._main._card_interaction or not TriggerSystem._targeted_executor:
 		return
 	var controller_id: int = source_card.controller_id if source_card.get("controller_id") != null else 0
-	if controller_id != 0:
-		return  # el bot no usa esta habilidad todavía
 
 	if await TriggerSystem.open_response_window(source_card, "Belcebú", controller_id):
 		return
@@ -117,13 +119,11 @@ func _activate_belcebu_banish_bottom_and_steal(source_card: Node, ability: Dicti
 
 	var main := _inspector._main
 	var filter := func(c: Node) -> bool:
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		if parent not in valid_zones:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 			return false
 		return ContinuousEffectManager.get_modified_cost(c) <= 3
-	var target: Node = await main._card_interaction.await_target("Elige una carta de coste 3 o menos para ganar su control (opcional)", filter)
+	var target: Node = await main._card_interaction.await_target("Elige una carta de coste 3 o menos para ganar su control (opcional)", filter, true, controller_id)
 	if not target or not is_instance_valid(target):
 		return
 	ContinuousEffectManager.gain_control_of_card(target, controller_id)
@@ -152,13 +152,13 @@ func _activate_cetro_demoniaco_gold_and_banish(source_card: Node, ability: Dicti
 	if not is_instance_valid(source_card) or not _inspector._main._gold_manager or not TriggerSystem._targeted_executor:
 		return
 	var controller_id: int = source_card.controller_id if source_card.get("controller_id") != null else 0
-	if controller_id != 0:
-		return  # el bot no usa esta habilidad todavía
 
 	if await TriggerSystem.open_response_window(source_card, "Cetro Demoniaco", controller_id):
 		return
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
-	_inspector._main._gold_manager.generar_oros_virtuales(1)
+	# 2026-10-06: generar_oros_virtuales() ya es por jugador (ver
+	# arquitectura.md §33) — esta habilidad se desbloquea.
+	_inspector._main._gold_manager.generar_oros_virtuales(1, controller_id)
 	var zone_owner: int = await TriggerSystem._targeted_executor._choose_search_zone_owner(controller_id, Constants.Zone.CASTILLO)
 	await ActionModule.mill(zone_owner, 4, true, "activated_ability", true)
 
@@ -185,7 +185,9 @@ func _activate_chakram_look_and_lock(source_card: Node, ability: Dictionary) -> 
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
 	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
+		# 2026-10-05: usa SelectionManager.await_single_pick() para "mira la
+		# mano rival", sin chooser_id (ver §22) — se deja sin desbloquear.
+		return  # el Remoto no puede usar esta habilidad todavía
 
 	var opponent_hand: Array = []
 	if _inspector._main._opponent_fan and _inspector._main._opponent_fan.has_method("get_cards"):
@@ -235,26 +237,22 @@ func _activate_cuerno_titan_discard_search_cost_adjust(source_card: Node, abilit
 	el jugador; efecto: buscar un Titán (cualquier tipo con raza 'Titán',
 	no solo Aliado) + ajustar el coste de una carta en juego (elegida) en
 	±1 de forma PERMANENTE mientras Cuerno de Titán siga en juego."""
-	if not is_instance_valid(source_card) or not _inspector._main.player_hand or not _inspector._main._card_interaction:
+	if not is_instance_valid(source_card) or not _inspector._main._card_interaction:
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
 	var main := _inspector._main
-	if main.player_hand.cards.is_empty():
+	var hand_container_cuerno = main.player_hand if owner_id == 0 else main._opponent_fan
+	if not hand_container_cuerno or hand_container_cuerno.cards.is_empty():
 		return
 
-	var hand_cards: Array = main.player_hand.cards.duplicate()
-	var picked_data: Dictionary = await SelectionManager.await_single_pick(
-		hand_cards.map(func(c): return c.card_data), "Descarta una carta de tu mano para pagar la habilidad", true, 0)
-	if picked_data.is_empty():
-		return
-	var hand_node: Node = null
-	for c in hand_cards:
-		if c.card_data == picked_data:
-			hand_node = c
-			break
-	if not hand_node:
+	# 2026-09-13, a pedido del usuario: click directo en la mano en vez del
+	# modal de lista viejo. Filtro restringido a owner_id (mismo bug que
+	# gran kraken, ver PreventionAbilityHandler_EP.gd).
+	var hand_filter := func(c: Node) -> bool:
+		return c.get("current_zone") == Constants.Zone.MANO and c.get("owner_id") == owner_id
+	var hand_node: Node = await main._card_interaction.await_target(
+		"Descarta una carta de tu mano para pagar la habilidad", hand_filter, true, owner_id)
+	if not hand_node or not is_instance_valid(hand_node):
 		return
 
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
@@ -274,23 +272,25 @@ func _activate_cuerno_titan_discard_search_cost_adjust(source_card: Node, abilit
 		var found_data: Dictionary = deck[found_idx]
 		deck.remove_at(found_idx)
 		CardManager.shuffle_deck(owner_id)
+		AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+			"callable": Callable(AnimationQueue, "animate_shuffle").bind(owner_id),
+			"description": "Barajar mazo (Cuerno de Titán)"
+		})
 		var card_node = main._create_card(found_data, false)
-		main.player_hand.add_card(card_node)
+		hand_container_cuerno.add_card(card_node)
 		main._connect_card_signals(card_node)
 	if main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 
 	var filter := func(c: Node) -> bool:
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo,
-			main.player_gold, main.opponent_gold]
-		return parent in valid_zones
-	var target: Node = await main._card_interaction.await_target("Elige una carta en juego para aumentar o disminuir su coste en 1 (opcional)", filter)
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		return c.get("current_zone") in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE,
+			Constants.Zone.LINEA_APOYO, Constants.Zone.RESERVA_ORO]
+	var target: Node = await main._card_interaction.await_target("Elige una carta en juego para aumentar o disminuir su coste en 1 (opcional)", filter, true, owner_id)
 	if not target or not is_instance_valid(target):
 		return
 	var choose_increase: bool = await SelectionManager.await_two_choice(
-		main, "Cuerno de Titán", "Aumentar su coste en 1", "Disminuir su coste en 1")
+		main, "Cuerno de Titán", "Aumentar su coste en 1", "Disminuir su coste en 1", owner_id)
 	if await TriggerSystem.open_response_window(source_card, "Cuerno de Titán", owner_id):
 		return
 	# ContinuousEffectManager, no PaymentManager (2026-09-06): los
@@ -339,23 +339,20 @@ func _activate_don_de_amma(source_card: Node, ability: Dictionary) -> void:
 		return
 
 	var to_exile: Node = ability_oros[0]
-	if ability_oros.size() > 1 and owner_id == 0:
-		var candidates: Array = []
-		for c in ability_oros:
-			candidates.append(c.card_data)
-		var picked: Dictionary = await SelectionManager.await_single_pick(
-			candidates, "Elige qué Oro con habilidad Desterrar de tu Reserva")
-		if picked.is_empty():
+	if ability_oros.size() > 1 and owner_id == 0 and _inspector._main._card_interaction:
+		# 2026-09-13, a pedido del usuario: click directo en la Reserva en
+		# vez del modal de lista viejo.
+		var oro_filter := func(c: Node) -> bool: return c in ability_oros
+		var picked_node: Node = await _inspector._main._card_interaction.await_target(
+			"Elige qué Oro con habilidad Desterrar de tu Reserva", oro_filter)
+		if not picked_node or not is_instance_valid(picked_node):
 			return  # Canceló — no paga el costo, no hay búsqueda
-		for c in ability_oros:
-			if c.card_data == picked:
-				to_exile = c
-				break
+		to_exile = picked_node
 
 	# Registrar ANTES de Desterrar (2026-08-29): to_exile suele ser la propia
 	# source_card — tras exile_card() el Node puede quedar inválido, así que
 	# no se puede seguir leyendo de source_card/ability después de este punto.
-	# Misma razón por la que la ventana de respuesta (2026-09-10) va ACÁ y no
+	# Misma razón por la que la ventana de respuesta (2026-09-10) va AQUÍ y no
 	# más abajo, antes del search() sin cobertura propia.
 	if await TriggerSystem.open_response_window(source_card, "Don de Amma", owner_id):
 		return
@@ -381,18 +378,19 @@ func _activate_dyyavol_titan_draw_discard_mill(source_card: Node, ability: Dicti
 	if not is_instance_valid(source_card) or not _inspector._main.player_hand:
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
 
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
 	if await TriggerSystem.open_response_window(source_card, "dyyavol titan", owner_id):
 		return
 	await ActionModule.draw(owner_id, 1, "activated_ability", true)
 
-	var hand_cards: Array = _inspector._main.player_hand.cards.duplicate()
+	# 2026-09-30, bug real expuesto al levantar la guarda de arriba: esto
+	# leía SIEMPRE player_hand sin mirar owner_id — para el jugador 1
+	# (bot/Remoto) había que leer _opponent_fan en su lugar.
+	var hand_cards: Array = (_inspector._main.player_hand.cards if owner_id == 0 else _inspector._main._opponent_fan.get_cards()).duplicate()
 	if hand_cards.is_empty():
 		return
-	var to_discard: Array = await TriggerSystem._targeted_executor._select_hand_cards_for_discard(hand_cards, 1)
+	var to_discard: Array = await TriggerSystem._targeted_executor._select_hand_cards_for_discard(hand_cards, 1, owner_id)
 	if to_discard.is_empty():
 		return
 	var discarded_race: String = str(to_discard[0].get("card_raza") if to_discard[0].get("card_raza") != null else "").to_lower()
@@ -416,12 +414,10 @@ func _activate_espada_ohiggins_vigilia_choice(source_card: Node, ability: Dictio
 	if not is_instance_valid(source_card):
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
 
 	var choose_shuffle: bool = await SelectionManager.await_two_choice(
 		_inspector._main, "Espada de O'Higgins",
-		"Barajar una carta (no Oro) en juego", "Buscar un Oro en tu Castillo")
+		"Barajar una carta (no Oro) en juego", "Buscar un Oro en tu Castillo", owner_id)
 
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
 
@@ -440,35 +436,17 @@ func _activate_espada_ohiggins_vigilia_choice(source_card: Node, ability: Dictio
 			_inspector._main.player_field, _inspector._main.player_linea_ataque, _inspector._main.player_linea_apoyo,
 			_inspector._main.opponent_field, _inspector._main.opponent_linea_ataque, _inspector._main.opponent_linea_apoyo,
 		]
-		var candidates: Array = []
-		for container in in_play_containers:
-			if not container:
-				continue
-			for c in container.get_children():
-				if not is_instance_valid(c) or not (c is Card):
-					continue
-				if c.get("card_type") != Constants.CardType.ORO:
-					candidates.append(c)
-				var weapons = c.get("equipped_weapons")
-				if weapons is Array:
-					for w in weapons:
-						if is_instance_valid(w) and w.get("card_type") != Constants.CardType.ORO:
-							candidates.append(w)
-		if candidates.is_empty():
+		if not _inspector._main._card_interaction:
 			return
-		var card_data_list: Array = []
-		for c in candidates:
-			card_data_list.append(c.card_data)
-		var picked: Dictionary = await SelectionManager.await_single_pick(
-			card_data_list, "Baraja una carta (que no sea Oro) en juego", false)
-		if picked.is_empty():
-			return
-		var to_shuffle_node: Node = null
-		for c in candidates:
-			if c.card_data == picked:
-				to_shuffle_node = c
-				break
-		if not to_shuffle_node:
+		# 2026-09-13, a pedido del usuario: click directo sobre las cartas
+		# reales en juego en vez del modal de lista viejo.
+		var not_oro_filter := func(c: Node) -> bool:
+			if not (c is Card) or c.get("card_type") == Constants.CardType.ORO:
+				return false
+			return c.get("current_zone") in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]
+		var to_shuffle_node: Node = await _inspector._main._card_interaction.await_target(
+			"Baraja una carta (que no sea Oro) en juego", not_oro_filter, true, owner_id)
+		if not to_shuffle_node or not is_instance_valid(to_shuffle_node):
 			return
 		# El mazo de destino es el del DUEÑO real de la carta elegida, no el
 		# del jugador que activó la habilidad (2026-09-02: con el pool ya
@@ -496,7 +474,7 @@ func _activate_infernum_vox_look_reorder(source_card: Node, ability: Dictionary)
 	LOOK/REORDER, resultó ser código MUERTO al revisarla — no es autoload,
 	no está en ninguna escena, y OpponentUI.gd la busca en /root/
 	SelectionCanvas reintentando para siempre sin encontrarla nunca; no se
-	tocó, pero tampoco se reusó acá.)
+	tocó, pero tampoco se reusó aquí.)
 	  1) Elegir cuáles de las 6 van al FONDO, EN EL ORDEN que se quieran
 	     (0 a todas) — el orden de click ya es el orden final de ese grupo
 	     (primero clickeado = más arriba DENTRO del grupo que va al fondo).
@@ -508,7 +486,9 @@ func _activate_infernum_vox_look_reorder(source_card: Node, ability: Dictionary)
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
 	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
+		# 2026-10-05: usa await_castillo_pick(), excluido desde el plan
+		# original (mismo caso que Aho más arriba) — se deja sin desbloquear.
+		return  # el Remoto no puede usar esta habilidad todavía
 
 	var look_own: bool = await SelectionManager.await_castillo_pick(_inspector._main, "Infernum Vox — mira 6 cartas")
 	var target_player: int = owner_id if look_own else (1 - owner_id)

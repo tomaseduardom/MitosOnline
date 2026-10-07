@@ -5,7 +5,7 @@ extends RefCounted
 ## "módulos gordos", Fase 2 — ver iterative-booping-abelson.md).
 ##
 ## Cada patrón vivía como un bloque `if is_X_pattern: ... continue` dentro
-## del for-loop de _build_ability_buttons(). Acá cada uno es simplemente un
+## del for-loop de _build_ability_buttons(). Aquí cada uno es simplemente un
 ## `if` más dentro de try_build(), que corta en el PRIMER match y devuelve
 ## true (equivalente al `continue` original) — CardInspectionLayer.gd llama
 ## a los 4 archivos hermanos (A, B, C, D) EN ORDEN, así que el orden relativo
@@ -44,7 +44,7 @@ func try_build(ability_lower: String, btn: Button, panel: Control, card_for_glow
 	# Patrón especial de Padre de la Patria (2026-08-28): "genera un Oro
 	# para jugar X" es Oro Virtual RESTRINGIDO (GoldManager.
 	# restricted_gold_pools), un concepto que ActionPipeline no conoce —
-	# se genera directo acá, sin pasar por el pipeline genérico.
+	# se genera directo aquí, sin pasar por el pipeline genérico.
 	var is_padre_patria_gold_pattern: bool = ("genera" in ability_lower
 		and "para jugar" in ability_lower and "caballero" in ability_lower)
 	if is_padre_patria_gold_pattern:
@@ -172,7 +172,7 @@ func try_build(ability_lower: String, btn: Button, panel: Control, card_for_glow
 		panel.add_child(btn)
 		return true
 
-	# Legión Paladín removida de acá (2026-09-09, "sistema de respuestas"):
+	# Legión Paladín removida de aquí (2026-09-09, "sistema de respuestas"):
 	# ya no es un botón — EffectController.offer_prevention() la detecta y
 	# ofrece reactivamente (tag "leave_play") en el momento en que un
 	# Aliado propio está por salir del juego, no antes. El handler viejo
@@ -200,7 +200,7 @@ func try_build(ability_lower: String, btn: Button, panel: Control, card_for_glow
 	# Esa carta cuesta un Oro adicional el próximo turno." — costo de
 	# Barajar (mano → mazo, no descarte) + nombrar una carta CUALQUIERA
 	# del juego (no un objeto en juego, un NOMBRE) con un recargo de
-	# coste que recién arranca el turno siguiente — ActionPipeline no
+	# coste que arranca solo el turno siguiente — ActionPipeline no
 	# tiene ninguno de los tres conceptos (costo Barajar, nombrar, tax
 	# diferido). Requiere el fix de parse_abilities() de esta misma
 	# sesión que une la segunda oración (sin coste/trigger propio) a la

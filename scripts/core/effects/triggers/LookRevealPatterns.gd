@@ -90,6 +90,10 @@ func try_execute_reveal_until_ally_and_weapon_pattern(ability_text: String, cont
 	return await _b.try_execute_reveal_until_ally_and_weapon_pattern(ability_text, controller_id, card)
 
 
+func try_execute_reveal_until_ally_and_talisman_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
+	return await _b.try_execute_reveal_until_ally_and_talisman_pattern(ability_text, controller_id, card)
+
+
 func try_execute_reveal_gold_weapon_totem_split_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
 	return await _b.try_execute_reveal_gold_weapon_totem_split_pattern(ability_text, controller_id, card)
 

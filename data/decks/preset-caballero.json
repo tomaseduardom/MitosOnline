@@ -1,0 +1,128 @@
+{
+    "slug":  "preset-caballero",
+    "nombre":  "tumamita (publico)",
+    "arquetipo":  "Caballero",
+    "formato":  "imp",
+    "entries":  [
+                    {
+                        "myl_id":  "20589",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20637",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20644",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "20857",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20873",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20478",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "19971",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20102",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20112",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "19899",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "18777",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "custom_tk26i_29",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mig_22",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mig_28",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mig_32",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mig_35",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mig_36",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_30",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "custom_mid_31",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_34",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_38",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "custom_mid_41",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_42",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_43",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_46",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_aydv_181",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_blog_cab_001",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_017_150_u",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_xp023",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_aydv_xr008",
+                        "quantity":  1
+                    }
+                ]
+}

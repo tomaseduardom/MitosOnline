@@ -41,26 +41,16 @@ class_name RemotePlayerController
 ## campo, más lo público). Esto respeta la niebla de guerra (nunca se
 ## manda la mano/mazo ocultos del Anfitrión) y alcanza para que el Remoto
 ## tome decisiones legales, pero significa que el Remoto no ve en tiempo
-## real lo que el Anfitrión hace en SU PROPIO turno (recién se entera en el
+## real lo que el Anfitrión hace en SU PROPIO turno (solo se entera en el
 ## próximo prompt que le toque). El streaming incremental completo (fidelidad
 ## visual total) queda pendiente — ver nota en el plan.
 
 func _await_intent(expected_kinds: Array) -> Dictionary:
-	"""Espera el próximo {"op":"intent","kind":X,...} con X en expected_kinds.
-	Sin timeout — mismo criterio que el resto del motor espera a un jugador
-	humano local (SelectionManager). Si la conexión se cae mientras se
-	espera, esto queda colgado para siempre — aceptable en v1 (el diseño ya
-	decidió 'sin reconexión, la partida termina', pero mostrar un aviso claro
-	acá en vez de quedar mudo es una mejora pendiente, no bloqueante)."""
-	while true:
-		var data = await NetworkClient.message_received
-		if data.get("op", "") == "intent" and data.get("kind", "") in expected_kinds:
-			return data
-	# Inalcanzable en la práctica (el while true: solo sale por return), pero
-	# el analizador de GDScript no lo sabe y exige un retorno explícito al
-	# final de la función — mismo patrón visto en otros bucles "while true:
-	# solo sale por return" de este proyecto.
-	return {}
+	"""2026-09-30: lógica movida a NetworkClient.await_intent() (la necesita
+	también SelectionManager.gd para la Fase 3 del plan de paridad) — este
+	wrapper se deja tal cual para no tocar los 5 llamadores existentes de
+	este archivo."""
+	return await NetworkClient.await_intent(expected_kinds)
 
 
 func _card_ref(card: Node) -> String:
@@ -118,7 +108,7 @@ func _affordable_cards_in_hand(allowed_types: Array) -> Array:
 
 # =============================================================================
 # MULLIGAN (2026-09-11 — no existe llamador base: MulliganController._end_
-# mulligan_phase() llama acá directo, con chequeo de tipo, solo si hay un
+# mulligan_phase() llama aquí directo, con chequeo de tipo, solo si hay un
 # Remoto conectado; si no, sigue con draw_initial_hand() como siempre)
 # =============================================================================
 func run_mulligan(initial_count: int) -> void:
@@ -200,6 +190,7 @@ func _play_totem_remote(card: Node) -> void:
 		"player_id": 1, "card": card, "zone": Constants.Zone.LINEA_APOYO
 	})
 	await EffectController.offer_counter_annul(card)
+	await EffectController.offer_flechar_xoon_annul(card)
 
 
 func _choose_wielder_remote(weapon: Node) -> Node:
@@ -269,6 +260,11 @@ func _play_talisman_remote(card: Node) -> void:
 # VIGILIA — igual que la base, pero cada acción la elige el Remoto por red
 # =============================================================================
 func take_vigilia_actions() -> void:
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[RemotePlayerController] take_vigilia_actions() llamada — opponent_fan=%s activo=%s jugador=%d fase=%s" % [
+			str(_main._opponent_fan), str(GameManager.is_game_active), GameManager.active_player_id,
+			Constants.PHASE_NAMES.get(GameManager.current_phase, "?")
+		])
 	if not _main._opponent_fan:
 		return
 	while true:
@@ -305,6 +301,11 @@ func take_vigilia_actions() -> void:
 			if is_instance_valid(c):
 				hand_data.append(_card_public_data(c))
 
+		if Constants.VERBOSE_DIAG_LOGS:
+			print("[RemotePlayerController] Mandando prompt de vigilia — mano=%d oro=%d aliados=%d armas=%d talismanes=%d totems=%d" % [
+				hand_data.size(), gold_candidates.size(), ally_candidates.size(),
+				weapon_candidates.size(), talisman_candidates.size(), totem_candidates.size()
+			])
 		NetworkClient.send_message({
 			"op": "prompt", "kind": "vigilia",
 			"hand": hand_data,
@@ -403,7 +404,7 @@ func try_respond_with_activated_ability() -> bool:
 					continue
 				var cost_type = ability.get("cost_type", UniversalCardParser.CostType.NONE)
 				# A diferencia de la IA (que se limita a NONE/ONCE_PER_TURN/
-				# GOLD/TAP), acá se ofrecen todas salvo Descarte — el Remoto
+				# GOLD/TAP), aquí se ofrecen todas salvo Descarte — el Remoto
 				# todavía no tiene su mano representada como Nodos del lado
 				# del pago (mismo hueco ya documentado para el bot).
 				if cost_type == UniversalCardParser.CostType.DISCARD:

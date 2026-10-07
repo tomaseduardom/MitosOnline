@@ -59,7 +59,7 @@ func try_build(ability_lower: String, btn: Button, panel: Control, card_for_glow
 		panel.add_child(btn)
 		return true
 
-	# Almirante Akari removida de acá (2026-09-09, "sistema de respuestas" —
+	# Almirante Akari removida de aquí (2026-09-09, "sistema de respuestas" —
 	# corregido a pedido del usuario): ya no es un botón con elección A/B
 	# proactiva — son DOS disparadores reactivos distintos que comparten un
 	# candado de una vez por turno (EffectController._prevention_registry

@@ -28,8 +28,6 @@ func try_execute_bubble_protection_and_schedule_final_phase_pattern(ability_text
 	var lower := ability_text.to_lower()
 	if not ("hasta tu próximo turno, no puedes ser afectado por efectos oponentes" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main:
@@ -60,10 +58,8 @@ func try_execute_bubble_protection_and_schedule_final_phase_pattern(ability_text
 			if not main._card_interaction:
 				return
 			var filter := func(c: Node) -> bool:
-				var parent = c.get_parent()
-				var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-					main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-				if parent not in valid_zones:
+				# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+				if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 					return false
 				return ContinuousEffectManager.get_modified_cost(c) <= 2
 			var target: Node = await main._card_interaction.await_target("Elige una carta de coste 2 o menos para barajar", filter)
@@ -86,7 +82,7 @@ func try_execute_transformacion_pattern(ability_text: String, controller_id: int
 	que fuera a afectarte, busca un Aliado en tu Castillo y ponlo en tu
 	mano' (Transformación, 2026-09-06). El 'Destiérralo' lo maneja el
 	destino post-resolución genérico de GoldManager._play_talisman()
-	(self_exile), acá solo la elección A/B.
+	(self_exile), aquí solo la elección A/B.
 
 	Rama A usa el mismo mecanismo de cargas por carta que ya protege a
 	Estaca (EffectController.add_opponent_effect_prevention() +
@@ -97,15 +93,13 @@ func try_execute_transformacion_pattern(ability_text: String, controller_id: int
 	elegir) se aproxima con la misma idea pero repartida en TODAS las
 	cartas propias en juego a la vez, un solo cargo cada una — mismo
 	principio de aproximación ya usado y documentado en Fisión Nuclear
-	(bubble de protección), acá a escala de un solo efecto en vez de 'hasta
+	(bubble de protección), aquí a escala de un solo efecto en vez de 'hasta
 	tu próximo turno'. Límite conocido, igual que en Fisión Nuclear: no
 	cubre daño directo al Castillo (jugador), solo efectos que apunten a
 	una carta en juego."""
 	var lower := ability_text.to_lower()
 	if not lower.begins_with("puedes jugarlo en respuesta a que tu oponente juegue una carta o utilice una habilidad"):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main:
@@ -114,11 +108,12 @@ func try_execute_transformacion_pattern(ability_text: String, controller_id: int
 	var choose_a: bool = await SelectionManager.await_two_choice(
 		main, "Elige un efecto",
 		"Protege una carta que controles y Roba una carta",
-		"Protege tus cartas en juego de un efecto, busca un Aliado en tu Castillo")
+		"Protege tus cartas en juego de un efecto, busca un Aliado en tu Castillo", controller_id)
+	var own_fields: Array = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo, main.player_gold] if controller_id == 0 \
+		else [main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo, main.opponent_gold]
 	if choose_a:
 		if not main._card_interaction:
 			return true
-		var own_fields: Array = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo, main.player_gold]
 		var own_cards: Array = []
 		for field in own_fields:
 			if field:
@@ -127,14 +122,13 @@ func try_execute_transformacion_pattern(ability_text: String, controller_id: int
 			return true
 		var filter := func(c: Node) -> bool:
 			return c in own_cards
-		var target: Node = await main._card_interaction.await_target("Elige una carta para proteger de un efecto rival", filter)
+		var target: Node = await main._card_interaction.await_target("Elige una carta para proteger de un efecto rival", filter, true, controller_id)
 		if not target or not is_instance_valid(target):
 			return true
 		EffectController.add_legacy_targeted_prevention(target, 1)
 		await ActionModule.draw(controller_id, 1, "etb_trigger", true)
 	else:
-		var own_fields2: Array = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo, main.player_gold]
-		for field in own_fields2:
+		for field in own_fields:
 			if not field:
 				continue
 			for c in field.get_children():
@@ -154,8 +148,6 @@ func try_execute_gain_control_ally_rename_titan_pattern(ability_text: String, ca
 	var lower := ability_text.to_lower()
 	if not ("gana el control de un aliado y cambia su nombre a tit" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._card_interaction:
@@ -163,11 +155,9 @@ func try_execute_gain_control_ally_rename_titan_pattern(ability_text: String, ca
 	var filter := func(c: Node) -> bool:
 		if c.get("card_type") != Constants.CardType.ALIADO:
 			return false
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		return parent in valid_zones
-	var target: Node = await main._card_interaction.await_target("Elige un Aliado para ganar su control", filter)
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		return c.get("current_zone") in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]
+	var target: Node = await main._card_interaction.await_target("Elige un Aliado para ganar su control", filter, true, controller_id)
 	if not target or not is_instance_valid(target):
 		return true
 	if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
@@ -204,7 +194,9 @@ func try_execute_malleus_name_lock_pattern(ability_text: String, card: Node, con
 	if not ("nombra una carta que no sea malleus maleficarum" in lower):
 		return false
 	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
+		# Excluida desde el plan original de Fase 3: usa CardNameSearchDialog
+		# (open_and_wait()), sin chooser_id.
+		return true  # el Remoto no puede usar esta habilidad todavía
 
 	var picked: Dictionary = await _main._card_name_search.open_and_wait(
 		"Nombra una carta (pierde su habilidad mientras Malleus Maleficarum esté en juego)")

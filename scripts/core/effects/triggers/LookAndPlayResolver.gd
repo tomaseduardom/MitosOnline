@@ -119,6 +119,10 @@ func try_execute_reveal_until_ally_and_weapon_pattern(ability_text: String, cont
 	return await _look_reveal.try_execute_reveal_until_ally_and_weapon_pattern(ability_text, controller_id, card)
 
 
+func try_execute_reveal_until_ally_and_talisman_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
+	return await _look_reveal.try_execute_reveal_until_ally_and_talisman_pattern(ability_text, controller_id, card)
+
+
 func try_execute_reveal_gold_weapon_totem_split_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
 	return await _look_reveal.try_execute_reveal_gold_weapon_totem_split_pattern(ability_text, controller_id, card)
 
@@ -172,6 +176,34 @@ func try_execute_optional_search_totem_castillo_pattern(ability_text: String, ca
 
 func try_execute_search_two_oros_split_destination_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
 	return await _search_own_zone.try_execute_search_two_oros_split_destination_pattern(ability_text, card, controller_id)
+
+
+func try_execute_primer_sello_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	return await _search_own_zone.try_execute_primer_sello_pattern(ability_text, card, controller_id)
+
+
+func try_execute_segundo_sello_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	return await _search_own_zone.try_execute_segundo_sello_pattern(ability_text, card, controller_id)
+
+
+func try_execute_tercer_sello_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	return await _search_own_zone.try_execute_tercer_sello_pattern(ability_text, card, controller_id)
+
+
+func try_execute_cuarto_sello_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	return await _search_own_zone.try_execute_cuarto_sello_pattern(ability_text, card, controller_id)
+
+
+func try_execute_quinto_sello_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	return await _search_own_zone.try_execute_quinto_sello_pattern(ability_text, card, controller_id)
+
+
+func try_execute_sexto_sello_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	return await _search_own_zone.try_execute_sexto_sello_pattern(ability_text, card, controller_id)
+
+
+func try_execute_septimo_sello_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	return await _search_own_zone.try_execute_septimo_sello_pattern(ability_text, card, controller_id)
 
 
 # =============================================================================

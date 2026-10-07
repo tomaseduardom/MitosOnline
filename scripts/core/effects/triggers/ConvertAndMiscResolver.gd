@@ -113,31 +113,36 @@ func try_execute_mill_convert_to_ally_pattern(ability_text: String, card: Node, 
 
 	# Carrera: castillo activo en paralelo mientras se espera el primer
 	# click de carta. El que resuelva primero cancela al otro.
-	var race_done := false
-	var castillo_picked_own: bool = true
+	# 2026-09-23: guardado en un Dictionary, no en variables sueltas — un
+	# lambda de GDScript captura las locales por VALOR, así que
+	# "race_done = true" adentro del callback nunca se veía desde este
+	# bucle (ver misma causa raíz en arquitectura.md §13.17 y en
+	# CardInteractionModule.await_target_or_castillo_pick()). Un Dictionary
+	# sí se captura por referencia.
+	var _state := {"race_done": false, "castillo_picked_own": true}
 	SelectionManager.start_castillo_pick(main, card.card_name if card.get("card_name") else "Sherlock Holmes",
 		func(picked_own: bool) -> void:
-			if race_done:
+			if _state["race_done"]:
 				return
-			race_done = true
-			castillo_picked_own = picked_own
+			_state["race_done"] = true
+			_state["castillo_picked_own"] = picked_own
 			main._card_interaction.cancel_target_selection())
 
 	var first_target: Node = null
-	while not race_done:
+	while not _state["race_done"]:
 		var card_state := {"done": false, "chosen": null}
 		main._card_interaction.start_target_selection(
 			"Elige una carta en juego (no Oro) o un Castillo para Convertir", filter,
 			func(c: Node) -> void:
 				card_state.chosen = c
 				card_state.done = true)
-		while not card_state.done and not race_done:
+		while not card_state.done and not _state["race_done"]:
 			await main.get_tree().process_frame
-		if race_done:
+		if _state["race_done"]:
 			break
 		if card_state.chosen:
 			first_target = card_state.chosen
-			race_done = true
+			_state["race_done"] = true
 			SelectionManager.cancel_castillo_pick()
 		# Si card_state.chosen es null (ESC), se vuelve a armar el listener
 		# de cartas mientras el Castillo sigue esperando en paralelo — la
@@ -152,7 +157,7 @@ func try_execute_mill_convert_to_ally_pattern(ability_text: String, card: Node, 
 				break
 			picked.append(target)
 
-		# Ya se declaró todo (los hasta max_amount objetivos elegidos) — acá
+		# Ya se declaró todo (los hasta max_amount objetivos elegidos) — aquí
 		# corresponde la ventana, antes de convertir ninguno.
 		if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
 			return true
@@ -172,10 +177,10 @@ func try_execute_mill_convert_to_ally_pattern(ability_text: String, card: Node, 
 			converted += 1
 	else:
 		# Castillo ya elegido por el propio click que ganó la carrera
-		# (castillo_picked_own) — sin preguntar aparte.
-		var zone_owner: int = controller_id if castillo_picked_own else (1 - controller_id)
+		# (_state["castillo_picked_own"]) — sin preguntar aparte.
+		var zone_owner: int = controller_id if _state["castillo_picked_own"] else (1 - controller_id)
 		var deck: Array = CardManager.get_deck(zone_owner)
-		# Sin objetivos puntuales que declarar acá (salen del tope, en el
+		# Sin objetivos puntuales que declarar aquí (salen del tope, en el
 		# orden del mazo, no elegidos) — la ventana va antes de empezar a
 		# revelar/convertir, gate de toda la secuencia.
 		if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
@@ -183,7 +188,7 @@ func try_execute_mill_convert_to_ally_pattern(ability_text: String, card: Node, 
 		while converted < max_amount and not deck.is_empty():
 			var top_data: Dictionary = deck.pop_front()
 			var new_data: Dictionary = top_data.duplicate()
-			new_data["tipo"] = Constants.CardType.ALIADO  # Puede venir de cualquier tipo no-Oro original; acá SIEMPRE se fuerza a Aliado
+			new_data["tipo"] = Constants.CardType.ALIADO  # Puede venir de cualquier tipo no-Oro original; aquí SIEMPRE se fuerza a Aliado
 			new_data["esta_oculta"] = false
 			var token_node = main._create_card(new_data, false)
 			token_node.owner_id = controller_id
@@ -225,34 +230,83 @@ func try_execute_convert_ally_to_gold_pattern(ability_text: String, card: Node, 
 	Aliado, conviértela en un Aliado y muévela a tu Línea de Defensa') se
 	resuelve del lado de GoldManager._mover_oro_a_pagado(), que revisa
 	card.revert_to_data al pagar cualquier Oro — no hace falta detectarla
-	acá aparte.
+	aquí aparte.
 	Returns: true si el patrón aplicaba."""
 	var lower := ability_text.to_lower()
 	if not ("convertirlo en un oro" in lower and "oro pagado" in lower):
 		return false
 	if controller_id != 0 or not is_instance_valid(card):
 		return true
-	if not _executor._main._gold_manager:
+	# 2026-09-30, bug real reportado por el usuario: _executor._main acá es
+	# TriggerSystem (ver TargetedEffectExecutor.gd:441-445, mismo patrón de
+	# bug ya documentado en arquitectura.md §2), no el Main real del juego
+	# — _gold_manager/_card_interaction no existen ahí y tiraban "Invalid
+	# access to property or key". Mismo fix de indirección que ya usa
+	# try_execute_jabberwocky_convert_opponent_top_pattern() más abajo.
+	var main := _executor._main.get_node_or_null("/root/Main")
+	if not main or not main._gold_manager:
 		return true
 
-	# min_selections=0 (2026-08-30, bug real corregido de paso): esta
-	# confirmación solo escuchaba card_selected/selection_cancelled, nunca
-	# selection_completed — si el jugador confirmaba con 0 elegidas (min=0
-	# lo permite), el panel se quedaba colgado para siempre en silencio.
-	# await_single_pick() ya escucha las tres señales.
-	var confirm_btn = SelectionManager.get("_confirm_button")
-	if confirm_btn:
-		confirm_btn.visible = false
-	var accepted: Dictionary = await SelectionManager.await_single_pick(
-		[card.card_data], "%s: puedes convertirlo en un Oro y moverlo a tu Oro Pagado" % card.card_name, true, 0)
-	if confirm_btn:
-		confirm_btn.visible = true
-	if accepted.is_empty():
+	# 2026-09-13, a pedido del usuario: en vez de un modal de confirmación
+	# con un solo candidato, clickear la carta misma (ya está en juego,
+	# visible) confirma; ESC declina — mismo mecanismo que cualquier otro
+	# await_target(), sin necesidad de un panel aparte para un "sí/no" de
+	# una sola carta conocida de antemano.
+	if not main._card_interaction:
+		return true
+	var self_filter := func(c: Node) -> bool: return c == card
+	var accepted: Node = await main._card_interaction.await_target(
+		"%s: clickéala para convertirla en un Oro y moverla a tu Oro Pagado (ESC para declinar)" % card.card_name, self_filter)
+	if not accepted or not is_instance_valid(accepted):
 		return true
 	if await TriggerSystem.open_response_window(card, str(card.card_name), controller_id):
 		return true
 
-	await _executor._main._gold_manager.convert_ally_to_gold_in_pagado(card)
+	await main._gold_manager.convert_ally_to_gold_in_pagado(card)
+	return true
+
+
+# =============================================================================
+# PATRÓN "CUANDO ENTRA EN JUEGO O ATACA, CONVIERTE LA PRIMERA CARTA DEL
+# CASTILLO OPONENTE EN UN ORO SIN HABILIDAD..." (Jabberwocky)
+# =============================================================================
+func try_execute_jabberwocky_convert_opponent_top_pattern(ability_text: String, card: Node, controller_id: int) -> bool:
+	"""'Cuando entra en juego o ataca, convierte la primera carta del
+	Castillo oponente en un Oro sin habilidad y ponlo en tu Oro Pagado'
+	(Jabberwocky, 2026-09-30) — mismo mecanismo de conversión real a Oro
+	que try_execute_no_allies_convert_castillo_top_pattern() (Biblioteca de
+	Caballería, más abajo) y convert_ally_to_gold_in_pagado() (Jormundgander,
+	arriba), pero sobre el tope del Castillo RIVAL y con destino Oro Pagado
+	en vez de Línea de Defensa. La carta nunca llega a existir como Node
+	con su habilidad real — 'tipo'/'habilidad' se pisan en los datos crudos
+	ANTES de crear el Node (mismo criterio que new_data['tipo'] = ORO de
+	la función hermana), así que 'sin habilidad' queda resuelto de forma
+	más simple que silence_card() (pensada para una carta que YA existe en
+	juego). Se registró también 'cuando entra en juego o ataca' (con
+	'ataca', no 'ataque') en Card.TRIGGER_KEYWORDS — el texto real de esta
+	carta usa esa conjugación, distinta de la plantilla DAR estándar que
+	ya cubrían esas listas."""
+	var lower := ability_text.to_lower()
+	if not ("convierte la primera carta del castillo oponente en un oro sin habilidad" in lower):
+		return false
+
+	var main := _executor._main.get_node_or_null("/root/Main")
+	if not main or not main._gold_manager:
+		return true
+	var opponent_id: int = 1 - controller_id
+	var deck: Array = CardManager.get_deck(opponent_id)
+	if deck.is_empty():
+		return true
+	if await TriggerSystem.open_response_window(card, str(card.get("card_name")), controller_id):
+		return true
+
+	var top_data: Dictionary = deck.pop_front()
+	var new_data: Dictionary = top_data.duplicate()
+	new_data["tipo"] = Constants.CardType.ORO
+	new_data["habilidad"] = ""
+	await main._gold_manager.put_gold_directly_in_pagado(controller_id, new_data)
+	if main.get("_zone_manager"):
+		main._zone_manager._update_castillo_counts()
 	return true
 
 
@@ -299,7 +353,7 @@ func try_execute_no_allies_convert_castillo_top_pattern(ability_text: String, ca
 	var deck: Array = CardManager.get_deck(zone_owner)
 	if deck.is_empty():
 		return true
-	# Sin ventana genérica acá (2026-09-09): silence_card() (más abajo) ya
+	# Sin ventana genérica aquí (2026-09-09): silence_card() (más abajo) ya
 	# consulta Prevención adentro por su cuenta.
 	var top_data: Dictionary = deck.pop_front()
 	var new_data: Dictionary = top_data.duplicate()
@@ -425,13 +479,13 @@ func try_execute_name_a_card_pattern(ability_text: String, card: Node, _controll
 	"""Detecta 'nombra una carta para que pierda(n) su habilidad en todas
 	las Zonas mientras esta carta esté en juego' (2026-08-29, Alicia en
 	Wonderland). Distinto de un silencio puntual (KeywordManager.
-	silence_card(), que apunta a UNA carta ya en juego): acá se nombra un
+	silence_card(), que apunta a UNA carta ya en juego): aquí se nombra un
 	NOMBRE, y afecta cualquier copia de ese nombre en cualquier zona, esté
 	ya en juego o aparezca después (mazo, mano) — KeywordManager.
 	lock_ability_by_name()/is_name_locked(), consultado desde is_silenced().
 	Solo cubre esta variante concreta (silenciar por nombre); el 'nombra una
 	carta' de Tesoro de los Césares es un efecto DISTINTO (sube el coste,
-	no silencia) y es una habilidad ACTIVADA, no pasa por acá.
+	no silencia) y es una habilidad ACTIVADA, no pasa por aquí.
 	Returns: true si el patrón aplicaba (se haya podido resolver o no)."""
 	var lower := ability_text.to_lower()
 	if not ("nombra una carta" in lower and ("pierda" in lower or "pierdan" in lower) and "habilidad" in lower):

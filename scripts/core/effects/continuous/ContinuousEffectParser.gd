@@ -126,7 +126,7 @@ func _parse_and_register_continuous_effects(card: Node, ability_text: String) ->
 		# de arriba NO ve este prefijo condicional: matchea sobre la
 		# SEGUNDA mención de 'Aliados' (la del propio buff, 'tus Aliados
 		# ganan'), ignorando la condición racial que la antecede. Sin este
-		# chequeo, el buff se registraría PERMANENT incondicional. Acá se
+		# chequeo, el buff se registraría PERMANENT incondicional. Aquí se
 		# detecta aparte y, si está presente, el modificador pasa a
 		# CONDITIONAL con un Callable que recuenta por Raza en cada
 		# consulta (_is_modifier_active() lo reevalúa siempre, nunca
@@ -167,7 +167,7 @@ func _parse_and_register_continuous_effects(card: Node, ability_text: String) ->
 		# de cartas fuera del juego mientras atacan" (2026-09-03, Trono del
 		# Dragón) — el recorte 'mientras atacan' es POR ALIADO puntual (no
 		# tiene sentido en el condition Callable de arriba, que no recibe
-		# la carta objetivo), así que solo se registra la mitad 'racial' acá
+		# la carta objetivo), así que solo se registra la mitad 'racial' aquí
 		# (protection_type OFF_BOARD_WHILE_ATTACKING) y el chequeo real de
 		# 'está atacando ahora' vive en el punto de consulta
 		# (TargetedEffectExecutor._select_ally_target(), igual que la
@@ -290,7 +290,7 @@ func _parse_and_register_continuous_effects(card: Node, ability_text: String) ->
 	# referido a sí misma (2026-09-04, p.ej. lagrima del dragon: "Oro
 	# Inicial. Indesterrable. No puede perder su habilidad.") — distinto de
 	# "no pueden perder su habilidad" en plural de más arriba (protege a
-	# Aliados de TERCEROS); acá "puede" en singular protege a la PROPIA
+	# Aliados de TERCEROS); aquí "puede" en singular protege a la PROPIA
 	# carta. "no puede" nunca matchea dentro de "no pueden" (falta el
 	# espacio tras "puede"), así que no hay colisión entre ambas cláusulas.
 	if "no puede perder su habilidad" in text:

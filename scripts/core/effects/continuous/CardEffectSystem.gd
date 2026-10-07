@@ -68,13 +68,18 @@ func _on_card_entered_play(player_id: int, card: Node, zone: int) -> void:
 	"""Listener principal: se activa cuando una carta entra a cualquier zona de juego
 	Filtra y emite señales específicas según la zona
 	"""
-	print("[CardEffectSystem] Carta entró a %s: %s" % [
-		Constants.ZONE_NAMES.get(zone, "?"),
-		card.card_name if card.get("card_name") else str(card)
-	])
-
 	# Verificar si es una zona monitoreada
 	if zone not in MONITORED_ZONES:
+		# 2026-09-25, a pedido del usuario ("redundante"): para las 4 zonas
+		# monitoreadas de abajo, el handler específico (_handle_*_entry) ya
+		# imprime su propia línea más clara — este mensaje genérico solo
+		# quedaba duplicando esa info. Para zonas fuera de esa lista sigue
+		# siendo la única traza de que la carta entró a algún lado.
+		if Constants.VERBOSE_DIAG_LOGS:
+			print("[CardEffectSystem] Carta entró a %s: %s" % [
+				Constants.ZONE_NAMES.get(zone, "?"),
+				card.card_name if card.get("card_name") else str(card)
+			])
 		return
 
 	# Emitir señal específica según la zona
@@ -163,7 +168,7 @@ func _handle_attack_line_entry(player_id: int, card: Node) -> void:
 # =============================================================================
 # SISTEMA ETB / PIPELINE DE EJECUCIÓN DE ACCIONES — ELIMINADO (2026-08-17)
 # =============================================================================
-# Todo lo que vivía acá (cola de habilidades ETB/activadas/disparadas,
+# Todo lo que vivía aquí (cola de habilidades ETB/activadas/disparadas,
 # execute_draw/execute_search/execute_look/execute_mill/execute_discard/
 # execute_return_to_deck, execute_action_pipeline y su parser de texto
 # propio) tenía CERO llamadores en todo el proyecto — código muerto desde
@@ -184,10 +189,15 @@ func _on_card_left_play(player_id: int, card: Node, from_zone: int) -> void:
 	"""
 	var card_id = card.get_instance_id()
 
-	print("[CardEffectSystem] Carta salió de %s: %s" % [
-		Constants.ZONE_NAMES.get(from_zone, "?"),
-		card.card_name if card.get("card_name") else str(card)
-	])
+	# 2026-09-23, a pedido del usuario: este mensaje solo duplicaba lo que ya
+	# informa EffectController ("X fue destruida"/"X resuelve su efecto y va
+	# al Cementerio") — 3 líneas distintas para el mismo evento de salida de
+	# juego. Se mantiene gateado para depuración profunda.
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[CardEffectSystem] Carta salió de %s: %s" % [
+			Constants.ZONE_NAMES.get(from_zone, "?"),
+			card.card_name if card.get("card_name") else str(card)
+		])
 
 	# Desactivar habilidades continuas de esta carta
 	if active_continuous_abilities.has(card_id):
@@ -578,7 +588,8 @@ func recalculate_all_continuous_effects() -> void:
 	"""Recalcula todos los efectos continuos activos
 	Llamar cuando cambia el estado del tablero (aliado entra/sale)
 	"""
-	print("[CardEffectSystem] Recalculando efectos continuos...")
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[CardEffectSystem] Recalculando efectos continuos...")
 
 	# Para cada carta con habilidades continuas activas
 	for card_id in active_continuous_abilities:

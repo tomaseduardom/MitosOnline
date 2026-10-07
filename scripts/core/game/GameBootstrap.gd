@@ -64,7 +64,18 @@ func _show_deck_selector() -> void:
 	var selector = script.new()
 	_main.add_child(selector)
 	selector.decks_selected.connect(_on_decks_selected)
+	selector.selection_cancelled.connect(_on_deck_selection_cancelled)
 	selector.show_selector(_main)
+
+
+func _on_deck_selection_cancelled() -> void:
+	"""2026-09-30, a pedido del usuario: antes no había forma de cancelar
+	esta pantalla — Escape en DeckSelector.gd ahora emite esta señal en vez
+	de quedar como código muerto. Vuelve al menú principal (mismo destino
+	que el botón 'Volver' de OnlineConnect.gd/DeckManager.gd/BackSelector.gd)."""
+	if NetworkClient.room_code != "":
+		NetworkClient.disconnect_from_relay()
+	get_tree().change_scene_to_file("res://scenes/menu/MainMenu.tscn")
 
 
 func _on_decks_selected(player_data: Dictionary, opponent_data: Dictionary, player_is_external: bool = false, opponent_is_external: bool = false) -> void:
@@ -101,7 +112,7 @@ func _on_decks_selected(player_data: Dictionary, opponent_data: Dictionary, play
 		DeckLoader.load_deck_from_data(0, player_data)
 
 	# Multiplayer remoto (Fase A — docs/plans/2026-09-09-multiplayer-remoto-
-	# design.md): el mazo del jugador 1 no sale de acá si hay una sala de red
+	# design.md): el mazo del jugador 1 no sale de aquí si hay una sala de red
 	# activa. Del lado Anfitrión, llega por red (el mazo real del Remoto, no
 	# una copia aleatoria del propio). Del lado Remoto, esta misma instancia
 	# NUNCA corre su propia partida — solo manda su mazo (el que acaba de
@@ -130,6 +141,14 @@ func _load_opponent_deck_from_network() -> void:
 	if not pending.is_empty():
 		_apply_network_opponent_deck(pending)
 		return
+	# 2026-09-20, a pedido del usuario: si el Anfitrión ya eligió su mazo pero
+	# el Remoto todavía no mandó el suyo, mostrar "esperando jugador" en vez
+	# de quedar en silencio — mismo overlay/estilo que ya usa el lado Remoto
+	# en _send_deck_to_host() para el caso simétrico.
+	var _loading_overlay := get_node_or_null("/root/MatchLoadingOverlay")
+	if _loading_overlay:
+		_loading_overlay.show_loading(_main, "ESPERANDO JUGADOR",
+			"Tu mazo ya está listo — esperando a que el otro jugador elija el suyo...")
 	if not NetworkClient.message_received.is_connected(_on_network_message_while_waiting_deck):
 		NetworkClient.message_received.connect(_on_network_message_while_waiting_deck)
 
@@ -172,8 +191,8 @@ func _send_deck_to_host() -> void:
 	NetworkClient.send_message({"op": "deck", "card_ids": card_ids})
 	var _loading_overlay := get_node_or_null("/root/MatchLoadingOverlay")
 	if _loading_overlay:
-		_loading_overlay.show_loading(_main, "ESPERANDO AL ANFITRIÓN",
-			"Tu mazo ya se envió — el Anfitrión está preparando la partida...")
+		_loading_overlay.show_loading(_main, "ESPERANDO JUGADOR",
+			"Tu mazo ya se envió — esperando a que el Anfitrión termine de preparar la partida...")
 
 
 func _on_deck_load_failed(player_id: int, error: String) -> void:
@@ -258,7 +277,7 @@ func _setup_oro_inicial() -> void:
 			card.base_scale = Constants.GOLD_CARD_SCALE
 			_main._connect_card_signals(card)
 			_main.player_gold.add_child(card)
-			# set_zone() faltaba acá (2026-08-29, bug real reportado: el Oro
+			# set_zone() faltaba aquí (2026-08-29, bug real reportado: el Oro
 			# Inicial quedaba con current_zone en su valor por defecto, MANO
 			# — nunca se actualizaba a RESERVA_ORO porque este camino de
 			# colocación es distinto al de _place_card_as_gold(), que sí lo
@@ -393,6 +412,16 @@ func _show_dice_roll() -> void:
 	UIManager.set_phase_text("Sorteo D20")
 
 	var dice_duel = DiceDuel3D.new()
+	# 2026-09-20, a pedido del usuario: en sala online, cada pantalla tiraba
+	# sus propios 2 dados al azar por separado — 4 dados sin relación entre
+	# sí, cada lado podía "ganar" su propia tirada. El Anfitrión manda el
+	# resultado REAL apenas lo decide (result_decided, antes de la animación)
+	# — RemoteMirrorController.gd escucha "dice_roll" y reproduce la MISMA
+	# tirada del otro lado, en vez de tirar la suya.
+	if NetworkClient.room_code != "" and NetworkClient.is_host:
+		dice_duel.result_decided.connect(func(r1: int, r2: int, _w: int):
+			NetworkClient.send_message({"op": "dice_roll", "result1": r1, "result2": r2})
+		)
 	_main.add_child(dice_duel)
 
 	dice_duel.duel_completed.connect(func(winner_id: int):

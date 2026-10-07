@@ -21,37 +21,40 @@ func setup(main: Node) -> void:
 
 func _resolve_search_cemetery_to_hand(controller_id: int, max_amount: int, type_filter: Array = []) -> bool:
 	"""Elige hasta max_amount cartas del Cementerio propio (filtradas por
-	tipo si se pasa type_filter) y las sube a la mano — mismo patrón de
-	selección que el resto de esta familia de funciones (state Dictionary
-	por el bug ya conocido de los lambdas de GDScript capturando por
-	valor).
-	Returns: false si el jugador Canceló la selección entera (declinó el
-	'puedes'), true si la aceptó — incluso si terminó eligiendo 0 cartas."""
-	var cemetery: Array = CardManager.get_cemetery(controller_id)
-	if not type_filter.is_empty():
-		cemetery = cemetery.filter(func(d): return d.get("tipo", -1) in type_filter)
-	if cemetery.is_empty():
-		return true  # Nada que elegir, pero el 'puedes' no se declinó — no bloquea el resto del efecto
+	tipo si se pasa type_filter) y las sube a la mano.
+	2026-09-13, a pedido del usuario: click directo con ZoneViewerModule.
+	open_cemetery_target_picker() en vez del modal de lista viejo — filtro
+	restringido al lado propio (mismo criterio que la rama "Subir" de
+	Campanita, ver arquitectura.md §10.18/§10.21). El único llamador
+	(DSR_SearchGoldCombos.gd) ignora el valor de retorno, así que la vieja
+	distinción 'false=canceló del todo / true=aceptó eligiendo 0' ya no
+	tenía ningún efecto real — se simplifica a bool fijo true salvo el
+	caso 'no hay Main'.
+	Returns: false solo si no se pudo resolver Main (error), true en
+	cualquier otro caso, incluso sin candidatos o sin elegir nada."""
 	var main := _main.get_node_or_null("/root/Main")
-	if not main:
+	if not main or not main._zone_viewer:
 		return false
+	if CardManager.get_cemetery(controller_id).is_empty():
+		return true  # Nada que elegir, pero el 'puedes' no se declinó — no bloquea el resto del efecto
 
-	var result: Dictionary = await SelectionManager.await_multi_pick(
-		cemetery, "Sube hasta %d carta(s) de tu Cementerio a tu mano" % max_amount, max_amount)
-	if result.cancelled:
-		return false
+	var filter := func(c: Node) -> bool:
+		if c.owner_id != controller_id:
+			return false
+		return type_filter.is_empty() or c.get("card_type") in type_filter
+	var picked: Array = await main._zone_viewer.open_cemetery_target_picker(
+		"Sube hasta %d carta(s) de tu Cementerio a tu mano" % max_amount, filter, max_amount, "cemetery", false, false, controller_id)
 
-	var full_cemetery: Array = CardManager.get_cemetery(controller_id)
-	for picked_data in result.picked:
-		var idx: int = full_cemetery.find(picked_data)
+	var hand_container = main.player_hand if controller_id == 0 else main._opponent_fan
+	for entry in picked:
+		var idx: int = CardManager.get_cemetery(controller_id).find(entry.data)
 		if idx < 0:
 			continue
 		CardManager.remove_from_cemetery(controller_id, idx)
-		full_cemetery = CardManager.get_cemetery(controller_id)
-		if controller_id == 0 and main.player_hand:
-			var node = main._create_card(picked_data, false)
+		if hand_container:
+			var node = main._create_card(entry.data, false)
 			main._connect_card_signals(node)
-			main.player_hand.add_card(node)
+			hand_container.add_card(node)
 	return true
 
 
@@ -60,54 +63,43 @@ func _resolve_search_cemetery_to_hand(controller_id: int, max_amount: int, type_
 # =============================================================================
 func _resolve_banish_from_both_cemeteries(max_amount: int, card: Node = null, controller_id: int = 0) -> void:
 	"""Destierra hasta max_amount cartas combinadas entre ambos Cementerios
-	(2026-08-30, Espada de O'Higgins). DOS selecciones SEPARADAS (primero
-	el Cementerio RIVAL, después el propio — orden a pedido del usuario,
-	2026-08-30) en vez de un solo pool mezclado, que confundía de cuál
-	Cementerio salía cada carta al elegir. El tope de la segunda selección
-	se descuenta de lo ya elegido en la primera, así el total combinado
-	sigue respetando max_amount. Cada carta se destierra al Destierro de
-	SU DUEÑO real.
+	(Espada de O'Higgins — VERIFICADO 2026-09-13: esta es la función que
+	realmente se ejecuta para "Destierra hasta N cartas de los Cementerios y
+	Roba M cartas", ver arquitectura.md §10.21 — try_execute_banish_up_to_n_
+	cemeteries_then_draw_pattern(), convertida antes en §10.14 pensando que
+	era esta, resultó ser código muerto por orden de chequeo).
 
-	Reordenado (2026-09-09, Pila de Respuesta Universal): las 2 selecciones
-	se declaran primero, sin tocar nada — recién con las 2 ya decididas se
-	abre UNA ventana de respuesta, y solo si nadie anula/cancela se
-	ejecutan los 2 destierros."""
-	var own_cemetery: Array = CardManager.get_cemetery(0)
-	var opp_cemetery: Array = CardManager.get_cemetery(1)
-	if own_cemetery.is_empty() and opp_cemetery.is_empty():
+	2026-09-13, a pedido del usuario: reemplaza las DOS selecciones
+	SEPARADAS (primero rival, después propio, con modales de lista — así se
+	evitaba la confusión de "¿de cuál Cementerio salió esta carta?") por
+	ZoneViewerModule.open_cemetery_target_picker(), que ya muestra ambos
+	Cementerios en columnas separadas y etiquetadas — resuelve esa misma
+	confusión mostrando de dónde es cada carta, sin necesitar dos pasos.
+
+	Reordenado (2026-09-09, Pila de Respuesta Universal): la selección se
+	declara primero, sin tocar nada — solo con lo elegido se abre UNA
+	ventana de respuesta, y solo si nadie anula/cancela se ejecutan los
+	destierros."""
+	if CardManager.get_cemetery(0).is_empty() and CardManager.get_cemetery(1).is_empty():
+		return
+	var main := _main.get_node_or_null("/root/Main") if _main else null
+	if not main or not main._zone_viewer:
 		return
 
-	var picked_opp: Array = []
-	if not opp_cemetery.is_empty():
-		var result_opp: Dictionary = await SelectionManager.await_multi_pick(
-			opp_cemetery, "Destierra hasta %d carta(s) del Cementerio RIVAL" % max_amount, max_amount)
-		if not result_opp.cancelled:
-			picked_opp = result_opp.picked
-
-	var remaining: int = max_amount - picked_opp.size()
-	var picked_own: Array = []
-	if remaining > 0 and not own_cemetery.is_empty():
-		var result_own: Dictionary = await SelectionManager.await_multi_pick(
-			own_cemetery, "Destierra hasta %d carta(s) de TU Cementerio" % remaining, remaining)
-		if not result_own.cancelled:
-			picked_own = result_own.picked
-
-	if picked_opp.is_empty() and picked_own.is_empty():
+	var no_filter := func(_c: Node) -> bool: return true
+	var picked: Array = await main._zone_viewer.open_cemetery_target_picker(
+		"Destierra hasta %d carta(s) de los Cementerios" % max_amount, no_filter, max_amount, "cemetery", false, false, controller_id)
+	if picked.is_empty():
 		return
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "Espada de O'Higgins", controller_id):
 		return
 
-	for picked_data in picked_opp:
-		var idx: int = CardManager.get_cemetery(1).find(picked_data)
+	for entry in picked:
+		var owner_of_picked: int = entry.owner_id
+		var idx: int = CardManager.get_cemetery(owner_of_picked).find(entry.data)
 		if idx >= 0:
-			CardManager.remove_from_cemetery(1, idx)
-			CardManager.add_to_exile(1, picked_data)
-
-	for picked_data in picked_own:
-		var idx: int = CardManager.get_cemetery(0).find(picked_data)
-		if idx >= 0:
-			CardManager.remove_from_cemetery(0, idx)
-			CardManager.add_to_exile(0, picked_data)
+			CardManager.remove_from_cemetery(owner_of_picked, idx)
+			CardManager.add_to_exile(owner_of_picked, entry.data)
 
 
 # =============================================================================

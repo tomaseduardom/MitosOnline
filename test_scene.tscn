@@ -1,6 +1,4 @@
-[gd_scene format=3 uid="uid://dih3ubgaj5h2v"]
-
-[ext_resource type="Script" uid="uid://d0821cn6wk0ak" path="res://scripts/test/TestScene.gd" id="1_test"]
+[gd_scene format=3 uid="uid://cenud0ss8p6p2"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_zone"]
 bg_color = Color(0.12, 0.14, 0.18, 1)
@@ -21,7 +19,6 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-script = ExtResource("1_test")
 
 [node name="Background" type="ColorRect" parent="." unique_id=1726533689]
 layout_mode = 1

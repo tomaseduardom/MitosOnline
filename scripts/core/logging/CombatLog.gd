@@ -233,7 +233,7 @@ func _add_phase_header(phase: int) -> void:
 
 	# Header visual de fase
 	var header = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	var phase_line = "       ⚔ FASE DE %s ⚔" % _current_phase_name.to_upper()
+	var phase_line = "       FASE DE %s" % _current_phase_name.to_upper()
 
 	add_entry("phase_header", header, {"phase": phase}, 1)
 	add_entry("phase_header", phase_line, {"phase": phase}, 1)

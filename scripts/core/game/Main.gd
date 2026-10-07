@@ -19,6 +19,7 @@ const _GameBootstrapScript    = preload("res://scripts/core/game/GameBootstrap.g
 const _CardInteractionScript  = preload("res://scripts/ui/hud/CardInteractionModule.gd")
 const _SceneSetupScript       = preload("res://scripts/ui/hud/SceneSetupModule.gd")
 const _DebugInputScript       = preload("res://scripts/ui/hud/DebugInputModule.gd")
+const _ActionLogDrawerScript  = preload("res://scripts/ui/hud/ActionLogDrawer.gd")
 
 # =============================================================================
 # REFERENCIAS A NODOS
@@ -55,6 +56,7 @@ var _opponent_fan: Node = null
 @onready var opponent_destierro_count: Label = $GameBoard/OpponentArea/OpponentDestierro/Count
 
 @onready var _panel_player_castillo: Panel = $GameBoard/PlayerArea/PlayerCastillo
+@onready var _panel_opp_castillo: Panel    = $GameBoard/OpponentArea/OpponentCastillo
 @onready var _panel_player_cem: Panel = $GameBoard/PlayerArea/PlayerCementerio
 @onready var _panel_player_dst: Panel = $GameBoard/PlayerArea/PlayerDestierro
 @onready var _panel_opp_cem: Panel    = $GameBoard/OpponentArea/OpponentCementerio
@@ -94,6 +96,9 @@ var _scene_setup: SceneSetupModule         = null
 var _debug_input: DebugInputModule         = null
 var _remote_mirror: RemoteMirrorController  = null
 var _state_broadcaster: GameStateBroadcaster = null
+var _game_over_overlay: GameOverOverlay    = null
+var _combat_juice: CombatJuiceModule       = null
+var _action_log_drawer: Node               = null
 
 # =============================================================================
 # ESTADO
@@ -179,7 +184,23 @@ func _ready() -> void:
 	add_child(_bootstrap); _bootstrap.setup(self)
 
 	_debug_input = DebugInputModule.new(); _debug_input.name = "DebugInputModule"
+	# PROCESS_MODE_ALWAYS (2026-09-11, bug real reportado por el usuario: ESC
+	# abre el menú de pausa pero no lo cierra) — pause_menu ya tiene este
+	# mismo modo (SceneSetupModule.gd) para que sus botones funcionen con el
+	# árbol pausado, pero este nodo (dueño del _input() que escucha ESC) no lo
+	# tenía: al pausar (get_tree().paused = true), dejaba de recibir _input()
+	# por completo, así que una segunda tecla ESC nunca llegaba a procesarse.
+	_debug_input.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_debug_input); _debug_input.setup(self)
+
+	_combat_juice = CombatJuiceModule.new()
+	add_child(_combat_juice)
+	_combat_juice.setup(self)
+
+	_action_log_drawer = _ActionLogDrawerScript.new()
+	_action_log_drawer.name = "ActionLogDrawer"
+	add_child(_action_log_drawer)
+	_action_log_drawer.setup(self)
 
 	VisualManager.setup(self, $Background)
 
@@ -228,7 +249,26 @@ func _on_game_started() -> void:
 
 func _on_game_ended(winner: int) -> void:
 	_update_debug("Jugador %d gana!" % (winner + 1))
-	UIManager.set_phase_text("VICTORIA!")
+	UIManager.set_phase_text("¡VICTORIA!" if winner == 0 else "DERROTA")
+
+	var stats: Dictionary = {
+		"winner": winner,
+		"is_victory": (winner == 0),
+		"turns": GameManager.current_turn,
+		"player_deck": player_deck.size() if player_deck is Array else 0,
+		"opponent_deck": opponent_deck.size() if opponent_deck is Array else 0,
+		"player_cemetery": CardManager.get_cemetery_count(0),
+		"opponent_cemetery": CardManager.get_cemetery_count(1),
+		"player_exile": CardManager.get_exile_count(0),
+		"opponent_exile": CardManager.get_exile_count(1),
+	}
+
+	if not _game_over_overlay:
+		_game_over_overlay = GameOverOverlay.new()
+		_game_over_overlay.name = "GameOverOverlay"
+		add_child(_game_over_overlay)
+
+	_game_over_overlay.show_game_over(stats)
 
 func _update_buttons_for_phase(_phase: Constants.Phase) -> void:
 	pass
@@ -249,9 +289,20 @@ func _sync_oro_ui() -> void:
 # Los atajos de teclado F1-F9/ESC y el _input() que los procesa se movieron a
 # DebugInputModule.gd (2026-08-28, a pedido del usuario: "el main es para
 # arrancar la app", eso es tooling de runtime, no arranque). _update_debug()
-# se queda acá porque es infraestructura mínima usada por TODO el proyecto
+# se queda aquí porque es infraestructura mínima usada por TODO el proyecto
 # (142 llamadores vía _main._update_debug()) — sacarla implicaría tocar cada
 # uno de esos archivos por puro cosmética, sin beneficio real.
+var _last_debug_text: String = ""
+
+
 func _update_debug(text: String) -> void:
 	UIManager.show_debug(text)
-	print("[Main] %s" % text)
+	# 2026-09-25, a pedido del usuario ("quitar el log redundante, hay
+	# bastante"): un rechazo repetido (clicks fallidos seguidos, p.ej.
+	# "Objetivo no válido" varias veces) imprimía la misma línea una vez
+	# por click — la UI ya se actualiza igual (el jugador ve el mensaje en
+	# pantalla cada vez), solo se evita reimprimir la MISMA línea dos veces
+	# seguidas en consola.
+	if text != _last_debug_text:
+		print("[Main] %s" % text)
+		_last_debug_text = text

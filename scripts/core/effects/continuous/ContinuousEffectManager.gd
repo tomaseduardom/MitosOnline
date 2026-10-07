@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## ContinuousEffectManager - Gestiona efectos continuos y modificadores (Sección 7.2)
 ## Registra modificadores de cartas en juego y recalcula valores dinámicamente
 
@@ -153,7 +153,7 @@ func _on_effect_controller_card_left(_player_id: int, card: Node, from_zone: int
 # =============================================================================
 # REGISTRO DE MODIFICADORES Y CÁLCULO DE VALORES (implementación en
 # ModifierRegistry.gd — Sección 7.4/8. El estado, _modifiers/_modifiers_by_*/
-# cache, sigue viviendo acá abajo en ESTADO; ModifierRegistry lo consulta
+# cache, sigue viviendo aquí abajo en ESTADO; ModifierRegistry lo consulta
 # vía _main, igual que ContinuousVisualSync.gd ya lo hacía)
 # =============================================================================
 func register_modifier(params: Dictionary) -> String:
@@ -275,6 +275,8 @@ func _on_card_entered_zone(card: Node, zone: int, player_id: int) -> void:
 
 	# Invalidar cache
 	_invalidate_cache()
+	if _visual_sync:
+		_visual_sync.call_deferred("update_all_card_visuals")
 
 
 func _on_card_left_zone(card: Node, zone: int, player_id: int) -> void:
@@ -291,6 +293,8 @@ func _on_card_left_zone(card: Node, zone: int, player_id: int) -> void:
 
 	# Invalidar cache
 	_invalidate_cache()
+	if _visual_sync:
+		_visual_sync.call_deferred("update_all_card_visuals")
 
 
 func _register_card_continuous_effects(card: Node) -> void:
@@ -345,14 +349,21 @@ func _get_card_id(card) -> String:
 	modificadores) quedara cacheado bajo una clave que la OTRA copia (sin
 	esos modificadores) también consultaba, heredando el mismo resultado.
 	El instance_id de Godot SIEMPRE es único por Node, incluso entre
-	copias idénticas — es la única clave correcta acá."""
+	copias idénticas — es la única clave correcta aquí."""
 	if card == null:
 		return "null"
 
 	if card is String:
 		return card
 
-	if card is Node:
+	# is_instance_valid() PRIMERO (2026-09-19, misma clase de bug que
+	# ContinuousVisualSync.gd — "Left operand of 'is' is a previously freed
+	# instance"): un 'is Node' bare sobre una carta ya liberada (destruida/
+	# desterrada sin limpiar el modificador que la referencia) revienta aquí
+	# — is_instance_valid() es seguro sobre cualquier Variant, incluida una
+	# referencia liberada, así que corta ANTES de que 'is Node' llegue a
+	# evaluarse sobre ella.
+	if is_instance_valid(card) and card is Node:
 		return str(card.get_instance_id())
 
 	if card is Dictionary:
@@ -366,7 +377,7 @@ func _get_card_name(card) -> String:
 	if card == null:
 		return "???"
 
-	if card is Node:
+	if is_instance_valid(card) and card is Node:
 		if card.get("card_name"):
 			return card.card_name
 		if card.get("nombre"):
@@ -572,7 +583,7 @@ func _get_all_cards_in_play() -> Array:
 	(2026-08-25) — usado para refrescar el badge visual de TODOS los
 	afectados cuando se registra/quita un aura de target dinámico (ALL/
 	ALLIES/ENEMIES/OTHER), ya que _resolve_targets() no las enumera (se
-	resuelven carta por carta en _get_applicable_modifiers(), no acá)."""
+	resuelven carta por carta en _get_applicable_modifiers(), no aquí)."""
 	var main = get_node_or_null("/root/Main")
 	if not main:
 		return []
@@ -667,7 +678,12 @@ func _resolve_targets(modifier: Dictionary) -> Array:
 	if target == null:
 		return targets
 
-	if target is Node:
+	# is_instance_valid() PRIMERO — mismo motivo que _get_card_id()/
+	# _get_card_name() arriba: modifier.target puede ser una carta que ya
+	# salió de juego sin que este modificador se haya limpiado de
+	# _modifiers/_modifiers_by_target (2026-09-19, bug real de la misma
+	# familia reportado por el usuario en ContinuousVisualSync.gd).
+	if is_instance_valid(target) and target is Node:
 		targets.append(target)
 	elif target is Array:
 		targets = target

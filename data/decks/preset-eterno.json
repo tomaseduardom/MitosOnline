@@ -1,0 +1,136 @@
+{
+    "slug":  "preset-eterno",
+    "nombre":  "Eterno reedit (publico)",
+    "arquetipo":  "Eterno",
+    "formato":  "imp",
+    "entries":  [
+                    {
+                        "myl_id":  "custom_mig_22",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mig_28",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mig_32",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_22",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_24",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_25",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_26",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_27",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_33",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_34",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_35",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_38",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_39",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_42",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_44",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_46",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mie_01",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_02",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_08",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mie_10",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_11",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_15",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "custom_mie_19",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mie_20",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_21",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_27",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_28",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_30",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mie_31",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mie_35",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mie_40",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_44",
+                        "quantity":  2
+                    }
+                ]
+}

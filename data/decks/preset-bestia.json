@@ -1,0 +1,132 @@
+{
+    "slug":  "preset-bestia",
+    "nombre":  "Bestia - Troncoso (publico)",
+    "arquetipo":  "Bestia",
+    "formato":  "imp",
+    "entries":  [
+                    {
+                        "myl_id":  "20588",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "20611",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20612",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20613",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20616",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20618",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20642",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20643",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20683",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20861",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20872",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20346",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20486",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20537",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20556",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20557",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "20273",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20277",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20576",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20579",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20581",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20582",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "19905",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "19916",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "18646",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "18776",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "17612",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "17688",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_kvm_234",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_tk26_07",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_tk26_20",
+                        "quantity":  2
+                    }
+                ]
+}

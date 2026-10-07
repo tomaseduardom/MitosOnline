@@ -12,19 +12,17 @@ func setup(main: Node) -> void:
 
 
 func format_card(card_name: String) -> String:
-	"""Formatea nombre de carta con color dorado y negrita"""
+	"""Formatea nombre de carta con color dorado, negrita y enlace interactivo de inspección"""
 	if card_name.is_empty() or card_name == "???":
 		return "[color=#888888]carta desconocida[/color]"
-	return "[b][color=#FFD700]%s[/color][/b]" % card_name
+	return "[url=card:%s][b][color=#FFD700]%s[/color][/b][/url]" % [card_name, card_name]
 
 
 func format_card_with_origin(card_name: String, via_exhumar: bool = false) -> String:
 	"""Formatea nombre de carta con prefijo de origen si aplica"""
-	var display_name = card_name
 	if via_exhumar:
-		display_name = "[EXHUMAR] " + card_name
-
-	return format_card(display_name)
+		return "[color=#BA68C8][b][EXHUMAR][/b][/color] " + format_card(card_name)
+	return format_card(card_name)
 
 
 func format_effect(text: String, effect_type: String = "") -> String:

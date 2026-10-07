@@ -21,9 +21,9 @@ func banish(targets: Array, source: Node = null, skip_validation: bool = false, 
 		skip_validation: Si omitir validación previa
 		can_be_prevented: Si puede ser prevenida por Estaca — false cuando
 			el llamador YA resolvió su propia Prevención específica antes
-			de llegar acá (2026-09-09, p.ej. TargetedEffectExecutor.
+			de llegar aquí (2026-09-09, p.ej. TargetedEffectExecutor.
 			_execute_targeted_annul(): Anular solo lo previene Drácula, no
-			Estaca, así que pasa false para no volver a preguntar acá).
+			Estaca, así que pasa false para no volver a preguntar aquí).
 			AL FINAL a propósito, no antes de skip_validation: los ~15
 			llamadores existentes ya pasan 'true' como tercer argumento
 			posicional para skip_validation — insertar un parámetro ANTES

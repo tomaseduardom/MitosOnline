@@ -11,7 +11,7 @@ class_name CardTriggerRuntime
 ## llaman así en varios puntos).
 ## Extraído de Card.gd (2026-09-06, "módulos gordos" — mismo corte que ya
 ## separó CardInteraction.gd/CardAnimations.gd, Fase 4 de reestructuración).
-## Nota: Card.TRIGGER_KEYWORDS queda en Card.gd (no acá) porque se accede de
+## Nota: Card.TRIGGER_KEYWORDS queda en Card.gd (no aquí) porque se accede de
 ## forma ESTÁTICA vía la clase (Card.TRIGGER_KEYWORDS[...] en
 ## TriggerResolution.gd) — moverlo rompería ese acceso estático.
 
@@ -58,7 +58,7 @@ func parse_triggers_from_ability() -> void:
 				})
 				# Solo un trigger por tipo
 				break
-	# Nota (2026-08-27): los Talismanes NO se resuelven por acá — no
+	# Nota (2026-08-27): los Talismanes NO se resuelven por aquí — no
 	# "disparan" nada (DAR Sección 7.4 es para habilidades disparadas de
 	# permanentes). Su texto se resuelve directo al jugarlos, ver
 	# TriggerSystem.resolve_talisman() / GoldManager._trigger_enter_play().
@@ -154,7 +154,7 @@ func _on_trigger_event(trigger_type: String, event_data: Dictionary) -> Dictiona
 			return result
 
 	# Sin handler específico registrado (2026-08-22): NO usar
-	# _resolve_default_effect() acá — es un escaneo de palabras clave sobre
+	# _resolve_default_effect() aquí — es un escaneo de palabras clave sobre
 	# el texto COMPLETO de la carta (sin aislar por oración), así que una
 	# carta con VARIAS habilidades en el mismo bloque (p.ej. Tyet: 'Cuando
 	# entra en juego, busca un Arma o un Oro...' + más adelante 'Robar dos
@@ -188,4 +188,9 @@ func on_left_play() -> void:
 	TriggerSystem.unregister_continuous_effect(_card)
 
 	effect_handlers.clear()
-	print("[Card] %s dejó el juego" % _card.card_name)
+	# 2026-09-23, a pedido del usuario: este mensaje solo duplicaba lo que ya
+	# informa EffectController ("X fue destruida"/"X resuelve su efecto y va
+	# al Cementerio") — 3 líneas distintas para el mismo evento de salida de
+	# juego. Se mantiene gateado para depuración profunda.
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[Card] %s dejó el juego" % _card.card_name)

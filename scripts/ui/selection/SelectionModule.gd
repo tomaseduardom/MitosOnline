@@ -47,13 +47,14 @@ func _on_exhume_card_selected(card_data: Dictionary) -> void:
 		push_error("[SelectionModule] Carta no encontrada en cementerio")
 		return
 	if card_cost > 0:
-		if player_id == 0:
-			var paid = await _main._gold_manager.pagar_coste(card_cost)
-			if not paid:
-				_main._update_debug("Error al pagar coste de exhumar")
-				return
-		else:
-			GameState.pagar_oro(player_id, card_cost)
+		# 2026-10-06 (ver arquitectura.md §33): GoldManager.pagar_coste() ya
+		# es por jugador — antes esto solo pasaba por ahí para el jugador 0
+		# (Oro Virtual/restringido + elegir QUÉ Oro físico gastar) y le
+		# debitaba directo al jugador 1 sin pasar por ninguno de los dos.
+		var paid = await _main._gold_manager.pagar_coste(card_cost, -1, "", -1, player_id)
+		if not paid:
+			_main._update_debug("Error al pagar coste de exhumar")
+			return
 	var exhumed_data = CardManager.exhume_card(player_id, index)
 	exhumed_data["is_exhumed"] = true
 	exhumed_data["via_exhumar"] = true
@@ -148,50 +149,6 @@ func _disconnect_search_signals() -> void:
 	if SelectionManager.selection_cancelled.is_connected(_on_search_cancelled):
 		SelectionManager.selection_cancelled.disconnect(_on_search_cancelled)
 	_pending_search_callback = Callable()
-
-
-# =============================================================================
-# DESCARTE POR LÍMITE DE MANO (DAR 5.D.4)
-# =============================================================================
-func open_discard_selection(player_id: int, amount: int) -> void:
-	"""Abre la UI para que el jugador elija qué carta(s) descartar por exceder
-	el límite de mano. Solo aplica al jugador humano (id 0) — el oponente se
-	descarta automáticamente vía PhaseFlowController._opponent_auto_discard()."""
-	if player_id != 0:
-		return
-	var hand_cards: Array = _main.player_hand.cards.duplicate()
-	if hand_cards.is_empty():
-		return
-	amount = mini(amount, hand_cards.size())
-	var card_data_list: Array = []
-	for card in hand_cards:
-		card_data_list.append(card.card_data)
-	SelectionManager.open_selection(card_data_list, SelectionManager.SelectionMode.DISCARD, {
-		"title": "Descarta %d (límite %d)" % [amount, Constants.MAX_HAND_SIZE],
-		"max_selections": amount,
-		"min_selections": amount,
-		"can_cancel": false
-	})
-	# max_selections == 1 hace que SelectionManager cierre en el primer clic y
-	# emita card_selected en vez de selection_completed (ver _on_card_clicked) —
-	# hay que escuchar la señal correcta o el await se queda colgado para siempre.
-	var selected_data: Array = []
-	if amount == 1:
-		selected_data = [await SelectionManager.card_selected]
-	else:
-		selected_data = await SelectionManager.selection_completed
-	var hand_data_list: Array = hand_cards.map(func(c): return c.card_data)
-	for data in selected_data:
-		var index = _find_card_in_array(hand_data_list, data)
-		if index < 0:
-			continue
-		var card = hand_cards[index]
-		var discard_data: Dictionary = data.duplicate()
-		discard_data["esta_oculta"] = false
-		CardManager.add_to_cemetery(player_id, discard_data)
-		_main.player_hand.remove_card(card)
-	_main._update_debug("Descarte por límite de mano completado (%d carta(s))" % selected_data.size())
-	_main._zone_manager._update_castillo_counts()
 
 
 # =============================================================================

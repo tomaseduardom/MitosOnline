@@ -149,6 +149,10 @@ func open_and_wait(prompt: String = "Nombra una carta") -> Dictionary:
 			status_label.text = "%d resultado(s)" % shown
 
 	input.text_changed.connect(func(_t): rebuild_results.call())
+	input.text_submitted.connect(func(_t):
+		if not displayed_cards.is_empty() and is_instance_valid(displayed_cards[0]):
+			on_result_clicked.call(displayed_cards[0])
+	)
 	cancel_btn.pressed.connect(func(): state.resolved = true)
 	overlay.gui_input.connect(func(ev):
 		if ev is InputEventKey and ev.pressed and ev.keycode == KEY_ESCAPE:

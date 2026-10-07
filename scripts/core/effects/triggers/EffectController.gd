@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## EffectController - Procesa efectos de cartas sobre el mazo
 ## Implementa validación "En medida de lo posible" (DAR - regla general)
 ##
@@ -14,7 +14,7 @@
 ## llamadores en todo el proyecto — implementaciones duplicadas y abandonadas
 ## de lo que ActionModule.gd (el camino real: TriggerSystem →
 ## UniversalCardParser → ActionModule) ya hace de verdad. Antes de añadir un
-## efecto nuevo, dale a game_board el mismo tratamiento que draw_cards/
+## efecto nuevo, aplicarle a game_board el mismo tratamiento que draw_cards/
 ## mill_cards/destroy_card/exile_card (fallback a CardManager) en vez de
 ## asumir que va a aparecer solo — pero solo si algo realmente lo va a llamar.
 
@@ -39,6 +39,7 @@ signal on_card_destroyed(player_id: int, card: Node)
 signal on_card_exiled(player_id: int, card: Node)
 signal on_card_returned_to_hand(player_id: int, card: Node)
 signal on_card_attacks(player_id: int, card: Node)  # DAR 5.3.1 — "cuando ataque"
+signal on_card_blocks(player_id: int, card: Node)  # DAR 5.3.2 — "cuando bloqueas" (2026-09-20)
 signal on_card_returned_to_deck(player_id: int, card: Node, to_top: bool)
 
 # =============================================================================
@@ -256,8 +257,10 @@ func _mill_cards_fallback(player_id: int, amount: int, destination: int) -> Dict
 	Usa CardManager (su deck/cementerio/destierro quedan sincronizados con
 	Main por referencia compartida desde sync_from_main()) en vez de fallar
 	en silencio. Limitación conocida: el Castillo no tiene nodos de Card
-	individuales (solo un contador visual), así que milled_cards queda vacío
-	y no se emite on_card_milled por carta — el conteo sí es correcto."""
+	individuales (solo un contador visual), así que milled_cards se llena
+	con los Dictionary de datos crudos (mismo shape que CardManager guarda
+	en Cementerio/Destierro, clave "nombre") en vez de nodos Card reales, y
+	no se emite on_card_milled por carta — el conteo sí es correcto."""
 	var result = {
 		"success": true,
 		"milled_cards": [],
@@ -277,12 +280,14 @@ func _mill_cards_fallback(player_id: int, amount: int, destination: int) -> Dict
 			var card_data: Dictionary = deck.pop_back()
 			card_data["esta_oculta"] = false
 			exile.append(card_data)
+			result.milled_cards.append(card_data)
 			result.actual += 1
 		CardManager._emit_exile_changed(player_id)
 		CardManager._emit_deck_changed(player_id)
 	else:
 		var dmg_result: Dictionary = CardManager.mill_cards(player_id, amount)
 		result.actual = dmg_result.get("actual", 0)
+		result.milled_cards = dmg_result.get("cards", [])
 
 	print("[EffectController] (fallback) Jugador %d botó %d/%d cartas al %s" % [
 		player_id + 1, result.actual, amount, Constants.ZONE_NAMES.get(destination, "?")
@@ -569,7 +574,7 @@ func _build_prevention_registry() -> void:
 			# OJO: NO incluye "leave_play" — destroy_card()/exile_card() son el
 			# funnel final por el que TAMBIÉN pasa cualquier "destroy"/"exile"
 			# ya resuelto por ActionDestroy/ActionBanish más arriba en la
-			# pila; si Estaca tuviera "leave_play" acá, preguntaría DOS veces
+			# pila; si Estaca tuviera "leave_play" aquí, preguntaría DOS veces
 			# por la misma acción (una vez como "destroy"/"exile", otra como
 			# "leave_play" al llegar a destroy_card()/exile_card()). Legión
 			# 2026-09-09, corregido a pedido del usuario: Estaca SÍ cubre
@@ -607,7 +612,7 @@ func _build_prevention_registry() -> void:
 			# Su texto es específico de "un Aliado" (2026-09-09, corregido —
 			# se filtraba antes SOLO en _try_consume_leave_play_prevention(),
 			# que no cubre el choke point nuevo de return_to_deck(); ahora
-			# vive acá, en el registro mismo, así que aplica sin importar
+			# vive aquí, en el registro mismo, así que aplica sin importar
 			# desde dónde se llame offer_prevention()).
 			"applies": func(target) -> bool:
 				if target == null:
@@ -645,7 +650,33 @@ func _build_prevention_registry() -> void:
 			"is_available": func(card: Node) -> bool: return not card.is_converted,
 			"on_used": func(card: Node) -> bool:
 				card.is_converted = true
+				if card.has_method("play_conversion_animation"):
+					card.play_conversion_animation(true)
 				await KeywordManager.silence_card(card, card, "permanent")
+				var main := get_node_or_null("/root/Main")
+				if main:
+					# Si la carta convertida estaba en una línea de combate, trasladarla limpiamente a la Reserva de Oro
+					var zone = card.get("current_zone")
+					if zone in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
+						var owner_id: int = card.owner_id if card.get("owner_id") != null else 0
+						var parent = card.get_parent()
+						if parent:
+							parent.remove_child(card)
+						var gold_cont = main.player_gold if owner_id == 0 else main.opponent_gold
+						if gold_cont:
+							gold_cont.add_child(card)
+							card.set_zone(Constants.Zone.RESERVA_ORO)
+							card.scale = Constants.GOLD_CARD_SCALE
+							card.base_scale = Constants.GOLD_CARD_SCALE
+							GameState.agregar_oro_reserva(owner_id, 1)
+							if owner_id == 0:
+								main.gold_cards.append(card)
+							if main._gold_manager and main._gold_manager.has_method("update_gold_containers_spacing"):
+								main._gold_manager.update_gold_containers_spacing()
+					if CombatLog and CombatLog.has_method("log_action"):
+						CombatLog.log_action("¡%s se convirtió en un Oro sin habilidad y previno el efecto!" % str(card.card_name))
+					if main.has_method("_update_debug"):
+						main._update_debug("¡%s previno la cancelación/anulación!" % str(card.card_name))
 				return true,
 		},
 		{
@@ -669,8 +700,8 @@ func _build_prevention_registry() -> void:
 			# a pedido del usuario): SIN botón de activación, dos disparadores
 			# reactivos distintos que comparten un único candado de una vez
 			# por turno y un único costo (barajar 1 carta propia) pagado
-			# recién al confirmar cuál de los dos usa. La mitad "Prevenir"
-			# entra acá (mismo registro que Estaca, pero solo Aliados); la
+			# solo al confirmar cuál de los dos usa. La mitad "Prevenir"
+			# entra aquí (mismo registro que Estaca, pero solo Aliados); la
 			# mitad "Anular cuando el rival juega una carta" vive en
 			# offer_counter_annul() más abajo — comparte is_available/costo
 			# vía el mismo helper _pay_akari_shuffle_cost().
@@ -697,7 +728,7 @@ func _build_prevention_registry() -> void:
 
 
 ## Costo compartido de Almirante Akari (barajar 1 carta propia, de la mano o
-## en juego) — pagado recién al confirmar cuál de sus 2 respuestas usa
+## en juego) — pagado solo al confirmar cuál de sus 2 respuestas usa
 ## (Prevenir u offer_counter_annul()). Returns false si el jugador canceló
 ## la selección (no se paga nada, la respuesta de Akari se aborta entera).
 func _pay_akari_shuffle_cost(source_card: Node) -> bool:
@@ -717,19 +748,14 @@ func _pay_akari_shuffle_cost(source_card: Node) -> bool:
 		main._update_debug("Almirante Akari: no tienes ninguna carta en tu mano o en juego para Barajar")
 		return false
 
-	var cost_data_list: Array = []
-	for c in cost_candidates:
-		cost_data_list.append(c.card_data)
-	var picked_cost: Dictionary = await SelectionManager.await_single_pick(
-		cost_data_list, "Almirante Akari: elige una carta de tu mano o que controles para Barajar (costo)")
-	if picked_cost.is_empty():
+	if not main._card_interaction:
 		return false
-	var cost_node: Node = null
-	for c in cost_candidates:
-		if c.card_data == picked_cost:
-			cost_node = c
-			break
-	if not cost_node:
+	# 2026-09-13, a pedido del usuario: click directo sobre la mano/campo en
+	# vez del modal de lista viejo.
+	var cost_filter := func(c: Node) -> bool: return c in cost_candidates
+	var cost_node: Node = await main._card_interaction.await_target(
+		"Almirante Akari: elige una carta de tu mano o que controles para Barajar (costo)", cost_filter)
+	if not cost_node or not is_instance_valid(cost_node):
 		return false
 
 	if main.player_hand and main.player_hand.cards.has(cost_node):
@@ -795,6 +821,106 @@ func offer_counter_annul(played_card: Node) -> void:
 	if not is_instance_valid(played_card):
 		return
 	await ActionModule.destroy([played_card], akari, true, true)
+
+
+## "Una vez por turno, puedes subir una carta que controles a la mano de su
+## dueño para Anular un Talismán o Tótem de coste 2 o menos" (flechar xoon,
+## 2026-09-20, arquitectura.md "539 cartas sin cobertura") — mismo mecanismo
+## real que offer_counter_annul()/Almirante Akari arriba: este motor no
+## modela un stack de resolución interceptable, así que "Anular X de coste
+## N" en la práctica se implementa como "cuando esa carta termina de entrar/
+## resolver, puedes Destruirla" (offer_counter_annul() es el precedente
+## verificado para esto, ver arquitectura.md §2 sobre LinkedEffectRegistry/
+## TargetSelector — ese clúster con un verdadero targeting-en-la-pila está
+## marcado como código muerto, no es lo que usan las cartas reales). Llamar
+## desde el mismo choke point que offer_counter_annul() (después de que
+## played_card termina de entrar en juego), del lado de quien la jugó.
+func offer_flechar_xoon_annul(played_card: Node) -> void:
+	if not is_instance_valid(played_card):
+		return
+	var played_type = played_card.get("card_type")
+	if played_type != Constants.CardType.TALISMAN and played_type != Constants.CardType.TOTEM:
+		return
+	var played_owner: int = played_card.controller_id if played_card.get("controller_id") != null else 0
+	var defender_id: int = 1 - played_owner
+	if defender_id != 0:
+		return  # el bot no responde todavía
+	var cost = played_card.get("card_cost")
+	if cost == null or int(cost) > 2:
+		return
+
+	var main := get_node_or_null("/root/Main")
+	if not main:
+		return
+	var fields: Array = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo]
+	var xoon: Node = null
+	for field in fields:
+		if not field:
+			continue
+		for card in field.get_children():
+			if not is_instance_valid(card):
+				continue
+			var ability_text: String = str(card.card_ability) if card.get("card_ability") != null else ""
+			if "para anular un talism" in ability_text.to_lower() \
+					and not UniversalCardParser.turn_registry.was_used(str(card.get_instance_id()), 0, GameManager.current_turn):
+				xoon = card
+				break
+		if xoon:
+			break
+	if not xoon:
+		return
+
+	var use_it: bool = await SelectionManager.await_two_choice(
+		main, "¿Usar %s para Anular a %s?" % [str(xoon.get("card_name")), str(played_card.get("card_name"))], "Sí", "No")
+	if not use_it:
+		return
+
+	# Costo: subir una carta que controles a la mano de su dueño (mismo
+	# criterio de picker que _pay_akari_shuffle_cost(), pero el destino es la
+	# MANO, no el Mazo — "subir a la mano" es literal, no "Barajar").
+	if not main._card_interaction:
+		return
+	var own_cards: Array = []
+	for field in fields:
+		if field:
+			own_cards.append_array(field.get_children())
+	if own_cards.is_empty():
+		main._update_debug("%s: no controlas ninguna carta para subir a la mano" % str(xoon.get("card_name")))
+		return
+	var cost_filter := func(c: Node) -> bool: return c in own_cards
+	var cost_node: Node = await main._card_interaction.await_target(
+		"Elige una carta que controles para subir a la mano de su dueño (costo)", cost_filter)
+	if not cost_node or not is_instance_valid(cost_node):
+		return
+
+	UniversalCardParser.turn_registry.register(str(xoon.get_instance_id()), 0, GameManager.current_turn)
+	var owner_id: int = cost_node.get("owner_id") if cost_node.get("owner_id") != null else 0
+	var target_hand = main.player_hand if owner_id == 0 else null
+	if target_hand and cost_node.get("card_data") != null:
+		var data: Dictionary = cost_node.card_data.duplicate()
+		var old_parent := cost_node.get_parent()
+		if old_parent:
+			old_parent.remove_child(cost_node)
+		cost_node.queue_free()
+		var new_node = main._create_card(data, false)
+		target_hand.add_card(new_node)
+		main._connect_card_signals(new_node)
+	else:
+		# Dueño es el rival (bot/remoto) — su mano real vive en _opponent_fan
+		# (mismo camino que hangar de la ciudadela, arquitectura.md §12.8),
+		# no en un 'opponent_hand' que no existe.
+		if cost_node.get("card_data") != null and main._opponent_fan and main.has_method("_create_card"):
+			var data2: Dictionary = cost_node.card_data.duplicate()
+			var old_parent2 := cost_node.get_parent()
+			if old_parent2:
+				old_parent2.remove_child(cost_node)
+			cost_node.queue_free()
+			var opp_node = main._create_card(data2, false)
+			main._opponent_fan.add_card(opp_node)
+
+	if not is_instance_valid(played_card):
+		return
+	await ActionModule.destroy([played_card], xoon, true, true)
 
 
 ## Versión "por player_id" — algunos choke points (LinkedEffectRegistry,
@@ -874,7 +1000,7 @@ func offer_prevention_for_player(target_owner_id: int, effect_source: Node, effe
 func _ask_prevention_panel(candidates: Array) -> Dictionary:
 	"""Panel de "ventana de respuesta" para Prevención — mismo estilo visual
 	que ResponseWindowHandler._on_step_d_waiting() (título, tamaño, timer de
-	5 segundos, "Pasar" clickeable desde el instante 0), pero construido acá
+	5 segundos, "Pasar" clickeable desde el instante 0), pero construido aquí
 	directo porque EffectController no tiene una referencia al
 	CardInspectionLayer/ResponseWindowHandler del humano (son módulos de UI
 	separados, ver arquitectura). Un botón por candidata + "Pasar".
@@ -900,13 +1026,17 @@ func _ask_prevention_panel(candidates: Array) -> Dictionary:
 	vbox.add_theme_constant_override("separation", 4)
 	panel.add_child(vbox)
 	var title := Label.new()
-	title.text = "⏸ Ventana de Respuesta"
+	title.text = "Ventana de Respuesta"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
 	title.add_theme_font_size_override("font_size", 13)
 	vbox.add_child(title)
 	var status_lbl := Label.new()
-	status_lbl.text = "¿Prevenir esto? (5s)"
+	if candidates.size() == 1:
+		var single_name: String = str(candidates[0].card.card_name) if (candidates[0].card and "card_name" in candidates[0].card and not str(candidates[0].card.card_name).is_empty()) else str(candidates[0].entry.name)
+		status_lbl.text = "¿Usar %s para prevenir? (5s)" % single_name
+	else:
+		status_lbl.text = "¿Deseas prevenir este efecto? (5s)"
 	status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	status_lbl.add_theme_font_size_override("font_size", 10)
 	status_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
@@ -924,7 +1054,8 @@ func _ask_prevention_panel(candidates: Array) -> Dictionary:
 
 	for c in candidates:
 		var btn := Button.new()
-		btn.text = "Usar %s" % str(c.entry.name)
+		var card_name: String = str(c.card.card_name) if (c.card and "card_name" in c.card and not str(c.card.card_name).is_empty()) else str(c.entry.name)
+		btn.text = "Usar %s" % card_name
 		btn.pressed.connect(func():
 			state.chosen = c
 			state.done = true

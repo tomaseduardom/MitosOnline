@@ -37,6 +37,8 @@ var _is_card_legal: bool = false  # Si la carta puede ser jugada legalmente
 var _highlight_rect: ColorRect = null
 var _runic_border: Panel = null
 var _glow_tween: Tween = null
+var _highlight_fade_tween: Tween = null
+var _runic_fade_tween: Tween = null
 
 # =============================================================================
 # INICIALIZACIÓN
@@ -169,7 +171,7 @@ func _play_card_fallback(card: Node) -> void:
 	"""Intento alternativo de jugar la carta (2026-08-28, "módulos gordos"
 	punto 1: antes intentaba GameManager.play_card(), que nunca existió —
 	esta rama era inalcanzable siempre. GoldManager.play_card() es el
-	camino real, ya intentado antes de llegar acá — ver el llamador)."""
+	camino real, ya intentado antes de llegar aquí — ver el llamador)."""
 	push_warning("[DropZone] No se encontró sistema para jugar carta")
 	card.return_to_hand()
 
@@ -189,12 +191,17 @@ func show_highlight_for_card(card: Node) -> void:
 	var color = highlight_color if _is_card_legal else highlight_color_invalid
 
 	if _highlight_rect:
+		# Matar cualquier fade-out todavía en vuelo (2026-09-xx, hallazgo de
+		# revisión: entrar/salir rápido del drop zone dejaba una callback de
+		# fade-out vieja pisando el modulate:a de este fade-in nuevo).
+		if _highlight_fade_tween and _highlight_fade_tween.is_valid():
+			_highlight_fade_tween.kill()
 		_highlight_rect.color = color
 		_highlight_rect.visible = true
 		_highlight_rect.modulate.a = 0
 
-		var tween = create_tween()
-		tween.tween_property(_highlight_rect, "modulate:a", 1.0, 0.15)
+		_highlight_fade_tween = create_tween()
+		_highlight_fade_tween.tween_property(_highlight_rect, "modulate:a", 1.0, 0.15)
 
 	# Brillo rúnico solo si es legal
 	if _is_card_legal and _runic_border:
@@ -235,14 +242,18 @@ func _hide_highlight() -> void:
 		_glow_tween = null
 
 	if _highlight_rect:
-		var tween = create_tween()
-		tween.tween_property(_highlight_rect, "modulate:a", 0.0, 0.15)
-		tween.tween_callback(func(): _highlight_rect.visible = false)
+		if _highlight_fade_tween and _highlight_fade_tween.is_valid():
+			_highlight_fade_tween.kill()
+		_highlight_fade_tween = create_tween()
+		_highlight_fade_tween.tween_property(_highlight_rect, "modulate:a", 0.0, 0.15)
+		_highlight_fade_tween.tween_callback(func(): _highlight_rect.visible = false)
 
 	if _runic_border:
-		var tween2 = create_tween()
-		tween2.tween_property(_runic_border, "modulate:a", 0.0, 0.15)
-		tween2.tween_callback(func(): _runic_border.visible = false)
+		if _runic_fade_tween and _runic_fade_tween.is_valid():
+			_runic_fade_tween.kill()
+		_runic_fade_tween = create_tween()
+		_runic_fade_tween.tween_property(_runic_border, "modulate:a", 0.0, 0.15)
+		_runic_fade_tween.tween_callback(func(): _runic_border.visible = false)
 
 
 func _player_has_ally_in_play(_p_id: int) -> bool:
@@ -266,7 +277,7 @@ func _check_card_legality(card: Node) -> bool:
 		return true
 
 	# ARMAS: necesitan un Aliado en juego para poder equiparse — sin
-	# portador no tienen sentido (DAR). Se revisa acá, antes que nada más,
+	# portador no tienen sentido (DAR). Se revisa aquí, antes que nada más,
 	# porque las Armas comparten drop zone (LINEA_DEFENSA) con Aliados,
 	# Talismanes y Tótems.
 	if card.get("card_type") == Constants.CardType.ARMA:

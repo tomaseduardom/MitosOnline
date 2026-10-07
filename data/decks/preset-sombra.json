@@ -1,0 +1,112 @@
+{
+    "slug":  "preset-sombra",
+    "nombre":  "guate por coste (publico)",
+    "arquetipo":  "Sombra",
+    "formato":  "imp",
+    "entries":  [
+                    {
+                        "myl_id":  "20587",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20659",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "20676",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20695",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20696",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "20726",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "20729",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20820",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20842",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "20381",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "20576",
+                        "quantity":  3
+                    },
+                    {
+                        "myl_id":  "19920",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "19860",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "18648",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "18790",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_23",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_27",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_36",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mid_38",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mid_43",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_mie_23",
+                        "quantity":  1
+                    },
+                    {
+                        "myl_id":  "custom_mie_27",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_blog_001",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_blog_007",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_blog_008",
+                        "quantity":  2
+                    },
+                    {
+                        "myl_id":  "custom_aydv_blog_022",
+                        "quantity":  3
+                    }
+                ]
+}

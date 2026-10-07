@@ -20,3 +20,7 @@ tools/shadowforge_credentials.local.ps1
 
 # Relay server (Node.js) — dependencias instaladas localmente
 relay-server/node_modules/
+
+# Builds exportados (portable Windows, ~2GB con Embed PCK) — se regeneran con
+# Godot --headless --export-release "Windows Desktop" build/windows/MitosOnline.exe
+build/

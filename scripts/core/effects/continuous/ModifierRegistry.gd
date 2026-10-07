@@ -102,7 +102,7 @@ func register_modifier(params: Dictionary) -> String:
 	# Recalcular y actualizar visuales de las cartas afectadas. Con target
 	# dinámico (ALL/ALLIES/ENEMIES/OTHER, un String) _resolve_targets()
 	# devuelve vacío a propósito — se resuelve carta por carta en
-	# _get_applicable_modifiers(), no acá — así que sin esto el badge de
+	# _get_applicable_modifiers(), no aquí — así que sin esto el badge de
 	# Fuerza de los Aliados YA en juego nunca se refrescaba al entrar un
 	# aura nueva (2026-08-25, confirmado con Patria Vieja: el bonus se
 	# calculaba bien pero no se veía hasta que algo más recalculaba esa
@@ -246,9 +246,23 @@ func _get_modified_stat(card: Node, stat: String) -> int:
 			return _main._calculated_cache[card_id][stat]
 
 	# Obtener valor previo (para detectar cambios)
-	var previous_value = -999
+	var previous_value: int = -999
 	if _main._previous_values.has(card_id) and _main._previous_values[card_id].has(stat):
-		previous_value = _main._previous_values[card_id][stat]
+		var raw_prev = _main._previous_values[card_id][stat]
+		# 2026-09-15, bug real reportado por el usuario: "Invalid operands
+		# 'String' and 'int' in operator '!='" — algo dejó un valor no-int
+		# en _previous_values (probablemente vía _get_base_stat()'s rama
+		# genérica '_:', que devuelve card.get(stat) SIN castear a int para
+		# cualquier stat que no sea strength/cost/damage). Se castea aquí
+		# como salvaguarda y se deja rastro si pasa, en vez de romper la
+		# comparación de abajo.
+		if raw_prev is String or raw_prev is StringName:
+			push_warning("[ModifierRegistry] previous_value no-int para card_id=%s stat=%s: %s (%s)" % [
+				str(card_id), stat, str(raw_prev), typeof(raw_prev)
+			])
+			previous_value = int(raw_prev) if String(raw_prev).is_valid_int() else -999
+		else:
+			previous_value = int(raw_prev)
 
 	# Obtener valor base
 	var base_value = _get_base_stat(card, stat)
@@ -263,6 +277,7 @@ func _get_modified_stat(card: Node, stat: String) -> int:
 	# Tracking de bonos para señales visuales
 	var total_bonus = 0
 	var last_source_name = ""
+	var debug_lines: Array[String] = []
 
 	# Aplicar modificadores en orden
 	for mod in applicable_mods:
@@ -281,10 +296,14 @@ func _get_modified_stat(card: Node, stat: String) -> int:
 		if mod_value != 0:
 			total_bonus += (current_value - old_value)
 			last_source_name = mod.description
-
-		# Debug
-		if mod_value != 0:
-			print("[ContinuousEffectManager] %s: %s %d → %d (%s)" % [
+			# Debug — acumulado, no impreso todavía (2026-09-11, bug real
+			# reportado por el usuario: esta función recalcula TODOS los
+			# modificadores de la carta cada vez que CUALQUIER cosa dispara
+			# un recálculo global, no solo cuando esta carta cambia — sin
+			# este acumulador, cada modificador ya aplicado se reimprimía
+			# idéntico en cada pasada aunque el resultado final no cambiara).
+			# Se imprime más abajo solo si el valor final de verdad cambió.
+			debug_lines.append("[ContinuousEffectManager] %s: %s %d → %d (%s)" % [
 				stat, _main._get_card_name(card), old_value, current_value, mod.description
 			])
 
@@ -304,14 +323,19 @@ func _get_modified_stat(card: Node, stat: String) -> int:
 	# =========================================================================
 	# ACTUALIZACIÓN VISUAL - Emitir señales si el valor cambió
 	# =========================================================================
-	if previous_value != -999 and previous_value != current_value:
+	var has_changed: bool = (previous_value != -999 and previous_value != current_value) or (previous_value == -999 and current_value != base_value)
+	if has_changed:
+		var ref_prev: int = previous_value if previous_value != -999 else base_value
+		for line in debug_lines:
+			print(line)
+
 		# Emitir señal genérica de cambio
-		_main.emit_signal("card_stats_changed", card, stat, previous_value, current_value)
+		_main.emit_signal("card_stats_changed", card, stat, ref_prev, current_value)
 		_main.emit_signal("card_visual_update_required", card, stat, base_value, current_value)
 
 		# Señales específicas para fuerza
 		if stat == "strength":
-			var bonus_diff = current_value - previous_value
+			var bonus_diff = current_value - ref_prev
 			if bonus_diff > 0:
 				_main.emit_signal("strength_bonus_gained", card, bonus_diff, current_value, last_source_name)
 				_main._visual_sync.notify_card_visual_update(card, "strength", base_value, current_value, bonus_diff)
@@ -321,8 +345,8 @@ func _get_modified_stat(card: Node, stat: String) -> int:
 
 		# Señales específicas para coste
 		elif stat == "cost":
-			_main.emit_signal("cost_modified", card, previous_value, current_value)
-			_main._visual_sync.notify_card_visual_update(card, "cost", base_value, current_value, current_value - previous_value)
+			_main.emit_signal("cost_modified", card, ref_prev, current_value)
+			_main._visual_sync.notify_card_visual_update(card, "cost", base_value, current_value, current_value - ref_prev)
 
 	return current_value
 
@@ -356,8 +380,18 @@ func _get_base_stat(card: Node, stat: String) -> int:
 			return _get_base_stat(card, "strength")
 
 		_:
-			if card.get(stat) != null:
-				return card.get(stat)
+			var raw = card.get(stat)
+			if raw != null:
+				# 2026-09-15: cast defensivo — a diferencia de las ramas de
+				# arriba (strength/cost, que leen propiedades típicamente
+				# numéricas de Card), aquí 'stat' es un nombre arbitrario y
+				# card.get(stat) es Variant sin garantía de tipo; devolver
+				# un String directo aquí (declarado -> int) fue la causa real
+				# de "Invalid operands 'String' and 'int' in operator '!='"
+				# más adelante en _get_modified_stat()/ModifierRegistry.
+				if raw is String or raw is StringName:
+					return int(raw) if String(raw).is_valid_int() else 0
+				return int(raw)
 			return 0
 
 
@@ -410,7 +444,7 @@ func _card_matches_global_target(card: Node, target_type: String, modifier: Dict
 			# significa los que controlas EN JUEGO, nunca los de la mano/
 			# Castillo/Cementerio. _is_card_in_play() ya existía (usado solo
 			# para registrar/desregistrar la fuente al entrar/salir de juego
-			# ella misma) pero nunca se consultaba acá, del lado del OBJETIVO.
+			# ella misma) pero nunca se consultaba aquí, del lado del OBJETIVO.
 			if source and card and _main._is_card_in_play(card):
 				if _main._get_card_owner(source) == _main._get_card_owner(card):
 					return _card_matches_filter(card, filter)

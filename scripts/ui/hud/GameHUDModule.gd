@@ -73,7 +73,7 @@ func show_phase_announcement(phase_name: String) -> void:
 func _setup_paso_button() -> void:
 	"""Crea el botón ornamental de acción a la izquierda del TurnTimer."""
 	_paso_button = Button.new()
-	_paso_button.text = "¿Paso?"
+	_paso_button.text = "Pasar [P]"
 	_paso_button.name = "PasoButton"
 	_paso_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_paso_button.add_theme_font_override("font", FONT_MEDIEVAL)
@@ -131,7 +131,6 @@ func update_paso_button_state() -> void:
 	if not _paso_button:
 		return
 	var phase = GameManager.current_phase
-	_paso_button.text = "Atacar" if phase == Constants.Phase.VIGILIA else "¿Paso?"
 
 	# Con ventana de prioridad activa (Bloqueo, Guerra de Talismanes,
 	# cualquier ventana de respuesta) quien debe actuar es quien TIENE la
@@ -142,8 +141,53 @@ func update_paso_button_state() -> void:
 	# dependía solo de active_player_id == 0, así que el botón nunca
 	# aparecía y no había forma de pasar).
 	if PriorityManager.priority_window_active:
+		# 2026-09-25, bug real reportado por el usuario ("el botón de pasar
+		# dice atacar aunque es para pasar"): el texto se decidía ANTES de
+		# este chequeo, mirando solo la fase — pero con una ventana de
+		# prioridad activa, _on_paso_pressed() SIEMPRE solo pasa prioridad
+		# (PriorityManager.pass_priority()), sin importar la fase, incluso
+		# si esa ventana se abrió durante tu propia Vigilia (p.ej.
+		# respondiendo al 'Cuando entra en juego' de una carta). El texto
+		# tiene que decir lo que el click realmente va a hacer.
+		_paso_button.text = "Pasar [P]"
 		_paso_button.visible = GameManager.is_game_active and PriorityManager.current_priority_player == 0
+		# 2026-09-15, diagnóstico temporal a pedido del usuario (bug real:
+		# "se traba en Guerra de Talismanes, no aparece ningún botón" —
+		# reaparición de un síntoma ya arreglado una vez, 2026-09-03, ver
+		# comentario de arriba): imprime el estado real detrás de la
+		# decisión de mostrar/ocultar, para ver en qué falla esta vez.
+		if Constants.VERBOSE_DIAG_LOGS:
+			print("[DIAG] update_paso_button_state (con ventana activa): visible=%s is_game_active=%s priority_player=%d fase=%s" % [
+				str(_paso_button.visible), str(GameManager.is_game_active), PriorityManager.current_priority_player,
+				Constants.PHASE_NAMES.get(phase, "?")
+			])
 		return
+
+	# 2026-09-20, bug real reportado por el usuario ("el botón de paso
+	# desaparece" quedando pegado en Guerra de Talismanes): Guerra de
+	# Talismanes/Bloqueo SIN ventana activa es precisamente el estado
+	# "clobbereado" que _try_recover_stuck_phase_priority_window() ya sabe
+	# recuperar (ver PhaseFlowController.gd, bugs documentados 2026-09-04 y
+	# 2026-09-06) — pero antes de este fix el botón se ocultaba en ese
+	# mismo estado (ni VIGILIA/ATAQUE/FINAL, ni is_player_turn confiable
+	# mientras defiendes: active_player_id es el oponente aunque la
+	# prioridad de defensor te toque a ti primero, DAR 5.C3), dejando la
+	# recuperación sin ninguna forma de dispararse desde la UI. El botón
+	# ahora se mantiene visible en estas 2 fases sin importar de quién sea
+	# el turno; al presionarlo, PhaseFlowController._on_paso_pressed() ya
+	# llama _try_recover_stuck_phase_priority_window() en esta rama — si de
+	# verdad no hay nada que recuperar, esa función no hace nada y el
+	# jugador ve "Sin ventana de prioridad activa" en vez de quedar sin
+	# ningún botón con qué reaccionar.
+	# 2026-09-13, a pedido del usuario: el botón debe reflejar QUÉ pasa al
+	# presionarlo, no solo "hiciste una acción" — en Guerra de Talismanes
+	# (5.3.3), pasar es lo que hace avanzar a Asignación de Daño (5.3.4)
+	# cuando ambos jugadores pasan seguido, así que el botón dice "Daño" en
+	# vez del genérico "¿Paso?" aquí, igual que ya decía "Atacar" en Vigilia.
+	if phase == Constants.Phase.GUERRA_TALISMANES:
+		_paso_button.text = "Daño [P]"
+	else:
+		_paso_button.text = "Atacar [P]" if phase == Constants.Phase.VIGILIA else "Pasar [P]"
 
 	var is_player_turn = (GameManager.active_player_id == 0)
 	var relevant_phase = phase in [
@@ -151,12 +195,29 @@ func update_paso_button_state() -> void:
 		Constants.Phase.ATAQUE,
 		Constants.Phase.FINAL
 	]
-	_paso_button.visible = GameManager.is_game_active and is_player_turn and relevant_phase
+	var recoverable_stuck_phase = phase in [
+		Constants.Phase.GUERRA_TALISMANES,
+		Constants.Phase.BLOQUEO
+	]
+	_paso_button.visible = GameManager.is_game_active and \
+		((is_player_turn and relevant_phase) or recoverable_stuck_phase)
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[DIAG] update_paso_button_state (sin ventana activa): visible=%s is_game_active=%s is_player_turn=%s fase=%s relevant_phase=%s recoverable_stuck_phase=%s" % [
+			str(_paso_button.visible), str(GameManager.is_game_active), str(is_player_turn),
+			Constants.PHASE_NAMES.get(phase, "?"), str(relevant_phase), str(recoverable_stuck_phase)
+		])
 
 
 func hide_paso_button() -> void:
 	if _paso_button:
 		_paso_button.visible = false
+
+
+func is_paso_button_ready() -> bool:
+	"""¿El botón ¿Paso?/Atacar está visible y puede clickearse ahora? (2026-09-11,
+	a pedido del usuario: atajo de teclado Q — simula el mismo click que el
+	mouse, así que solo debe actuar cuando el botón real haría algo)."""
+	return _paso_button != null and _paso_button.visible
 
 
 func start_paso_glow() -> void:

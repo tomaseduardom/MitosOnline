@@ -15,6 +15,82 @@ func setup(inspector: CardInspectionLayer) -> void:
 	_inspector = inspector
 
 
+func _open_dual_cemetery_reveal_popup(affordable_filter: Callable) -> Dictionary:
+	"""Popup liviano (sin oscurecer el resto de la pantalla — mano sigue
+	clickeable, mismo criterio que GoldManagerTax._open_cemetery_reveal_
+	popup()/PreventionAbilityHandler_PV._open_cemetery_reveal_popup_oro(),
+	arquitectura.md §10.17/§10.23) mostrando AMBOS Cementerios como dos
+	columnas de Nodos temporales interactivos — usado por Miguel ('de tu
+	mano o de un Cementerio'), a diferencia de Sake (una sola columna,
+	solo el propio). 'affordable_filter' recibe el card_data crudo (no hay
+	Nodo todavía) y decide si esa carta entra en el popup.
+	Returns: {popup: CanvasLayer, nodes: Array[Node]}."""
+	var main := _inspector._main
+	var CardScene = load("res://scenes/cards/Card.tscn")
+	var sides: Array = [CardManager.get_cemetery(0).filter(affordable_filter),
+			CardManager.get_cemetery(1).filter(affordable_filter)]
+	if sides[0].is_empty() and sides[1].is_empty():
+		return {"popup": null, "nodes": []}
+
+	var popup := CanvasLayer.new()
+	popup.layer = 40
+	main.add_child(popup)
+	var panel := PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	panel.position = Vector2(20, -240)
+	var pstyle := StyleBoxFlat.new()
+	pstyle.bg_color = Color(0.04, 0.03, 0.06, 0.92)
+	pstyle.border_color = Color(0.85, 0.72, 0.28, 0.85)
+	pstyle.set_border_width_all(2)
+	pstyle.set_corner_radius_all(12)
+	pstyle.content_margin_left = 10
+	pstyle.content_margin_right = 10
+	pstyle.content_margin_top = 8
+	pstyle.content_margin_bottom = 8
+	panel.add_theme_stylebox_override("panel", pstyle)
+	popup.add_child(panel)
+	var columns := HBoxContainer.new()
+	columns.add_theme_constant_override("separation", 14)
+	panel.add_child(columns)
+
+	var nodes: Array = []
+	var labels: Array = ["Tu Cementerio", "Cementerio Rival"]
+	for side_idx in [0, 1]:
+		var col := VBoxContainer.new()
+		columns.add_child(col)
+		var lbl := Label.new()
+		lbl.text = labels[side_idx]
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		col.add_child(lbl)
+		var scroll := ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(0, 190)
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		col.add_child(scroll)
+		var hbox := HBoxContainer.new()
+		hbox.add_theme_constant_override("separation", 8)
+		scroll.add_child(hbox)
+		for data in sides[side_idx]:
+			var wrapper := Control.new()
+			wrapper.custom_minimum_size = Vector2(80.0, 112.0)
+			var c_node = CardScene.instantiate()
+			c_node.load_from_data(data)
+			c_node.set_zone(Constants.Zone.CEMENTERIO)
+			c_node.owner_id = side_idx
+			c_node.controller_id = side_idx
+			c_node.can_interact = true
+			c_node.drag_enabled = false
+			c_node.custom_minimum_size = Vector2(150.0, 210.0)
+			c_node.size = Vector2(150.0, 210.0)
+			c_node.scale = Vector2(0.533, 0.533)
+			c_node.base_scale = Vector2(0.533, 0.533)
+			main._connect_card_signals(c_node)
+			wrapper.add_child(c_node)
+			hbox.add_child(wrapper)
+			nodes.append(c_node)
+
+	return {"popup": popup, "nodes": nodes}
+
+
 func _activate_jinete_peste_search_banish_two(source_card: Node, ability: Dictionary) -> void:
 	"""'Una vez por turno, busca en un Castillo dos cartas de distinto
 	nombre y Destiérralas. Si controlas otro Jinete, además Roba una
@@ -25,8 +101,8 @@ func _activate_jinete_peste_search_banish_two(source_card: Node, ability: Dictio
 	if not is_instance_valid(source_card):
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0 or not TriggerSystem._targeted_executor:
-		return  # el bot no usa esta habilidad todavía
+	if not TriggerSystem._targeted_executor:
+		return
 
 	if await TriggerSystem.open_response_window(source_card, "Jinete de la Peste", owner_id):
 		return
@@ -36,7 +112,8 @@ func _activate_jinete_peste_search_banish_two(source_card: Node, ability: Dictio
 
 	var main := _inspector._main
 	var controls_other_jinete := false
-	for field in [main.player_field, main.player_linea_ataque]:
+	var own_fields_jinete: Array = [main.player_field, main.player_linea_ataque] if owner_id == 0 else [main.opponent_field, main.opponent_linea_ataque]
+	for field in own_fields_jinete:
 		if not field:
 			continue
 		for c in field.get_children():
@@ -57,17 +134,15 @@ func _activate_kotaix_draw_and_shuffle_opponent(source_card: Node, ability: Dict
 	barajar — mismo criterio ya usado en Estaca (idéntico patrón, ver
 	_activate_estaca_draw_and_shuffle() en HandCementerioAbilityHandler.gd)
 	y en Espada de O'Higgins/Aho. 'No puede ser cancelada' queda satisfecho
-	por construcción: esta habilidad se resuelve directo acá, sin pasar por
+	por construcción: esta habilidad se resuelve directo aquí, sin pasar por
 	la Pila/ActionPipeline (igual que el resto de patrones especiales de
 	este archivo), así que nunca entra al camino que StackVisualizer.gd usa
 	para poder cancelar una habilidad de la pila."""
 	if not is_instance_valid(source_card):
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
 	# Ventana única para toda la habilidad (2026-09-10): sin declare real
-	# todavía acá (el objetivo rival recién se elige más abajo), mismo
+	# todavía aquí (el objetivo rival se elige solo más abajo), mismo
 	# criterio que Estaca (HandCementerioAbilityHandler.gd).
 	if await TriggerSystem.open_response_window(source_card, "Espíritu Kotaix", owner_id):
 		return
@@ -77,7 +152,8 @@ func _activate_kotaix_draw_and_shuffle_opponent(source_card: Node, ability: Dict
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
 
 	var opponent_id: int = 1 - owner_id
-	var opp_fields: Array = [_inspector._main.opponent_field, _inspector._main.opponent_linea_ataque, _inspector._main.opponent_linea_apoyo]
+	var opp_fields: Array = [_inspector._main.opponent_field, _inspector._main.opponent_linea_ataque, _inspector._main.opponent_linea_apoyo] if owner_id == 0 \
+		else [_inspector._main.player_field, _inspector._main.player_linea_ataque, _inspector._main.player_linea_apoyo]
 	var candidates: Array = []
 	for field in opp_fields:
 		if not field:
@@ -98,12 +174,16 @@ func _activate_kotaix_draw_and_shuffle_opponent(source_card: Node, ability: Dict
 	var filter := func(c: Node) -> bool:
 		return c in candidates
 	var target: Node = await _inspector._main._card_interaction.await_target(
-		"Elige una carta rival en juego (que no sea Oro) para barajar", filter)
+		"Elige una carta rival en juego (que no sea Oro) para barajar", filter, true, owner_id)
 	if not target or not is_instance_valid(target):
 		return
 
 	await ActionModule.return_to_deck(target, opponent_id, true, source_card)
 	CardManager.shuffle_deck(opponent_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(opponent_id),
+		"description": "Barajar mazo (Espíritu Kotaix)"
+	})
 
 
 func _activate_kuchiku_cazador_search_and_play_discount(source_card: Node, ability: Dictionary) -> void:
@@ -116,7 +196,7 @@ func _activate_kuchiku_cazador_search_and_play_discount(source_card: Node, abili
 	Castillo (must_shuffle ya incluido), con may_play=false para poder
 	aplicar el descuento de coste ANTES de intentar jugarla — mismo
 	mecanismo puntual que Miguel (_activate_miguel_discount_play): -1 Oro,
-	piso 0 (acá con allow_zero=true porque el texto SÍ dice explícitamente
+	piso 0 (aquí con allow_zero=true porque el texto SÍ dice explícitamente
 	'hasta un mínimo de 0'). La carta encontrada se identifica comparando
 	la mano antes/después de la búsqueda (ActionModule.search() no
 	devuelve el Card node creado, solo el Dictionary de datos)."""
@@ -124,7 +204,9 @@ func _activate_kuchiku_cazador_search_and_play_discount(source_card: Node, abili
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
 	if owner_id != 0 or not _inspector._main.player_hand:
-		return  # el bot no usa esta habilidad todavía
+		# 2026-10-05: resuelve con gold_manager.play_card(card_node) directo
+		# — "No es tu turno" si GameManager.active_player_id != 0 (ver §23).
+		return  # el Remoto no puede usar esta habilidad todavía
 
 	var search_castillo: bool = await SelectionManager.await_two_choice(
 		_inspector._main, "¿Dónde buscar un Aliado?", "Tu Castillo", "Tu Cementerio")
@@ -162,7 +244,7 @@ func _activate_kuchiku_cazador_destroy_and_discard(source_card: Node, ability: D
 	(Kuchiku El Cazador). Objetivo genérico en juego (Aliado/Arma/Tótem/
 	Oro, ambos jugadores) con tope de coste 3 — a diferencia de
 	_select_annul_target_cost_filter() (que excluye Oro porque 'anular' un
-	Oro no tiene sentido), acá SÍ puede ser Oro (destruirlo sí tiene
+	Oro no tiene sentido), aquí SÍ puede ser Oro (destruirlo sí tiene
 	sentido). 'Hasta una carta' = el Destruir es opcional (0 o 1, cancelar
 	el picker = 0), pero el descarte del oponente NO está condicionado a
 	que el Destruir se concrete — son dos cláusulas independientes unidas
@@ -175,8 +257,6 @@ func _activate_kuchiku_cazador_destroy_and_discard(source_card: Node, ability: D
 	if not is_instance_valid(source_card):
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
 	var main := _inspector._main
 	if not main or not main._card_interaction:
 		return
@@ -184,18 +264,16 @@ func _activate_kuchiku_cazador_destroy_and_discard(source_card: Node, ability: D
 	var filter := func(c: Node) -> bool:
 		if c.get("card_type") not in [Constants.CardType.ALIADO, Constants.CardType.ARMA, Constants.CardType.TOTEM, Constants.CardType.ORO]:
 			return false
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo,
-			main.player_gold, main.opponent_gold]
-		if parent not in valid_zones:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE,
+				Constants.Zone.LINEA_APOYO, Constants.Zone.RESERVA_ORO]:
 			return false
 		# get_modified_cost(), no card_cost crudo (2026-09-04, a pedido del
 		# usuario: una carta en juego puede tener el coste reducido de forma
 		# continua, p.ej. Samael — el filtro tiene que verlo).
 		return ContinuousEffectManager.get_modified_cost(c) <= 3
 	var chosen_target: Node = await main._card_interaction.await_target(
-		"Elige una carta de coste 3 o menos para destruir (opcional)", filter)
+		"Elige una carta de coste 3 o menos para destruir (opcional)", filter, true, owner_id)
 
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
 
@@ -224,24 +302,21 @@ func _activate_lider_del_comite_discard_look_name_lock(source_card: Node, abilit
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
 	if owner_id != 0 or not _inspector._main.player_hand or _inspector._main.player_hand.cards.is_empty():
-		return  # el bot no usa esta habilidad todavía; sin mano no hay costo que pagar
+		# 2026-10-05: usa TriggerSystem._card_name_search.open_and_wait()
+		# (CardNameSearchDialog), excluido desde el plan original (mismo
+		# caso que Malleus Maleficarum/Alicia en Wonderland) — se deja sin
+		# desbloquear.
+		return  # el Remoto no puede usar esta habilidad todavía; sin mano no hay costo que pagar
 
-	var hand_cards: Array = _inspector._main.player_hand.cards.duplicate()
-	var card_data_list: Array = []
-	for c in hand_cards:
-		card_data_list.append(c.card_data)
-	var picked_to_discard: Dictionary = await SelectionManager.await_single_pick(
-		card_data_list, "Descarta 1 carta de tu mano")
-	if picked_to_discard.is_empty():
-		return  # canceló — no paga el costo
-
-	var to_discard_node: Node = null
-	for c in hand_cards:
-		if c.card_data == picked_to_discard:
-			to_discard_node = c
-			break
-	if not to_discard_node:
+	if not _inspector._main._card_interaction:
 		return
+	# 2026-09-13, a pedido del usuario: click directo en la mano en vez del
+	# modal de lista viejo.
+	var hand_filter := func(c: Node) -> bool: return c.get("current_zone") == Constants.Zone.MANO
+	var to_discard_node: Node = await _inspector._main._card_interaction.await_target(
+		"Descarta 1 carta de tu mano", hand_filter)
+	if not to_discard_node or not is_instance_valid(to_discard_node):
+		return  # canceló — no paga el costo
 
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
 	await ActionModule.discard(owner_id, [to_discard_node], "activated_ability", true)
@@ -291,61 +366,64 @@ func _activate_miguel_discount_play(source_card: Node, ability: Dictionary) -> v
 	if not is_instance_valid(source_card) or not _inspector._main._gold_manager:
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0 or not _inspector._main.player_hand:
-		return  # el bot no usa esta habilidad todavía
-
-	var candidates: Array = []
-	for c in _inspector._main.player_hand.cards:
-		candidates.append({"data": c.card_data, "from": "hand", "node": c, "cemetery_owner": -1})
-	for cemetery_owner in [0, 1]:
-		for data in CardManager.get_cemetery(cemetery_owner):
-			candidates.append({"data": data, "from": "cemetery", "node": null, "cemetery_owner": cemetery_owner})
+	if owner_id != 0 or not _inspector._main.player_hand or not _inspector._main._card_interaction:
+		# 2026-10-05: resuelve con gold_manager.play_card(card_node) directo
+		# — "No es tu turno" si GameManager.active_player_id != 0 (ver §23).
+		# Además lee GameState.get_oro_reserva(0) hardcodeado para el
+		# filtro de asequibilidad (ver §22) — dos motivos independientes.
+		return  # el Remoto no puede usar esta habilidad todavía
 
 	# Filtro de asequibilidad ANTES de ofrecer la carta como opción (2026-09-08,
 	# bug real reportado por el usuario: dejaba elegir un Arma que no podía
-	# pagar ni con el descuento, y GoldManager.play_card() la rechazaba recién
+	# pagar ni con el descuento, y GoldManager.play_card() la rechazaba solo
 	# al final sin buena UX) — mismo criterio que Tangata Manu/
 	# _make_look_play_free_filter ya usan para no ofrecer nunca una opción
 	# que se sabe de antemano que no se puede pagar. Aproximado con el dato
 	# crudo de coste (no hay nodo todavía para las candidatas de Cementerio,
 	# así que no se puede calcular_coste_real() con modificadores reales).
-	var available_gold: int = GameState.get_oro_reserva(0) + _inspector._main._gold_manager.oros_virtuales
-	candidates = candidates.filter(func(c: Dictionary) -> bool:
-		var raw_cost = c.data.get("coste")
+	var available_gold: int = GameState.get_oro_reserva(0) + _inspector._main._gold_manager.oros_virtuales.get(0, 0)
+	var affordable := func(data: Dictionary) -> bool:
+		var raw_cost = data.get("coste")
 		if raw_cost == null or not (raw_cost is int or raw_cost is float or (raw_cost is String and raw_cost.is_valid_int())):
 			return true  # Oro u otra carta sin coste numérico real
 		var discounted: int = maxi(int(raw_cost) - 1, 0)
 		return discounted <= available_gold
-	)
+
+	# 2026-09-13, a pedido del usuario: click directo — mano (Nodos ya
+	# visibles) + un popup liviano con AMBOS Cementerios (mismo patrón de
+	# Sake, arquitectura.md §10.23, extendido a dos columnas) — en vez del
+	# modal de lista viejo combinando las tres fuentes.
+	var hand_candidates: Array = []
+	for c in _inspector._main.player_hand.cards:
+		if is_instance_valid(c) and affordable.call(c.card_data):
+			hand_candidates.append(c)
+	var cemetery_popup_result: Dictionary = _open_dual_cemetery_reveal_popup(affordable)
+	var cemetery_popup: CanvasLayer = cemetery_popup_result.get("popup")
+	var candidates: Array = hand_candidates + cemetery_popup_result.get("nodes", [])
 	if candidates.is_empty():
+		if is_instance_valid(cemetery_popup):
+			cemetery_popup.queue_free()
 		_inspector._main._update_debug("No tienes ninguna carta que puedas pagar ni con el descuento")
 		return
 
-	var display_data: Array = []
-	for c in candidates:
-		display_data.append(c.data)
-
-	var picked: Dictionary = await SelectionManager.await_single_pick(
-		display_data, "Elige una carta (tu mano o cualquier Cementerio) para jugar con 1 Oro de descuento")
-	if picked.is_empty():
+	var filter := func(c: Node) -> bool: return c in candidates
+	var chosen_node: Node = await _inspector._main._card_interaction.await_target(
+		"Elige una carta (tu mano o cualquier Cementerio) para jugar con 1 Oro de descuento", filter)
+	if is_instance_valid(cemetery_popup):
+		cemetery_popup.queue_free()
+	if not chosen_node or not is_instance_valid(chosen_node):
 		return
+	var chosen_data: Dictionary = chosen_node.card_data
+	var from_hand: bool = chosen_node in hand_candidates
 
-	var chosen: Dictionary = {}
-	for c in candidates:
-		if c.data == picked:
-			chosen = c
-			break
-	if chosen.is_empty():
-		return
-
-	var card_node: Node = chosen.node
-	if chosen.from == "cemetery":
-		var cemetery_owner: int = chosen.cemetery_owner
-		var idx: int = CardManager.get_cemetery(cemetery_owner).find(chosen.data)
+	var card_node: Node = chosen_node if from_hand else null
+	if not from_hand:
+		var cemetery_owner: int = chosen_node.owner_id
+		var idx: int = CardManager.get_cemetery(cemetery_owner).find(chosen_data)
 		if idx < 0:
 			return
 		CardManager.remove_from_cemetery(cemetery_owner, idx)
-		card_node = _inspector._main._create_card(chosen.data, false)
+		card_node = _inspector._main._create_card(chosen_data, false)
 		# Dueño real = de qué Cementerio salió, NO quien la juega (2026-08-29,
 		# corregido a pedido del usuario): jugar una carta ajena te vuelve
 		# CONTROLADOR, no dueño — si es Aliado/Tótem/Arma/Oro pelea de tu
@@ -389,7 +467,10 @@ func _activate_padre_patria_gold(source_card: Node, ability: Dictionary) -> void
 		if card_type == Constants.CardType.ALIADO:
 			return "caballero" in card_race.to_lower()
 		return false
-	_inspector._main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Armas o Aliados Caballero")
+	# 2026-10-06: generar_oro_virtual_restringido() ya es por jugador (ver
+	# arquitectura.md §33) — el guard que se le había agregado en §27 (por
+	# el motivo documentado abajo) ya no hace falta.
+	_inspector._main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Armas o Aliados Caballero", owner_id)
 
 	# instance_id (2026-08-30), no card_data.id — cada copia física necesita
 	# su propio cupo de 'una vez por turno'.
@@ -402,7 +483,7 @@ func _activate_quimera_voragh_mill_and_revive(source_card: Node, ability: Dictio
 	de Fuerza 2 con la habilidad "Furia"' (quimera voragh, 2026-09-06).
 	Botar (mill a Cementerio) manipulado directo sobre CardManager, no
 	ActionModule.mill() — su fallback sin GameBoard no informa tipos por
-	carta (ver el comentario de ea poe), y acá SÍ hace falta saber si algo
+	carta (ver el comentario de ea poe), y aquí SÍ hace falta saber si algo
 	Aliado/Oro cayó para condicionar el resto. La conversión reusa el
 	mismo mecanismo que leon indiferente/Sherlock Holmes (Fuerza fijada +
 	KeywordManager.silence_card para quitar la habilidad original +
@@ -411,8 +492,6 @@ func _activate_quimera_voragh_mill_and_revive(source_card: Node, ability: Dictio
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
 	var main := _inspector._main
-	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
 
 	if await TriggerSystem.open_response_window(source_card, "quimera voragh", owner_id):
 		return
@@ -437,29 +516,22 @@ func _activate_quimera_voragh_mill_and_revive(source_card: Node, ability: Dictio
 	if not ally_or_gold_milled:
 		return
 
-	var cemetery_candidates: Array = []
-	for player_id in [0, 1]:
-		for d in CardManager.get_cemetery(player_id):
-			cemetery_candidates.append({"data": d, "owner": player_id})
-	if cemetery_candidates.is_empty():
+	if not main._zone_viewer:
 		return
-	var display_data: Array = cemetery_candidates.map(func(c): return c.data)
-	var picked: Dictionary = await SelectionManager.await_single_pick(
-		display_data, "Elige una carta de un Cementerio para poner en juego como Aliado de Fuerza 2 con Furia", true, 0)
-	if picked.is_empty():
+	# 2026-09-13, a pedido del usuario: click directo con ambos Cementerios
+	# visibles en vez del modal de lista viejo.
+	var no_filter := func(_c: Node) -> bool: return true
+	var picked_list: Array = await main._zone_viewer.open_cemetery_target_picker(
+		"Elige una carta de un Cementerio para poner en juego como Aliado de Fuerza 2 con Furia", no_filter, 1, "cemetery", false, false, owner_id)
+	if picked_list.is_empty():
 		return
-	var chosen: Dictionary = {}
-	for c in cemetery_candidates:
-		if c.data == picked:
-			chosen = c
-			break
-	if chosen.is_empty():
-		return
+	var chosen_owner: int = picked_list[0].owner_id
+	var picked: Dictionary = picked_list[0].data
 
-	var idx: int = CardManager.get_cemetery(chosen.owner).find(picked)
+	var idx: int = CardManager.get_cemetery(chosen_owner).find(picked)
 	if idx < 0:
 		return
-	CardManager.remove_from_cemetery(chosen.owner, idx)
+	CardManager.remove_from_cemetery(chosen_owner, idx)
 
 	var new_data: Dictionary = picked.duplicate()
 	new_data["tipo"] = Constants.CardType.ALIADO
@@ -509,41 +581,41 @@ func _activate_tenshi_z_shuffle_hand_to_annul(source_card: Node, ability: Dictio
 	confirma primero que hay objetivo válido antes de cobrar el costo
 	(mismo orden que el resto de habilidades con costo+objetivo de esta
 	sesión)."""
-	if not is_instance_valid(source_card) or not _inspector._main._card_interaction or not _inspector._main.player_hand:
+	if not is_instance_valid(source_card) or not _inspector._main._card_interaction:
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
 	var main := _inspector._main
-	if main.player_hand.cards.is_empty():
+	var hand_container = main.player_hand if owner_id == 0 else main._opponent_fan
+	if not hand_container or hand_container.cards.is_empty():
 		return
 
 	var target: Node = await TriggerSystem._targeted_executor._select_annul_target_cost_filter(
-		"Elige una carta para anular", 999)
+		"Elige una carta para anular", 999, owner_id)
 	if not target or not is_instance_valid(target):
 		return
 	if TriggerSystem._targeted_executor._target_text_denies(target, ["no puede ser anulad"]):
 		main._update_debug("%s no puede ser anulada" % str(target.get("card_name")))
 		return
 
-	var hand_cards: Array = main.player_hand.cards.duplicate()
-	var picked_data: Dictionary = await SelectionManager.await_single_pick(
-		hand_cards.map(func(c): return c.card_data), "Baraja una carta de tu mano para pagar la habilidad", true, 0)
-	if picked_data.is_empty():
-		return
-	var hand_node: Node = null
-	for c in hand_cards:
-		if c.card_data == picked_data:
-			hand_node = c
-			break
-	if not hand_node:
+	# 2026-09-13, a pedido del usuario: click directo en la mano en vez del
+	# modal de lista viejo. Filtro restringido a owner_id (mismo bug que
+	# gran kraken, ver PreventionAbilityHandler_EP.gd).
+	var hand_filter := func(c: Node) -> bool:
+		return c.get("current_zone") == Constants.Zone.MANO and c.get("owner_id") == owner_id
+	var hand_node: Node = await main._card_interaction.await_target(
+		"Baraja una carta de tu mano para pagar la habilidad", hand_filter, true, owner_id)
+	if not hand_node or not is_instance_valid(hand_node):
 		return
 
 	UniversalCardParser.turn_registry.register_ability_use(source_card, ability)
 	var data: Dictionary = hand_node.card_data.duplicate()
-	main.player_hand.remove_card(hand_node, true)
+	hand_container.remove_card(hand_node, true)
 	CardManager.get_deck(owner_id).append(data)
 	CardManager.shuffle_deck(owner_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(owner_id),
+		"description": "Barajar mazo (Tenshi Z)"
+	})
 
 	await ActionModule.destroy([target], source_card, true, true)
 
@@ -554,33 +626,27 @@ func _activate_tesoro_cesares_name_tax(source_card: Node, ability: Dictionary) -
 	de los Césares, 2026-08-29). Costo: barajar (no descartar) 1 carta
 	elegida de la mano de vuelta al mazo. Efecto: nombrar cualquier carta
 	del juego (buscador de texto, CardNameSearchDialog — mismo mecanismo
-	que Alicia en Wonderland) con un recargo de +1 Oro que recién arranca
+	que Alicia en Wonderland) con un recargo de +1 Oro que arranca solo
 	el turno SIGUIENTE (PaymentManager.add_named_surcharge_next_turn(),
 	registro aparte de oros_mas_modifiers porque ese Array se limpia entero
-	en cada turno y acá el efecto todavía no debe estar activo ahora)."""
+	en cada turno y aquí el efecto todavía no debe estar activo ahora)."""
 	if not is_instance_valid(source_card):
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0 or not _inspector._main.player_hand or _inspector._main.player_hand.cards.is_empty():
-		return  # el bot no juega esta carta todavía; sin mano no hay costo que pagar
+	if owner_id != 0 or not _inspector._main.player_hand or _inspector._main.player_hand.cards.is_empty() \
+			or not _inspector._main._card_interaction:
+		# 2026-10-05: usa TriggerSystem._card_name_search.open_and_wait()
+		# (CardNameSearchDialog), excluido desde el plan original — se deja
+		# sin desbloquear.
+		return  # el Remoto no puede usar esta habilidad todavía; sin mano no hay costo que pagar
 
-	var hand_cards: Array = _inspector._main.player_hand.cards.duplicate()
-	var card_data_list: Array = []
-	for c in hand_cards:
-		card_data_list.append(c.card_data)
-
-	var picked_to_shuffle: Dictionary = await SelectionManager.await_single_pick(
-		card_data_list, "Baraja 1 carta de tu mano en tu mazo")
-	if picked_to_shuffle.is_empty():
+	# 2026-09-13, a pedido del usuario: click directo en la mano en vez del
+	# modal de lista viejo.
+	var hand_filter := func(c: Node) -> bool: return c.get("current_zone") == Constants.Zone.MANO
+	var to_shuffle_node: Node = await _inspector._main._card_interaction.await_target(
+		"Baraja 1 carta de tu mano en tu mazo", hand_filter)
+	if not to_shuffle_node or not is_instance_valid(to_shuffle_node):
 		return  # canceló — no paga el costo, no nombra nada
-
-	var to_shuffle_node: Node = null
-	for c in hand_cards:
-		if c.card_data == picked_to_shuffle:
-			to_shuffle_node = c
-			break
-	if not to_shuffle_node:
-		return
 
 	# HandManager.remove_card(card, true) en vez de sacarla a mano (2026-08-29,
 	# corrige bug real: remove_child()+queue_free() manual, copiado del
@@ -619,8 +685,8 @@ func _activate_voragh_devorador_search_to_cemetery(source_card: Node, ability: D
 	if not is_instance_valid(source_card):
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0 or not TriggerSystem._targeted_executor:
-		return  # el bot no usa esta habilidad todavía
+	if not TriggerSystem._targeted_executor:
+		return
 
 	if await TriggerSystem.open_response_window(source_card, "voragh el devorador", owner_id):
 		return
@@ -638,16 +704,15 @@ func _activate_voragh_devorador_destroy_own_for_gold(source_card: Node, ability:
 	if not is_instance_valid(source_card) or not _inspector._main._gold_manager or not _inspector._main._card_interaction:
 		return
 	var owner_id: int = source_card.owner_id if source_card.get("owner_id") != null else 0
-	if owner_id != 0:
-		return  # el bot no usa esta habilidad todavía
 
 	var main := _inspector._main
 	var filter := func(c: Node) -> bool:
 		if c.get("owner_id") != owner_id and c.get("controller_id") != owner_id:
 			return false
-		var parent = c.get_parent()
-		return parent in [main.player_field, main.player_linea_ataque, main.player_linea_apoyo, main.player_gold]
-	var target: Node = await main._card_interaction.await_target("Elige una de tus cartas para Destruir", filter)
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		return c.get("current_zone") in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE,
+			Constants.Zone.LINEA_APOYO, Constants.Zone.RESERVA_ORO]
+	var target: Node = await main._card_interaction.await_target("Elige una de tus cartas para Destruir", filter, true, owner_id)
 	if not target or not is_instance_valid(target):
 		return
 
@@ -657,4 +722,6 @@ func _activate_voragh_devorador_destroy_own_for_gold(source_card: Node, ability:
 		return
 	var predicate := func(card_type: int, _card_race: String, _card_cost: int) -> bool:
 		return card_type == Constants.CardType.ALIADO
-	main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Aliados")
+	# 2026-10-06: generar_oro_virtual_restringido() ya es por jugador (ver
+	# arquitectura.md §33) — esta habilidad se desbloquea.
+	main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Aliados", owner_id)

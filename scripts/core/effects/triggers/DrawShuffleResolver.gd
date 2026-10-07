@@ -77,10 +77,6 @@ func try_execute_banish_cemeteries_equal_to_own_strength_pattern(ability_text: S
 	return await _cemetery_banish.try_execute_banish_cemeteries_equal_to_own_strength_pattern(ability_text, card, controller_id)
 
 
-func try_execute_banish_up_to_n_cemeteries_then_draw_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
-	return await _cemetery_banish.try_execute_banish_up_to_n_cemeteries_then_draw_pattern(ability_text, controller_id, card)
-
-
 func try_execute_shuffle_cemeteries_or_raise_ally_totem_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
 	return await _cemetery_banish.try_execute_shuffle_cemeteries_or_raise_ally_totem_pattern(ability_text, controller_id, card)
 
@@ -91,6 +87,10 @@ func try_execute_shuffle_up_to_n_cemeteries_pattern(ability_text: String, contro
 
 func try_execute_banish_up_to_n_cemeteries_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
 	return await _cemetery_banish.try_execute_banish_up_to_n_cemeteries_pattern(ability_text, controller_id, card)
+
+
+func try_execute_shuffle_or_banish_cemeteries_equal_to_strength_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
+	return await _cemetery_banish.try_execute_shuffle_or_banish_cemeteries_equal_to_strength_pattern(ability_text, controller_id, card)
 
 
 func try_execute_free_play_weapon_or_totem_cost1_hand_cemetery_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:

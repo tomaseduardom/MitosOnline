@@ -158,6 +158,12 @@ func get_cemetery_count(player_id: int) -> int:
 	return _zones[player_id].cemetery.size()
 
 
+func get_exile_count(player_id: int) -> int:
+	"""Obtiene el número de cartas en destierro"""
+	return _zones[player_id].exile.size()
+
+
+
 # =============================================================================
 # MOVIMIENTO DE CARTAS - DECK
 # =============================================================================
@@ -206,7 +212,7 @@ func add_to_deck_top(player_id: int, card_data: Dictionary) -> void:
 	array (índice 0) es el tope. _zones[player_id].deck es el MISMO array
 	que _main.player_deck (ver sync_from_main(): asignación directa, no una
 	copia), así que esta función tiene que insertar al frente para que
-	'tope' signifique lo mismo acá que en el robo real. draw_card() de este
+	'tope' signifique lo mismo aquí que en el robo real. draw_card() de este
 	mismo archivo (más arriba) usa pop_back() y NUNCA se llama desde
 	ningún lado — quedó con la convención vieja/incorrecta, no se tocó
 	porque no tiene ningún llamador real que arreglar."""
@@ -272,6 +278,11 @@ func discard_from_hand(player_id: int, card: Node) -> void:
 		emit_signal("zone_changed", card, Constants.Zone.MANO, Constants.Zone.CEMENTERIO, player_id)
 
 		_update_cemetery_visual(player_id)
+
+		var main_node = Engine.get_main_loop().root.get_node_or_null("Main") if Engine.get_main_loop() else null
+		if main_node and main_node.get("_zone_manager") != null and is_instance_valid(card) and card.is_inside_tree() and card.visible:
+			await main_node._zone_manager.animate_card_to_cemetery(card, player_id)
+
 		_disconnect_card_interaction_signals(card)
 		card.queue_free()
 
@@ -282,7 +293,7 @@ func discard_from_hand(player_id: int, card: Node) -> void:
 func _append_to_cemetery(player_id: int, card_data: Dictionary) -> void:
 	"""Choke point único para agregar una entrada a un Cementerio (2026-08-30)
 	— antes cada llamador hacía _zones[player_id].cemetery.append(card_data)
-	por su cuenta; se centraliza acá para que la 'captura' de Sable de
+	por su cuenta; se centraliza aquí para que la 'captura' de Sable de
 	Napoleón (silenciar cartas que entren al Cementerio durante la ventana
 	activa) no dependa de tocar cada llamador por separado."""
 	if _cemetery_silence_capture_active:
@@ -294,7 +305,7 @@ func is_cemetery_card_silenced(card_data: Dictionary) -> bool:
 	"""'Pierde su habilidad' para una carta EN CEMENTERIO (2026-08-30, Sable
 	de Napoleón) — KeywordManager._silenced_cards es por instance_id de un
 	Node vivo, no aplica a datos de Cementerio (Dictionary puro), así que
-	esto vive acá, junto con el dato mismo."""
+	esto vive aquí, junto con el dato mismo."""
 	return card_data.get("_silenced_by_cemetery_effect", false)
 
 
@@ -310,7 +321,7 @@ func silence_all_cemetery_cards(activator_player_id: int) -> void:
 	     pase el del rival primero).
 	  2) El SILENCIO en sí dura 'hasta tu próximo turno' (el de
 	     activator_player_id específicamente, no el del rival que viene
-	     primero) — se levanta recién cuando vuelva a empezar SU turno."""
+	     primero) — se levanta solo cuando vuelva a empezar SU turno."""
 	for player_id in [0, 1]:
 		for card_data in _zones[player_id].cemetery:
 			card_data["_silenced_by_cemetery_effect"] = true
@@ -355,6 +366,31 @@ func add_card_to_cemetery(player_id: int, card: Node) -> void:
 	card.queue_free()
 
 
+func _unequip_from_wielder(card: Node) -> void:
+	"""2026-09-19, bug real reportado por el usuario ('Trying to assign
+	invalid previously freed instance', ZoneManager.gd:535 — desterrando un
+	Arma equipada con Bernardo O'Higgins). _move_equipped_weapons_with()
+	(arriba) cubre la dirección 'el portador sale del juego, el Arma lo
+	sigue' — pero la dirección contraria (el ARMA MISMA sale del juego
+	directo, con su portador quedándose en juego) nunca limpiaba
+	wielder.equipped_weapons antes de queue_free(). equipped_weapons es un
+	Array genérico sin tipar, pero la lectura `var w: Node =
+	card.equipped_weapons[w_idx]` en ZoneManager.compact_field_slots() SÍ
+	está typada — asignar ahí la referencia ya liberada del
+	Arma es justo lo que Godot rechaza con ese error, la próxima vez que
+	cualquier acción recompactara el campo (compact_all_fields(), llamado
+	DEFERRED dos líneas más abajo en destroy_card()/exile_card(), así que
+	nunca fallaba en el mismo frame — el crash aparecía en la próxima
+	recompactación real). Llamar ANTES de queue_free() en ambas funciones."""
+	if not is_instance_valid(card):
+		return
+	var wielder: Node = card.get("wielder")
+	if wielder and is_instance_valid(wielder):
+		var weapons = wielder.get("equipped_weapons")
+		if weapons is Array:
+			weapons.erase(card)
+
+
 func _move_equipped_weapons_with(player_id: int, card: Node, mover: Callable) -> void:
 	"""El Arma sigue a su portador al mismo destino (DAR — no queda suelta en
 	juego). Se llama ANTES de queue_free() en destroy_card()/exile_card(),
@@ -378,7 +414,7 @@ func _weapon_survives_wielder_death(weapon: Node) -> bool:
 	inicial) — la API de cartas puede traer el texto con la doble-
 	codificación UTF-8→Latin-1→UTF-8 típica en vocales acentuadas (mismo
 	problema ya conocido y corregido aparte en GoldManager._fix_mojibake(),
-	p.ej. 'TalismÃ¡n' en vez de 'Talismán'); si 'súbela' llega corrupto acá
+	p.ej. 'TalismÃ¡n' en vez de 'Talismán'); si 'súbela' llega corrupto aquí
 	el check anterior (que exigía el acento exacto) fallaba en silencio y
 	Aho terminaba siguiendo a su portador al Cementerio/Destierro en vez de
 	ofrecer la elección real."""
@@ -439,7 +475,11 @@ func _resolve_weapon_survives_wielder(weapon: Node) -> void:
 		await _resolve_weapon_survives_wielder(weapon)
 		return
 	if main._gold_manager and main._gold_manager.has_method("_equip_weapon"):
-		await main._gold_manager._equip_weapon(weapon, new_wielder)
+		# fire_enter_play=false (2026-09-25, ver comentario en _equip_weapon()):
+		# el Arma ya estaba en juego, solo cambia de portador porque el
+		# anterior murió — no es un juego nuevo, no debe re-disparar 'Cuando
+		# entra en juego' ni sumar al conteo de cartas jugadas este turno.
+		await main._gold_manager._equip_weapon(weapon, new_wielder, false)
 
 
 func _disconnect_card_interaction_signals(card: Node) -> void:
@@ -450,7 +490,7 @@ func _disconnect_card_interaction_signals(card: Node) -> void:
 	próximo evento de mouse (reportado con Don de Amma desterrándose a sí
 	mismo desde su Reserva). HandManager.remove_card() ya hacía esta
 	desconexión para cartas en la MANO, pero destroy_card()/exile_card()
-	acá abajo son el camino real de TODA destrucción/destierro sin
+	aquí abajo son el camino real de TODA destrucción/destierro sin
 	GameBoard (siempre null en este proyecto) — cartas en Reserva/Oro
 	Pagado/líneas de juego, conectadas por Main._connect_card_signals(),
 	nunca pasaban por esa limpieza. Desconecta cualquier conexión existente
@@ -478,7 +518,8 @@ func destroy_card(player_id: int, card: Node) -> void:
 
 	# Cartas exhumadas van al destierro, no al cementerio
 	card_data["esta_oculta"] = false
-	if card.get("is_exhumed") == true:
+	var is_exhumed = card.get("is_exhumed") == true
+	if is_exhumed:
 		_zones[player_id].exile.append(card_data)
 		emit_signal("card_exiled", player_id, card)
 		_emit_exile_changed(player_id)
@@ -488,10 +529,24 @@ func destroy_card(player_id: int, card: Node) -> void:
 		emit_signal("card_destroyed", player_id, card)
 		_update_cemetery_visual(player_id)
 
+	# Desequipar ANTES de animar: compact_field_slots() corre de forma
+	# síncrona dentro de animate_card_exile()/animate_card_to_cemetery()
+	# (al reparentar la carta) y todavía mira equipped_weapons del portador
+	# — si el Arma sigue ahí, le pisa la posición recién calculada y se ve
+	# un salto visual antes de volar al cementerio/destierro.
+	_unequip_from_wielder(card)
+
+	var main_node = Engine.get_main_loop().root.get_node_or_null("Main") if Engine.get_main_loop() else null
+	if main_node and main_node.get("_zone_manager") != null and is_instance_valid(card) and card.is_inside_tree() and card.visible:
+		if is_exhumed:
+			await main_node._zone_manager.animate_card_exile(card, player_id)
+		else:
+			await main_node._zone_manager.animate_card_to_cemetery(card, player_id)
+
 	_disconnect_card_interaction_signals(card)
 	card.queue_free()
-	if _main and _main.get("_zone_manager") != null:
-		_main._zone_manager.compact_all_fields(true)
+	if main_node and main_node.get("_zone_manager") != null:
+		main_node._zone_manager.call_deferred("compact_all_fields", true)
 
 
 func remove_from_cemetery(player_id: int, index: int = -1) -> Dictionary:
@@ -533,10 +588,21 @@ func exile_card(player_id: int, card: Node) -> void:
 
 	emit_signal("card_exiled", player_id, card)
 	_emit_exile_changed(player_id)
+
+	# Ver comentario equivalente en destroy_card(): desequipar ANTES de
+	# animar para que compact_field_slots() no le pise la posición al Arma
+	# mientras aún aparece en equipped_weapons del portador.
+	_unequip_from_wielder(card)
+
+	var main_node = Engine.get_main_loop().root.get_node_or_null("Main") if Engine.get_main_loop() else null
+	if main_node and main_node.get("_zone_manager") != null and is_instance_valid(card) and card.is_inside_tree() and card.visible:
+		await main_node._zone_manager.animate_card_exile(card, player_id)
+
 	_disconnect_card_interaction_signals(card)
 	card.queue_free()
-	if _main and _main.get("_zone_manager") != null:
-		_main._zone_manager.compact_all_fields(true)
+	if main_node and main_node.get("_zone_manager") != null:
+		main_node._zone_manager.call_deferred("compact_all_fields", true)
+
 
 
 func exile_from_cemetery(player_id: int, index: int = -1) -> Dictionary:

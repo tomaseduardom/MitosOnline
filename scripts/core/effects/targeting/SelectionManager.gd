@@ -313,7 +313,7 @@ func open(card_data_list: Array, mode_str: String, config: Dictionary = {}) -> v
 	open_selection(card_data_list, mode, config)
 
 
-func open_selection(card_data_list: Array, mode: int, config: Dictionary = {}) -> void:
+func open_selection(card_data_list: Array, mode: int, config: Dictionary = {}, chooser_id: int = 0) -> void:
 	"""Abre el panel de selección con las cartas especificadas
 
 	Args:
@@ -326,6 +326,13 @@ func open_selection(card_data_list: Array, mode: int, config: Dictionary = {}) -
 			filter: Callable,  # (card_data) -> bool
 			can_cancel: bool
 		}
+		chooser_id: quién debe elegir (0 = jugador local/Anfitrión, el único
+			caso que existía antes de esto; 1 = jugador 1). 2026-09-30, Fase 3
+			del plan de paridad remota (docs/plans/2026-09-20-remote-
+			multiplayer-parity.md) — default 0 a propósito: ningún llamador
+			existente (~100 sitios reales) necesita cambiar, solo los que se
+			conviertan a propósito para que el Remoto decida sus propias
+			cartas pasan chooser_id=1 explícito.
 	"""
 	if is_open:
 		push_warning("[SelectionManager] Ya hay una selección abierta")
@@ -334,6 +341,21 @@ func open_selection(card_data_list: Array, mode: int, config: Dictionary = {}) -
 	if card_data_list.is_empty():
 		push_warning("[SelectionManager] Lista de cartas vacía")
 		emit_signal("selection_cancelled")
+		return
+
+	# Fase 3 del plan de paridad remota: si quien debe elegir es el jugador 1
+	# Y ese jugador es un Remoto real conectado (sin sala de red activa esto
+	# no aplica — sigue el camino local de siempre, el bot incluido, sin
+	# cambios), la elección se manda por red en vez de abrir la UI local acá
+	# — abrirla localmente le haría elegir al ANFITRIÓN por una carta que no
+	# es suya. _delegate_selection_to_remote() termina emitiendo las MISMAS
+	# señales (card_selected/selection_completed/selection_cancelled) que la
+	# UI local emitiría, así que todo lo que ya escucha esas señales (las
+	# funciones de SelectionDialogs.gd, open_search()/open_exhumar(), y
+	# código que escucha directo como ActionSearch._select_search_results())
+	# sigue funcionando sin que haga falta tocarlo.
+	if chooser_id == 1 and NetworkClient.room_code != "" and NetworkClient.is_host:
+		_delegate_selection_to_remote(card_data_list, mode, config)
 		return
 
 	# Configurar
@@ -358,7 +380,7 @@ func open_selection(card_data_list: Array, mode: int, config: Dictionary = {}) -
 	for card_data in card_data_list:
 		_create_selection_card(card_data, mode)
 
-	# Recién acá 'displayed_cards' ya tiene las cartas instanciadas — antes se
+	# Solo aquí 'displayed_cards' ya tiene las cartas instanciadas — antes se
 	# llamaba ANTES del loop de arriba y el label de modo REVEAL siempre
 	# decía "Mostrando 0 carta(s)" sin importar cuántas se pasaran
 	# (2026-08-26, visto con Tangata Manu mostrando 6 cartas).
@@ -403,7 +425,7 @@ func open_exhumar(cemetery_cards: Array, max_select: int = 1) -> void:
 	})
 
 
-func open_search(deck_cards: Array, max_select: int = 1, filter: Callable = Callable()) -> void:
+func open_search(deck_cards: Array, max_select: int = 1, filter: Callable = Callable(), chooser_id: int = 0) -> void:
 	"""Atajo para buscar cartas en el mazo"""
 	open_selection(deck_cards, SelectionMode.SEARCH, {
 		"title": "Buscar en el Mazo",
@@ -411,7 +433,55 @@ func open_search(deck_cards: Array, max_select: int = 1, filter: Callable = Call
 		"min_selections": 0,
 		"filter": filter,
 		"can_cancel": true
+	}, chooser_id)
+
+
+func _delegate_selection_to_remote(card_data_list: Array, mode: int, config: Dictionary) -> void:
+	"""Contraparte en red de abrir la UI local — ver el comentario en
+	open_selection() que llama acá. Construye el prompt con las cartas que
+	de verdad pasan el filtro (las que no pasan ni se muestran — mismo
+	criterio de bajo pulido ya usado para 'choose_wielder' en
+	RemoteMirrorController.gd), espera la respuesta, y emite las señales
+	normales de SelectionManager con los datos elegidos."""
+	var max_sel: int = config.get("max_selections", 1)
+	var min_sel: int = config.get("min_selections", 0)
+	var can_cancel: bool = config.get("can_cancel", true)
+	var title: String = config.get("title", _get_default_title(mode))
+	var filter: Callable = config.get("filter", Callable())
+
+	var candidates_payload: Array = []
+	for data in card_data_list:
+		if filter.is_valid() and not filter.call(data):
+			continue
+		candidates_payload.append(data)
+
+	NetworkClient.send_message({
+		"op": "prompt", "kind": "select_cards",
+		"title": title,
+		"candidates": candidates_payload,
+		"max_selections": max_sel,
+		"min_selections": min_sel,
+		"can_cancel": can_cancel,
 	})
+	var intent: Dictionary = await NetworkClient.await_intent(["select_cards_choice"])
+
+	if bool(intent.get("cancelled", false)):
+		emit_signal("selection_cancelled")
+		return
+
+	var chosen_data: Array = []
+	for pos in intent.get("indices", []):
+		var p: int = int(pos)
+		if p >= 0 and p < candidates_payload.size():
+			chosen_data.append(candidates_payload[p])
+
+	if max_sel == 1:
+		if chosen_data.is_empty():
+			emit_signal("selection_cancelled")
+		else:
+			emit_signal("card_selected", chosen_data[0])
+	else:
+		emit_signal("selection_completed", chosen_data)
 
 
 ## Los 5 diálogos modales (implementación en SelectionDialogs.gd) — la API
@@ -421,12 +491,27 @@ func await_single_pick(candidates: Array, title: String, can_cancel: bool = true
 	return await _dialogs.await_single_pick(candidates, title, can_cancel, min_selections, filter)
 
 
-func await_two_choice(main: Node, title: String, option_a: String, option_b: String) -> bool:
-	return await _dialogs.await_two_choice(main, title, option_a, option_b)
+func await_two_choice(main: Node, title: String, option_a: String, option_b: String, chooser_id: int = 0) -> bool:
+	return await _dialogs.await_two_choice(main, title, option_a, option_b, chooser_id)
 
 
-func await_choice(main: Node, title: String, options: Array) -> int:
-	return await _dialogs.await_choice(main, title, options)
+func await_card_pair_choice(
+	main: Node,
+	title: String,
+	card_data_a: Dictionary,
+	card_data_b: Dictionary,
+	label_a: String = "Tope del Castillo",
+	label_b: String = "Fondo del Castillo",
+	face_down_b: bool = true,
+	face_down_a: bool = false
+) -> bool:
+	return await _dialogs.await_card_pair_choice(
+		main, title, card_data_a, card_data_b, label_a, label_b, face_down_b, face_down_a
+	)
+
+
+func await_choice(main: Node, title: String, options: Array, chooser_id: int = 0) -> int:
+	return await _dialogs.await_choice(main, title, options, chooser_id)
 
 
 func await_castillo_pick(main: Node, title: String) -> bool:
@@ -494,7 +579,7 @@ func _create_selection_card(card_data: Dictionary, mode: int) -> void:
 	# Inspección con click derecho (2026-08-30, a pedido del usuario: poder
 	# leer de cerca las cartas de un pool de selección — p.ej. elegir cuáles
 	# desterrar de los Cementerios con Espada de O'Higgins — antes no
-	# conectaba nada, así que el click derecho no hacía nada acá). current_zone
+	# conectaba nada, así que el click derecho no hacía nada aquí). current_zone
 	# por defecto es Constants.Zone.MANO (Card.gd) y esta instancia nunca pasa
 	# por set_zone(): sin corregirlo, _build_ability_buttons() la trataría
 	# como si estuviera en la mano y podría ofrecer botones de habilidades

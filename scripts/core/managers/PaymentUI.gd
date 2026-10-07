@@ -68,7 +68,7 @@ func _show_unique_blocked_message(card_data: Dictionary, reason: String) -> void
 
 	# Crear popup de error
 	var popup = AcceptDialog.new()
-	popup.title = "⛔ Carta Única Bloqueada"
+	popup.title = "Carta Única Bloqueada"
 	popup.dialog_text = "%s\n\n%s" % [card_name, reason]
 	popup.confirmed.connect(popup.queue_free)
 	_main.add_child(popup)
@@ -231,7 +231,7 @@ func _create_payment_popup(card_data: Dictionary, options: Array) -> void:
 
 	# Título de la carta
 	var title = Label.new()
-	title.text = "💰 %s" % card_data.get("nombre", card_data.get("name", "???"))
+	title.text = card_data.get("nombre", card_data.get("name", "???"))
 	title.add_theme_font_size_override("font_size", 16)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)

@@ -29,7 +29,7 @@ var combat_in_progress: bool = false
 
 
 func _ready() -> void:
-	# (2026-08-28, "módulos gordos" punto 1): acá había una conexión a
+	# (2026-08-28, "módulos gordos" punto 1): aquí había una conexión a
 	# 'TurnManager.phase_changed' para auto-disparar calculate_combat_damage()
 	# en ASIGNACION_DANIO — TurnManager.gd NO tiene (ni tuvo nunca) esa señal,
 	# así que el 'has_signal()' que la envolvía siempre daba falso y esto
@@ -72,7 +72,7 @@ func calculate_combat_damage() -> Dictionary:
 		"total_damage_to_castle": 0,
 		# Daño de atacantes con "hace doble daño de combate al Destierro"
 		# (2026-09-04, a pedido del usuario — p.ej. atenea en wonderland,
-		# manuel rodriguez) — YA VIENE DOBLADO acá, separado del pool normal
+		# manuel rodriguez) — YA VIENE DOBLADO aquí, separado del pool normal
 		# porque va a una zona distinta (Destierro, no Cementerio) al
 		# aplicarse más abajo.
 		"total_damage_to_exile": 0,
@@ -162,6 +162,14 @@ func calculate_combat_damage() -> Dictionary:
 	print("[BattleManager] Daño asignado: %d normal + %d al Destierro (de %d fuentes)" % [
 		result.total_damage_to_castle, result.total_damage_to_exile, result.damage_sources.size()
 	])
+
+	# Juice de Combate: animar choque físico (Clash) de todos los pares y acometida de atacantes sin bloquear
+	var main = get_node_or_null("/root/Main")
+	if main and main.get("_combat_juice") != null:
+		if not result.combat_pairs.is_empty():
+			await main._combat_juice.play_all_clashes(result.combat_pairs)
+		if not result.unblocked_attackers.is_empty() and total_damage_combined > 0:
+			await main._combat_juice.play_unblocked_surges(result.unblocked_attackers)
 
 	# Aplicar daño "hace doble daño de combate al Destierro" PRIMERO (pool
 	# separado, siempre a Destierro sin importar _check_damage_to_exile_effect)
@@ -480,13 +488,13 @@ func get_potential_damage(attackers: Array, blockers: Dictionary) -> int:
 
 # NOTA (2026-09-08): Se eliminó un segundo sistema de "modificadores de
 # combate" (combat_strength_modifiers/add_combat_modifier()/get_modified_
-# strength()/clear_combat_modifiers()) que vivía acá, paralelo y desconectado
+# strength()/clear_combat_modifiers()) que vivía aquí, paralelo y desconectado
 # del real: calculate_combat_damage() siempre calculó la Fuerza vía
 # ContinuousEffectManager.get_modified_strength(card) (ver _get_strength()
 # más arriba), nunca a través de este — auditoría 2026-09-07 confirmó cero
 # llamadores reales en todo el proyecto. Cualquier efecto de "+X de Fuerza
 # este combate" debe registrarse en ContinuousEffectManager (duration
-# UNTIL_END_TURN o similar), no acá.
+# UNTIL_END_TURN o similar), no aquí.
 
 # NOTA (2026-08-20): "Golpe Primero" y "Arrollar" no son keywords en Mitos y
 # Leyendas — se eliminó has_first_strike()/has_trample()/

@@ -218,7 +218,7 @@ func _get_name_from_data(data: Dictionary) -> String:
 # API PRINCIPAL - JUGAR CARTA
 # =============================================================================
 # play_card()/add_response_to_stack() (StackObjectType.CARD_PLAYED/
-# RESPONSE_CARD) se eliminaron acá (2026-08-27, limpieza a pedido del
+# RESPONSE_CARD) se eliminaron aquí (2026-08-27, limpieza a pedido del
 # usuario): sin ningún llamador real en el juego — el camino que de verdad
 # juega cartas es GoldManager (_play_card_to_field/_place_card_as_gold/
 # _equip_weapon/_play_talisman), no ActionPipeline. Quedaban como un
@@ -256,21 +256,14 @@ func _add_to_stack(stack_obj: Dictionary) -> void:
 
 	# Console log
 	if stack_obj.has_x_cost and stack_obj.instance_x >= 0:
-		print("[ActionPipeline] ┌─ PILA [%d]: + %s (%s) [X=%d, Coste=%d]" % [
-			_stack.size(),
-			stack_obj.name,
-			stack_obj.type_name,
-			stack_obj.instance_x,
-			stack_obj.x_total_cost
+		print("[ActionPipeline] %s (X=%d, Coste=%d) va a la pila" % [
+			stack_obj.name, stack_obj.instance_x, stack_obj.x_total_cost
 		])
 	else:
-		print("[ActionPipeline] ┌─ PILA [%d]: + %s (%s)" % [
-			_stack.size(),
-			stack_obj.name,
-			stack_obj.type_name
-		])
+		print("[ActionPipeline] %s va a la pila" % stack_obj.name)
 
-	_print_stack_state()
+	if Constants.VERBOSE_DIAG_LOGS:
+		_print_stack_state()
 
 	emit_signal("stack_object_added", stack_obj)
 
@@ -294,10 +287,8 @@ func add_triggered_ability_to_stack(ability_data: Dictionary, source_card: Dicti
 
 	_stack.append(stack_obj)
 
-	print("[ActionPipeline] ┌─ PILA [%d]: + Habilidad '%s' (de %s)" % [
-		_stack.size(),
-		stack_obj.name,
-		ctx.get("source_name", "???")
+	print("[ActionPipeline] Habilidad '%s' (de %s) va a la pila" % [
+		stack_obj.name, ctx.get("source_name", "???")
 	])
 
 	emit_signal("stack_object_added", stack_obj)
@@ -329,25 +320,35 @@ func add_triggered_ability_to_stack_and_await(ability_data: Dictionary, source_c
 	— como máximo uno de los cuatro es true."""
 	var stack_id: int = add_triggered_ability_to_stack(ability_data, source_card, context)
 
-	var outcome: Dictionary = {"resolved": false, "annulled": false, "cancelled": false, "fizzled": false}
-	var done: bool = false
+	# 2026-09-12 (bug real reportado por el usuario: TODAS las cartas con
+	# habilidad de entrada tardaban ~8 segundos, siempre, sin excepción).
+	# Causa: las lambdas de GDScript capturan las variables locales de la
+	# función envolvente POR VALOR, no por referencia — "done = true" dentro
+	# de un closure reasigna la copia local del closure, nunca la variable
+	# "done" de la función de afuera, así que el "while not done" jamás se
+	# enteraba de que el objeto ya había resuelto y esperaba siempre el
+	# timeout completo de 8s. Los Diccionarios SÍ se comparten por
+	# referencia (por eso "outcome.resolved = true" ya funcionaba bien) —
+	# fix: "done" pasa a vivir como un campo más de ese mismo Dictionary
+	# compartido, en vez de una variable bool aparte.
+	var outcome: Dictionary = {"resolved": false, "annulled": false, "cancelled": false, "fizzled": false, "done": false}
 
 	var on_resolved := func(obj: Dictionary, _result: Dictionary) -> void:
 		if obj.get("id", -1) == stack_id:
 			outcome.resolved = true
-			done = true
+			outcome.done = true
 	var on_annulled := func(obj: Dictionary, _annuller) -> void:
 		if obj.get("id", -1) == stack_id:
 			outcome.annulled = true
-			done = true
+			outcome.done = true
 	var on_cancelled := func(obj: Dictionary) -> void:
 		if obj.get("id", -1) == stack_id:
 			outcome.cancelled = true
-			done = true
+			outcome.done = true
 	var on_fizzled := func(obj: Dictionary) -> void:
 		if obj.get("id", -1) == stack_id:
 			outcome.fizzled = true
-			done = true
+			outcome.done = true
 
 	stack_object_resolved.connect(on_resolved)
 	object_annulled.connect(on_annulled)
@@ -367,10 +368,10 @@ func add_triggered_ability_to_stack_and_await(ability_data: Dictionary, source_c
 	# de un bug más profundo por perseguir después — el push_warning deja
 	# rastro concreto (antes no había NINGÚN log en este punto de cuelgue).
 	var waited := 0.0
-	while not done and waited < 8.0:
+	while not outcome.done and waited < 8.0:
 		await get_tree().process_frame
 		waited += get_process_delta_time()
-	if not done:
+	if not outcome.done:
 		push_warning("[ActionPipeline] add_triggered_ability_to_stack_and_await() atascado >8s para stack_id=%d (_is_resolving=%s, tamaño de pila=%d) — forzando continuación sin anular/cancelar" % [
 			stack_id, str(_is_resolving), _stack.size()
 		])
@@ -410,7 +411,7 @@ func activate_ability(source_card_data: Dictionary, ability_data: Dictionary, co
 	# confirmación — pedir un "¿seguro?" aparte era redundante ("se entiende
 	# que si le doy al botón utilizo la habilidad"). Los triggers ("puedes"
 	# en 'Cuando entra/ataca/...', resueltos por TriggerResolution/
-	# LookAndPlayResolver/TargetedEffectExecutor, que no pasan por acá) ya
+	# LookAndPlayResolver/TargetedEffectExecutor, que no pasan por aquí) ya
 	# ofrecen su propio "declinar" via can_cancel en el SelectionManager que
 	# abren — nunca dependieron de este diálogo.
 
@@ -427,19 +428,17 @@ func activate_ability(source_card_data: Dictionary, ability_data: Dictionary, co
 	var source_card_node = context.get("source_card_node")
 	match cost_type:
 		UniversalCardParser.CostType.GOLD:
-			if controller_id == 0:
-				if not main_ref or not main_ref._gold_manager:
-					return {"success": false, "reason": "GoldManager no disponible"}
-				var paid: bool = await main_ref._gold_manager.pagar_coste(cost_amount)
-				if not paid:
-					return {"success": false, "reason": "Oro insuficiente"}
-			else:
-				# El bot no tiene Oro Virtual/restringido (esos pools solo
-				# existen del lado humano) — paga siempre Oro físico real vía
-				# el mismo helper que ya usa para jugar cartas (2026-09-09).
-				if not main_ref or not main_ref._easy_bot or not GameState.puede_pagar(controller_id, cost_amount):
-					return {"success": false, "reason": "Oro insuficiente"}
-				main_ref._easy_bot._pay_oro_for_bot(cost_amount)
+			# 2026-10-06 (ver arquitectura.md §33): GoldManager.pagar_coste()
+			# ya es por jugador (Oro Virtual/restringido + elegir Oro físico
+			# interactivo) — antes el jugador 1 pagaba siempre por un camino
+			# aparte (_easy_bot._pay_oro_for_bot(), solo Oro físico simple,
+			# porque "el bot no tiene Oro Virtual/restringido" ya no es
+			# cierto). Unificado a un solo camino para los dos jugadores.
+			if not main_ref or not main_ref._gold_manager:
+				return {"success": false, "reason": "GoldManager no disponible"}
+			var paid: bool = await main_ref._gold_manager.pagar_coste(cost_amount, -1, "", -1, controller_id)
+			if not paid:
+				return {"success": false, "reason": "Oro insuficiente"}
 		UniversalCardParser.CostType.DISCARD:
 			if controller_id != 0:
 				# El bot no tiene mano representada como Nodos todavía
@@ -544,21 +543,19 @@ func can_activate_ability(source_card_data: Dictionary, ability_data: Dictionary
 		if in_local or in_registry:
 			return {"can": false, "reason": "Ya usada este turno"}
 
-	# Oro: verificar si el jugador tiene suficiente — vía GoldManager (real,
-	# solo jugador 0, con sus pools de Oro Virtual/restringido) o vía
-	# GameState (bot, Oro físico simple) — misma distinción que Paso B.
+	# Oro: verificar si el jugador tiene suficiente — vía GoldManager, que ya
+	# es por jugador (Oro físico + Virtual + restringido, ver arquitectura.md
+	# §33). Antes el jugador 1 pasaba por GameState.puede_pagar() sola (solo
+	# Oro físico, sin considerar sus propios pools de Oro Virtual/restringido,
+	# que hoy sí puede tener).
 	if cost_type == UniversalCardParser.CostType.GOLD and cost_amount > 0:
-		if controller_id == 0:
-			var main_check := get_node_or_null("/root/Main")
-			if main_check and main_check._gold_manager:
-				var available: int = main_check._gold_manager.get_oro_disponible()
-				if not main_check._gold_manager.puede_pagar(cost_amount):
-					return {"can": false, "reason": "Necesitas %d Oro (tienes %d)" % [cost_amount, available]}
-			else:
-				return {"can": false, "reason": "GoldManager no disponible"}
+		var main_check := get_node_or_null("/root/Main")
+		if main_check and main_check._gold_manager:
+			var available: int = main_check._gold_manager.get_oro_disponible(controller_id)
+			if not main_check._gold_manager.puede_pagar(cost_amount, -1, "", -1, controller_id):
+				return {"can": false, "reason": "Necesitas %d Oro (tienes %d)" % [cost_amount, available]}
 		else:
-			if not GameState.puede_pagar(controller_id, cost_amount):
-				return {"can": false, "reason": "Necesitas %d Oro (tienes %d)" % [cost_amount, GameState.get_oro_reserva(controller_id)]}
+			return {"can": false, "reason": "GoldManager no disponible"}
 
 	return {"can": true, "reason": ""}
 
@@ -593,9 +590,8 @@ func _process_stack() -> void:
 	_is_resolving = true
 	emit_signal("pipeline_started")
 
-	print("[ActionPipeline] ═══════════════════════════════════════════════")
-	print("[ActionPipeline] PROCESANDO PILA - Resolución por Capas (5.C3)")
-	print("[ActionPipeline] ═══════════════════════════════════════════════")
+	if Constants.VERBOSE_DIAG_LOGS:
+		print("[ActionPipeline] Procesando pila — resolución por capas (5.C3)")
 
 	var layer_count = 0
 
@@ -606,73 +602,48 @@ func _process_stack() -> void:
 		if top.is_empty():
 			break
 
-		print("[ActionPipeline] ┌─── CAPA %d: %s ───" % [layer_count, top.name])
-		_print_stack_state()
+		if Constants.VERBOSE_DIAG_LOGS:
+			_print_stack_state()
 
-		# ─────────────────────────────────────────────────────────────────────
-		# PRE-CHECK: Verificar si el objeto fue cancelado o perdió objetivos
-		# ─────────────────────────────────────────────────────────────────────
+		# PRE-CHECK: ¿el objeto fue cancelado o perdió objetivos? (el handler
+		# correspondiente ya imprime su propio mensaje claro, ver más abajo)
 		var pre_check = _pre_resolution_check(top)
 		if pre_check.should_remove:
 			await _handle_removed_object(top, pre_check.reason)
-			print("[ActionPipeline] └─── CAPA %d: %s (%s) ───" % [layer_count, top.name, pre_check.reason])
 			continue
 
-		# ─────────────────────────────────────────────────────────────────────
-		# PASO D: Ventana de Prioridad (Sección 6.D)
-		# Ambos jugadores deben pasar consecutivamente para resolver
-		# ─────────────────────────────────────────────────────────────────────
+		# PASO D: Ventana de Prioridad (Sección 6.D) — ambos jugadores deben
+		# pasar consecutivamente para resolver.
 		var step_d_result = await _step_resolver._execute_step_d(top)
 
-		# Si hubo respuesta, se añadió al tope - nueva capa
+		# Si hubo respuesta, se añadió al tope — nueva capa.
 		if step_d_result.had_response:
-			print("[ActionPipeline] │ → Respuesta añadida al tope")
-			print("[ActionPipeline] └─── CAPA %d: Interrumpida ───" % layer_count)
 			continue
 
-		# ─────────────────────────────────────────────────────────────────────
-		# POST-CHECK: Verificar anulación/cancelación después de Paso D
-		# ─────────────────────────────────────────────────────────────────────
+		# POST-CHECK: anulación/cancelación después de Paso D (cada handler
+		# ya imprime su propio mensaje claro).
 		if top.was_annulled:
 			await _handle_annulled_object(top)
-			print("[ActionPipeline] └─── CAPA %d: Anulada ───" % layer_count)
 			continue
 
 		if top.was_cancelled:
 			await _handle_cancelled_object(top)
-			print("[ActionPipeline] └─── CAPA %d: Cancelada ───" % layer_count)
 			continue
 
-		# ─────────────────────────────────────────────────────────────────────
-		# VERIFICACIÓN DE OBJETIVOS: Fizzle si perdió todos los objetivos
-		# ─────────────────────────────────────────────────────────────────────
+		# Fizzle si perdió todos los objetivos.
 		if _should_fizzle(top):
 			await _handle_fizzled_object(top)
-			print("[ActionPipeline] └─── CAPA %d: Fizzled ───" % layer_count)
 			continue
 
-		# ─────────────────────────────────────────────────────────────────────
-		# PASO E: Resolver SOLO el tope (ambos pasaron consecutivamente)
-		# ─────────────────────────────────────────────────────────────────────
-		print("[ActionPipeline] │ ✓ Ambos pasaron → Resolviendo tope")
+		# PASO E: resolver el tope (ambos pasaron consecutivamente).
 		await _step_resolver._execute_step_e(top)
 
-		# Remover del tope después de resolver
+		# Remover del tope después de resolver.
 		_remove_from_stack(top, "resolved")
 
-		print("[ActionPipeline] └─── CAPA %d: Resuelta ───" % layer_count)
-
-		# ─────────────────────────────────────────────────────────────────────
-		# NUEVA VENTANA DE PRIORIDAD: Antes de resolver el siguiente (5.C3)
-		# ─────────────────────────────────────────────────────────────────────
-		if not _stack.is_empty():
-			print("[ActionPipeline] │")
-			print("[ActionPipeline] │ → Nueva ventana de prioridad (5.C3)")
-			# El loop continuará y abrirá Paso D para el nuevo tope
-
-	print("[ActionPipeline] ═══════════════════════════════════════════════")
-	print("[ActionPipeline] PILA VACÍA - %d capas procesadas" % layer_count)
-	print("[ActionPipeline] ═══════════════════════════════════════════════")
+		print("[ActionPipeline] %s: resuelta" % top.name)
+		# Si queda algo en la pila, el loop sigue y abre Paso D para el
+		# nuevo tope (nueva ventana de prioridad, 5.C3).
 
 	emit_signal("stack_empty")
 	_is_resolving = false
@@ -898,11 +869,6 @@ func _remove_from_stack(stack_obj: Dictionary, reason: String) -> void:
 	var idx = _stack.find(stack_obj)
 	if idx >= 0:
 		_stack.remove_at(idx)
-		print("[ActionPipeline] └─ PILA [%d]: - %s (%s)" % [
-			_stack.size(),
-			stack_obj.name,
-			reason
-		])
 		emit_signal("stack_object_removed", stack_obj, reason)
 
 

@@ -47,7 +47,7 @@ func try_build(ability_lower: String, btn: Button, panel: Control, card_for_glow
 		panel.add_child(btn)
 		return true
 
-	# Patrón de Espada de O'Higgins removido de acá (2026-09-07, bug real
+	# Patrón de Espada de O'Higgins removido de aquí (2026-09-07, bug real
 	# encontrado en auditoría): este guard ("barajar una carta que no sea
 	# oro" + "buscar un oro en tu castillo") es un subconjunto estricto del
 	# guard de AbilityButtonPatternsC.gd ("puedes barajar una carta que no

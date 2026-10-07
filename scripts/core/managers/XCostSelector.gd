@@ -232,7 +232,7 @@ func _create_x_value_popup(card_data: Dictionary, x_info: Dictionary) -> void:
 
 	# Oro disponible
 	var gold_label = Label.new()
-	gold_label.text = "💰 Oro disponible: %d" % _main._validation._get_player_available_gold(_main._current_player_id)
+	gold_label.text = "Oro disponible: %d" % _main._validation._get_player_available_gold(_main._current_player_id)
 	gold_label.add_theme_font_size_override("font_size", 12)
 	gold_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(gold_label)
@@ -299,12 +299,12 @@ func _create_x_value_popup(card_data: Dictionary, x_info: Dictionary) -> void:
 	vbox.add_child(btn_hbox)
 
 	var confirm_btn = Button.new()
-	confirm_btn.text = "✓ Confirmar"
+	confirm_btn.text = "Confirmar"
 	confirm_btn.pressed.connect(_on_x_value_confirmed)
 	btn_hbox.add_child(confirm_btn)
 
 	var cancel_btn = Button.new()
-	cancel_btn.text = "✗ Cancelar"
+	cancel_btn.text = "Cancelar"
 	cancel_btn.pressed.connect(_on_x_value_cancelled)
 	btn_hbox.add_child(cancel_btn)
 

@@ -4,7 +4,7 @@ extends RefCounted
 ## Paladín, Estaca — prevención, Drácula — autoconvertirse, Paladín
 ## Bestiarium — 2 habilidades, y todas las cartas agregadas 2026-09-06 en
 ## adelante). Detectados en CardInspectionLayer._build_ability_buttons() y
-## ruteados acá en vez de al pipeline genérico de habilidades activadas.
+## ruteados aquí en vez de al pipeline genérico de habilidades activadas.
 ##
 ## Dividido en tres archivos por tamaño (2026-09-06, "módulos gordos" — mismo
 ## corte que ya separó SearchAbilityHandler.gd en SearchAbilityHandler_AI.gd/

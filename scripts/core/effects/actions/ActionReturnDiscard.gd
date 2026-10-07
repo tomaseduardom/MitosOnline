@@ -52,13 +52,20 @@ func return_to_deck(card: Node, player_id: int, to_top: bool = true, source: Nod
 	# destroy_card()/exile_card() en EffectController.gd.
 	EffectController.emit_signal("on_card_returned_to_deck", player_id, card, to_top)
 
+	var main_node: Node = _main.get_node_or_null("/root/Main") if _main else (Engine.get_main_loop().root.get_node_or_null("Main") if Engine.get_main_loop() else null)
+	if main_node and main_node.get("_zone_manager") != null and is_instance_valid(card) and card.is_inside_tree() and card.visible:
+		await main_node._zone_manager.animate_card_return_to_deck(card, player_id)
+
 	# Desconectar señales de interacción ANTES de liberar (2026-08-29, mismo
 	# bug que CardManager.destroy_card()/exile_card()) — sin esto, un hover
 	# que sigue apuntando al nodo después de queue_free() tira "Invalid
 	# access... on a base object of type previously freed" al tocar
 	# .modulate en el próximo evento de mouse.
+	CardManager._unequip_from_wielder(card)
 	CardManager._disconnect_card_interaction_signals(card)
 	card.queue_free()
+	if main_node and main_node.get("_zone_manager") != null:
+		main_node._zone_manager.call_deferred("compact_all_fields", true)
 	return true
 
 
@@ -114,8 +121,8 @@ func discard(player_id: int, cards: Array, source: String = "", skip_validation:
 		if not board:
 			# GameBoard legacy no disponible (docs/audit, hallazgo 2/4) —
 			# mismo camino que PhaseFlowController._opponent_auto_discard()/
-			# SelectionModule.open_discard_selection(): sacar la carta de la
-			# mano real y mandar sus datos al cementerio vía CardManager.
+			# _discard_excess_by_click(): sacar la carta de la mano real y
+			# mandar sus datos al cementerio vía CardManager.
 			_discard_card_fallback(player_id, card)
 			result.discarded.append(card)
 			result.actual += 1
@@ -141,13 +148,18 @@ func discard(player_id: int, cards: Array, source: String = "", skip_validation:
 func _discard_card_fallback(player_id: int, card: Node) -> void:
 	"""Descarta una carta de la mano real al Cementerio sin pasar por el
 	GameBoard legacy (siempre null) — mismo camino usado por
-	PhaseFlowController._opponent_auto_discard()/SelectionModule.
-	open_discard_selection()."""
+	PhaseFlowController._opponent_auto_discard()/_discard_excess_by_click()."""
 	var data: Dictionary = card.card_data.duplicate() if card.get("card_data") else {}
 	data["esta_oculta"] = false
 	CardManager.add_to_cemetery(player_id, data)
-	var main := _main.get_node_or_null("/root/Main")
+	var main: Node = _main.get_node_or_null("/root/Main") if _main else (Engine.get_main_loop().root.get_node_or_null("Main") if Engine.get_main_loop() else null)
 	if player_id == 0 and main and main.player_hand and main.player_hand.has_method("remove_card"):
-		main.player_hand.remove_card(card, true)
-	elif main and main.get("_opponent_fan") and main._opponent_fan.has_method("remove_card"):
-		main._opponent_fan.remove_card(card, true)
+		main.player_hand.remove_card(card, false)
+	elif main and main.get("_opponent_fan") and main._opponent_fan and main._opponent_fan.has_method("remove_card"):
+		main._opponent_fan.remove_card(card, false)
+
+	if main and main.get("_zone_manager") != null and is_instance_valid(card) and card.is_inside_tree() and card.visible:
+		await main._zone_manager.animate_card_to_cemetery(card, player_id)
+
+	CardManager._disconnect_card_interaction_signals(card)
+	card.queue_free()

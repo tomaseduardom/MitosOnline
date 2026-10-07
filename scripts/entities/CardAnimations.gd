@@ -87,3 +87,48 @@ func play_enter_animation() -> void:
 	var tween = _card.create_tween()
 	tween.tween_property(_card, "scale", target_scale, 0.3).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 	tween.parallel().tween_property(_card, "modulate:a", 1, 0.2)
+
+
+func play_conversion_animation(is_to_gold: bool = true) -> void:
+	"""Animación orgánica de transmutación / conversión a Oro sin habilidad.
+	En vez de un salto instantáneo y seco de 0ms, eleva la carta, proyecta
+	un destello áureo envolvente y realiza un giro suave con Tween cúbico."""
+	if not _card or not is_instance_valid(_card) or not _card.is_inside_tree():
+		return
+
+	var aura = Panel.new()
+	aura.name = "ConversionAura"
+	aura.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	aura.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(1.0, 0.88, 0.35, 0.18) if is_to_gold else Color(0.8, 0.8, 0.9, 0.15)
+	style.border_color = Color(1.0, 0.92, 0.45, 0.95) if is_to_gold else Color(0.85, 0.85, 1.0, 0.9)
+	style.set_border_width_all(3)
+	style.set_corner_radius_all(10)
+	style.shadow_color = Color(1.0, 0.80, 0.20, 0.75) if is_to_gold else Color(0.5, 0.5, 0.8, 0.6)
+	style.shadow_size = 18
+	aura.add_theme_stylebox_override("panel", style)
+	aura.modulate.a = 0.0
+
+	_card.add_child(aura)
+	_card.move_child(aura, 0)
+
+	var orig_scale: Vector2 = _card.scale if _card.scale != Vector2.ZERO else (_card.base_scale if _card.base_scale != Vector2.ZERO else Vector2.ONE)
+
+	var tween = _card.create_tween()
+	# Fase 1: Pop de elevación y encendido del destello áureo
+	tween.parallel().tween_property(_card, "scale", orig_scale * 1.07, 0.15).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tween.parallel().tween_property(aura, "modulate:a", 1.0, 0.15)
+
+	# Fase 2: Giro / compresión horizontal tipo flip de carta
+	tween.chain().tween_property(_card, "scale:x", 0.0, 0.18).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	tween.tween_callback(func():
+		if _card and is_instance_valid(_card):
+			_card._refresh_disabled_rotation()
+	)
+	# Fase 3: Despliegue en su nueva orientación con rebote suave
+	tween.chain().tween_property(_card, "scale:x", orig_scale.x, 0.22).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tween.parallel().tween_property(_card, "scale:y", orig_scale.y, 0.22).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(aura, "modulate:a", 0.0, 0.35)
+	tween.chain().tween_callback(aura.queue_free)

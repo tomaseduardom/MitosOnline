@@ -26,7 +26,7 @@ func try_execute_tempilcahue_choice_pattern(full_text: String, card: Node, contr
 	  dos cartas.' (Tempilcahue, 2026-08-30) — Talismán, se resuelve directo
 	  vía TriggerSystem.resolve_talisman(). El autodestierro ya lo maneja
 	  GoldManager._play_talisman() genérico (self_exile detecta 'destierr'
-	  en el texto completo de la carta) — acá solo se resuelve la elección
+	  en el texto completo de la carta) — aquí solo se resuelve la elección
 	  entre las dos ramas. 'Barajar cartas cuyos costes sumen...' sin 'de tu
 	  mano' = cartas EN JUEGO de cualquier lado (ver
 	  [[project_no_zone_means_in_play]]), no de la mano — a diferencia de
@@ -36,7 +36,11 @@ func try_execute_tempilcahue_choice_pattern(full_text: String, card: Node, contr
 	if not ("elige un efecto" in lower and "no puedes jugar más cartas" in lower and "paga dos oros" in lower):
 		return false
 	if controller_id != 0:
-		return false  # el bot no usa esta habilidad todavía
+		# Excluida desde el plan original de Fase 3: "Paga dos Oros para
+		# Barajar cartas cuyos costes sumen hasta 4" usa dynamic_filter
+		# (presupuesto en vivo) en await_multi_target(), que el puente de
+		# red no enforcea del lado del Remoto (mismo caso que Lobo Sagrado).
+		return false  # el Remoto no puede usar esta habilidad todavía
 
 	var main := _executor._main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager:
@@ -48,9 +52,9 @@ func try_execute_tempilcahue_choice_pattern(full_text: String, card: Node, contr
 		"Pagar 2 Oros: barajar cartas en juego (coste ≤4) y robar 2")
 
 	if choose_search:
-		# Sin ventana genérica acá (2026-09-09): Tempilcahue es un Talismán —
+		# Sin ventana genérica aquí (2026-09-09): Tempilcahue es un Talismán —
 		# TriggerSystem.resolve_talisman() ya abrió UNA ventana para toda la
-		# carta antes de llegar hasta acá (Pila de Respuesta Universal).
+		# carta antes de llegar hasta aquí (Pila de Respuesta Universal).
 		await ActionModule.search(controller_id, Constants.Zone.CASTILLO, {}, 1, true, false, false, card, Constants.Zone.MANO, false)
 		await ActionModule.draw(controller_id, 1, "talisman_resolve", true)
 		main._gold_manager.set_no_more_cards_this_turn(controller_id)
@@ -70,9 +74,22 @@ func try_execute_tempilcahue_choice_pattern(full_text: String, card: Node, contr
 			if is_instance_valid(c) and c != card:
 				candidates.append(c)
 
-	var chosen: Array = await _executor._select_cards_by_cost_budget(candidates, 4,
-		"Baraja cualquier cantidad de cartas en juego cuyos costes sumen hasta 4 (puedes no elegir ninguna)")
-	# Sin ventana genérica acá (2026-09-09): return_to_deck() (dentro del
+	# 2026-09-13, a pedido del usuario: click directo sobre las cartas
+	# reales en juego (ya son Nodos visibles, sin necesidad de popup) en
+	# vez del modal viejo que reintentaba toda la selección si te pasabas
+	# del presupuesto. Aquí el presupuesto se hace cumplir EN EL MOMENTO:
+	# dynamic_filter apaga el brillo de cualquier carta que haría superar
+	# la suma de 4 con lo ya elegido, en vez de dejar elegir de más y
+	# rechazar solo al final.
+	var budget_filter := func(chosen_so_far: Array, c: Node) -> bool:
+		var sum_cost: int = 0
+		for x in chosen_so_far:
+			sum_cost += int(x.get("card_cost")) if x.get("card_cost") != null else 0
+		var c_cost: int = int(c.get("card_cost")) if c.get("card_cost") != null else 0
+		return sum_cost + c_cost <= 4
+	var chosen: Array = await main._card_interaction.await_multi_target(
+		"Baraja cartas en juego cuyos costes sumen hasta 4", candidates, -1, Callable(), budget_filter)
+	# Sin ventana genérica aquí (2026-09-09): return_to_deck() (dentro del
 	# loop) ya consulta Prevención adentro por cada carta.
 	for c in chosen:
 		if not is_instance_valid(c):
@@ -99,7 +116,7 @@ func try_execute_golpe_solar_pattern(full_text: String, card: Node, controller_i
 	Dragón / Kaiju vs Mecha: Titanes, mismo texto en las tres). Talismán,
 	se resuelve directo vía TriggerSystem.resolve_talisman(). El
 	autodestierro ya lo maneja GoldManager._play_talisman() genérico
-	(self_exile detecta 'destierr' en el texto completo de la carta) — acá
+	(self_exile detecta 'destierr' en el texto completo de la carta) — aquí
 	solo se resuelve el efecto en sí, en el orden impreso.
 
 	El descuento de coste reusa el mismo molde que
@@ -119,7 +136,7 @@ func try_execute_golpe_solar_pattern(full_text: String, card: Node, controller_i
 	2026-09-09-pila-respuesta-universal-design.md, caso de estudio original
 	del usuario): las 3 elecciones del texto (qué descartar, qué Aliado
 	jugar, qué carta rival barajar) se DECLARAN primero, sin tocar nada
-	todavía — recién con las 3 ya decididas se abre UNA sola ventana de
+	todavía — solo con las 3 ya decididas se abre UNA sola ventana de
 	respuesta real, y solo si nadie anula/cancela se ejecutan las 3 partes,
 	en el orden impreso. Antes se elegía y ejecutaba de a una, sin ninguna
 	ventana real entremedio."""
@@ -127,72 +144,112 @@ func try_execute_golpe_solar_pattern(full_text: String, card: Node, controller_i
 	if not ("descarta hasta dos cartas" in lower and "reduciendo su coste" in lower
 			and "baraja hasta una carta oponente" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
-
 	var main := _executor._main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager:
 		return true
+	var hand_container_golpe = main.player_hand if controller_id == 0 else main._opponent_fan
 
 	# ============ DECLARAR (nada se ejecuta todavía) ============
 
 	# --- Declarar "Descarta hasta dos cartas" (0-2, elección del jugador) ---
+	# 2026-09-13, a pedido del usuario: click directo en la mano en vez del
+	# modal de lista viejo.
 	var to_discard: Array = []
-	var just_discarded_data: Array = []
-	if main.player_hand and not main.player_hand.cards.is_empty():
-		var hand_cards: Array = main.player_hand.cards.duplicate()
-		var card_data_list: Array = []
-		for c in hand_cards:
-			card_data_list.append(c.card_data)
-		var discard_result: Dictionary = await SelectionManager.await_multi_pick(
-			card_data_list, "Descarta hasta dos cartas (reduce el coste del Aliado por cada una)", 2, 0, true)
-		for picked_data in discard_result.picked:
-			for c in hand_cards:
-				if is_instance_valid(c) and c.card_data == picked_data and not (c in to_discard):
-					to_discard.append(c)
-					just_discarded_data.append(picked_data)
-					break
+	if hand_container_golpe and not hand_container_golpe.cards.is_empty() and main._card_interaction:
+		var hand_cards: Array = hand_container_golpe.cards.duplicate()
+		to_discard = await main._card_interaction.await_multi_target(
+			"Descarta hasta dos cartas (reduce el coste del Aliado por cada una)", hand_cards, 2, Callable(), Callable(), true, null, controller_id)
+	var just_discarded_data: Array = to_discard.map(func(c): return c.card_data)
 	var discount: int = to_discard.size()
 
 	# --- Declarar "juega un Aliado de tu mano o Cementerio" con ese descuento ---
 	# Un Aliado recién descartado por ESTE mismo efecto no puede ser el
-	# elegido acá (2026-08-31, a pedido del usuario): _discard() lo manda
+	# elegido aquí (2026-08-31, a pedido del usuario): _discard() lo manda
 	# directo al Cementerio, así que sin esta exclusión aparecía como
 	# candidata de 'Cementerio' en la misma resolución que lo descartó.
 	var hand_allies: Array = []
-	for c in main.player_hand.cards:
-		if is_instance_valid(c) and c.get("card_type") == Constants.CardType.ALIADO and not (c in to_discard):
-			hand_allies.append(c)
+	if hand_container_golpe:
+		for c in hand_container_golpe.cards:
+			if is_instance_valid(c) and c.get("card_type") == Constants.CardType.ALIADO and not (c in to_discard):
+				hand_allies.append(c)
 	var cemetery_allies: Array = []
 	for d in CardManager.get_cemetery(controller_id):
 		if d.get("tipo") == Constants.CardType.ALIADO and not (d in just_discarded_data):
 			cemetery_allies.append(d)
 
-	var picked_ally: Dictionary = {}
 	var ally_node: Node = null
 	var from_hand := false
 	var coste_real := 0
 	var puede_pagar := false
-	if not (hand_allies.is_empty() and cemetery_allies.is_empty()):
-		var ally_data_list: Array = []
-		for c in hand_allies:
-			ally_data_list.append(c.card_data)
-		for d in cemetery_allies:
-			ally_data_list.append(d)
+	var picked_ally_data: Dictionary = {}
+	if not (hand_allies.is_empty() and cemetery_allies.is_empty()) and main._card_interaction:
+		# 2026-09-13, a pedido del usuario: click directo — mano (Nodos ya
+		# visibles) + un popup liviano con el Cementerio propio (mismo
+		# patrón que Sake, arquitectura.md §10.23) — en vez del modal de
+		# lista viejo combinando ambas zonas.
+		var cemetery_popup: CanvasLayer = null
+		var cemetery_nodes: Array = []
+		if not cemetery_allies.is_empty():
+			var CardScene = load("res://scenes/cards/Card.tscn")
+			cemetery_popup = CanvasLayer.new()
+			cemetery_popup.layer = 40
+			main.add_child(cemetery_popup)
+			var panel := PanelContainer.new()
+			panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+			panel.position = Vector2(20, -240)
+			var pstyle := StyleBoxFlat.new()
+			pstyle.bg_color = Color(0.04, 0.03, 0.06, 0.92)
+			pstyle.border_color = Color(0.85, 0.72, 0.28, 0.85)
+			pstyle.set_border_width_all(2)
+			pstyle.set_corner_radius_all(12)
+			panel.add_theme_stylebox_override("panel", pstyle)
+			cemetery_popup.add_child(panel)
+			var vbox := VBoxContainer.new()
+			panel.add_child(vbox)
+			var lbl := Label.new()
+			lbl.text = "Tu Cementerio"
+			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			vbox.add_child(lbl)
+			var scroll := ScrollContainer.new()
+			scroll.custom_minimum_size = Vector2(0, 190)
+			scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+			vbox.add_child(scroll)
+			var hbox := HBoxContainer.new()
+			hbox.add_theme_constant_override("separation", 8)
+			scroll.add_child(hbox)
+			for data in cemetery_allies:
+				var wrapper := Control.new()
+				wrapper.custom_minimum_size = Vector2(80.0, 112.0)
+				var c_node = CardScene.instantiate()
+				c_node.load_from_data(data)
+				c_node.set_zone(Constants.Zone.CEMENTERIO)
+				c_node.owner_id = controller_id
+				c_node.controller_id = controller_id
+				c_node.can_interact = true
+				c_node.drag_enabled = false
+				c_node.custom_minimum_size = Vector2(150.0, 210.0)
+				c_node.size = Vector2(150.0, 210.0)
+				c_node.scale = Vector2(0.533, 0.533)
+				c_node.base_scale = Vector2(0.533, 0.533)
+				main._connect_card_signals(c_node)
+				wrapper.add_child(c_node)
+				hbox.add_child(wrapper)
+				cemetery_nodes.append(c_node)
 
-		var title: String = "Juega un Aliado con -%d Oro (mín 0)" % discount
-		picked_ally = await SelectionManager.await_single_pick(ally_data_list, title, true, 0)
-		if not picked_ally.is_empty():
-			for c in hand_allies:
-				if is_instance_valid(c) and c.card_data == picked_ally:
-					ally_node = c
-					from_hand = true
-					break
-			if not ally_node:
-				# Nodo temporal solo para el chequeo de coste de abajo — si al
-				# final no se puede pagar, o la ventana de respuesta anula el
-				# efecto entero, se libera sin haber tocado nada real.
-				ally_node = main._create_card(picked_ally, false)
+		var candidates: Array = hand_allies + cemetery_nodes
+		var filter := func(c: Node) -> bool: return c in candidates
+		var picked_node: Node = await main._card_interaction.await_target(
+			"Juega un Aliado con -%d Oro (mín 0)" % discount, filter, true, controller_id)
+		if is_instance_valid(cemetery_popup):
+			cemetery_popup.queue_free()
+
+		if picked_node and is_instance_valid(picked_node):
+			from_hand = picked_node in hand_allies
+			picked_ally_data = picked_node.card_data
+			ally_node = picked_node if from_hand else main._create_card(picked_ally_data, false)
+			if not from_hand:
+				ally_node.owner_id = controller_id
+				ally_node.controller_id = controller_id
 				main._connect_card_signals(ally_node)
 
 			var applies_to_this_ally := func(c: Node) -> bool:
@@ -229,9 +286,9 @@ func try_execute_golpe_solar_pattern(full_text: String, card: Node, controller_i
 		var shuffle_filter := func(c: Node) -> bool:
 			return c in shuffle_candidates
 		shuffle_chosen = await main._card_interaction.await_target(
-			"Baraja hasta una carta rival en juego (coste 2 o menos) — ESC para no barajar ninguna", shuffle_filter)
+			"Baraja hasta una carta rival en juego (coste 2 o menos) — ESC para no barajar ninguna", shuffle_filter, true, controller_id)
 
-	# Sin ventana genérica acá (2026-09-09): Golpe Solar es un Talismán —
+	# Sin ventana genérica aquí (2026-09-09): Golpe Solar es un Talismán —
 	# TriggerSystem.resolve_talisman() ya abrió UNA ventana para toda la
 	# carta antes de siquiera llegar a este patrón (si hubiera anulado/
 	# cancelado ahí, esta función ni se habría llamado — el "declarar todo
@@ -243,24 +300,24 @@ func try_execute_golpe_solar_pattern(full_text: String, card: Node, controller_i
 
 	if hand_allies.is_empty() and cemetery_allies.is_empty():
 		main._update_debug("No tienes ningún Aliado en tu mano o Cementerio para jugar")
-	elif not picked_ally.is_empty() and ally_node:
+	elif not picked_ally_data.is_empty() and ally_node:
 		if not puede_pagar:
 			main._update_debug("No puedes pagar el Aliado con descuento (%d Oro)" % coste_real)
 		else:
 			if from_hand:
-				var hidx = main.player_hand.cards.find(ally_node)
+				var hidx = hand_container_golpe.cards.find(ally_node)
 				if hidx >= 0:
-					main.player_hand.cards.remove_at(hidx)
-				if ally_node.get_parent() == main.player_hand:
-					main.player_hand.remove_child(ally_node)
+					hand_container_golpe.cards.remove_at(hidx)
+				if ally_node.get_parent() == hand_container_golpe:
+					hand_container_golpe.remove_child(ally_node)
 			else:
-				var cidx: int = CardManager.get_cemetery(controller_id).find(picked_ally)
+				var cidx: int = CardManager.get_cemetery(controller_id).find(picked_ally_data)
 				if cidx >= 0:
 					CardManager.remove_from_cemetery(controller_id, cidx)
 
 			if coste_real > 0:
 				var ally_race: String = str(ally_node.get("card_raza")) if ally_node.get("card_raza") != null else ""
-				await main._gold_manager.pagar_coste(coste_real, ally_node.card_type, ally_race, ally_node.card_cost)
+				await main._gold_manager.pagar_coste(coste_real, ally_node.card_type, ally_race, ally_node.card_cost, controller_id)
 				PaymentManager.registrar_pago(coste_real)
 
 			await main._gold_manager._play_card_to_field(ally_node)

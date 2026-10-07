@@ -125,12 +125,22 @@ func draw(player_id: int, amount: int, source: String = "", skip_validation: boo
 # =============================================================================
 func shuffle_deck(player_id: int) -> void:
 	"""Baraja el Castillo (mazo) de un jugador — vía CardManager, sincronizado
-	por referencia con Main.player_deck/opponent_deck (ver sync_from_main)."""
+	por referencia con Main.player_deck/opponent_deck (ver sync_from_main).
+	Barajar no cambia el TAMAÑO del mazo, pero sí cambia qué carta queda en
+	el tope (índice 0) — refresca ZoneManager._update_castillo_counts() aquí
+	(2026-09-14, a pedido del usuario: La Ouija, 'del tope de tu Castillo',
+	quedaba mostrando la carta vieja tras un barajado que pasaba por este
+	wrapper genérico en vez del CardManager.shuffle_deck() + refresco manual
+	que ya usa la mayoría de los archivos de triggers) — único punto de
+	verdad para TODOS los llamadores de esta función, actuales y futuros."""
 	CardManager.shuffle_deck(player_id)
+	var main := get_node_or_null("/root/Main")
+	if main and main.get("_zone_manager"):
+		main._zone_manager._update_castillo_counts()
 
 
-func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_fail: bool = true, skip_validation: bool = false, may_play: bool = false, source_card: Node = null, destination: int = Constants.Zone.MANO, distinct_names: bool = false) -> Dictionary:
-	return await _action_search.search(player_id, zone, filter, amount, can_fail, skip_validation, may_play, source_card, destination, distinct_names)
+func search(player_id: int, zone: int, filter: Dictionary, amount: int = 1, can_fail: bool = true, skip_validation: bool = false, may_play: bool = false, source_card: Node = null, destination: int = Constants.Zone.MANO, distinct_names: bool = false, chooser_id: int = -1) -> Dictionary:
+	return await _action_search.search(player_id, zone, filter, amount, can_fail, skip_validation, may_play, source_card, destination, distinct_names, chooser_id)
 
 
 # =============================================================================
@@ -168,7 +178,7 @@ func discard(player_id: int, cards: Array, source: String = "", skip_validation:
 # =============================================================================
 # SISTEMA DE TRIGGERS SIMULTÁNEOS (DAR 7.4)
 # =============================================================================
-## Se queda acá (no extraído): dependencia interna compartida por los 6
+## Se queda aquí (no extraído): dependencia interna compartida por los 6
 ## módulos de verbo de arriba — cada uno la llama vía _main._X().
 var _collecting_triggers: bool = false
 var _collected_triggers: Array[Dictionary] = []
@@ -273,7 +283,7 @@ func _apply_card_filter(cards: Array, filter: Dictionary) -> Array:
 	y el Cementerio se guardan como datos, no como nodos Card (ver CardManager),
 	así que el filtro lee las mismas claves que usa CardFactory/GameBootstrap
 	al construir esos diccionarios. Compartida por ActionSearch.gd y
-	ActionValidator.gd — se queda acá, no extraída."""
+	ActionValidator.gd — se queda aquí, no extraída."""
 	if filter.is_empty():
 		return cards.duplicate()
 

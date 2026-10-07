@@ -204,7 +204,7 @@ func _can_play_weapons_in_guerra_talismanes() -> bool:
 	"""Detecta 'Puedes jugar Armas en Guerra de Talismanes' (p.ej. Lobo
 	Sagrado) en el propio jugador (2026-08-28) — misma técnica de
 	escaneo-de-texto que _register_talisman_totem_tax(), pero como chequeo
-	de legalidad puntual en vez de un modificador registrado, porque acá
+	de legalidad puntual en vez de un modificador registrado, porque aquí
 	solo importa el instante de jugar el Arma, no algo que deba persistir."""
 	for field in [_main.player_field, _main.player_linea_ataque, _main.player_linea_apoyo]:
 		if not field:

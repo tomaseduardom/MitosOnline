@@ -56,7 +56,7 @@ func _return_card_to_hand(card_data: Dictionary, player_id: int) -> void:
 	# (2026-08-28, "módulos gordos" punto 1): GameManager es autoload, así
 	# que la búsqueda en sí nunca fallaba — el problema real es que
 	# return_card_to_hand()/add_card_to_hand() no existen ni existieron
-	# nunca en GameManager.gd, esto cae siempre acá. Función sin terminar,
+	# nunca en GameManager.gd, esto cae siempre aquí. Función sin terminar,
 	# no algo que este punto de la limpieza deba resolver.
 	print("[TargetSelector] WARN: No se pudo devolver carta a mano - GameManager no implementa return_card_to_hand/add_card_to_hand")
 	# La señal card_returned_to_hand ya fue emitida

@@ -19,7 +19,7 @@ class_name TargetedEffectExecutor
 ## (execute_parsed_action) y el toolkit genérico de selección de UN objetivo
 ## (_select_*_target, _target_text_denies, _choose_search_zone_owner,
 ## _select_hand_cards_for_discard, y los _execute_targeted_* de un solo
-## objetivo) se quedaron ACÁ sin extraer a propósito: es el cluster de mayor
+## objetivo) se quedaron AQUÍ sin extraer a propósito: es el cluster de mayor
 ## tráfico externo de todo este archivo (decenas de call sites en
 ## PreventionAbilityHandler_*.gd, SearchAbilityHandler_*.gd,
 ## BanishOpponentPatterns.gd, GoldConversionPatterns.gd,
@@ -113,7 +113,7 @@ func execute_parsed_action(action: Dictionary, card: Node, _event_data: Dictiona
 		"LOOK":
 			# Cartas simples "Mira N cartas del tope" sin el patrón compuesto
 			# de elegir 1 a mano / 1 a Cementerio (ese lo resuelve
-			# try_execute_look_pick_pattern() antes de llegar acá) — solo
+			# try_execute_look_pick_pattern() antes de llegar aquí) — solo
 			# las muestra, en privado, sin mover nada.
 			var deck: Array = CardManager.get_deck(controller_id)
 			var top_cards: Array = deck.slice(0, mini(amount, deck.size()))
@@ -126,7 +126,7 @@ func execute_parsed_action(action: Dictionary, card: Node, _event_data: Dictiona
 			# El overlay es local (SelectionManager no distingue jugadores en
 			# red), así que la diferencia real es el título mostrado.
 			#
-			# A diferencia de LOOK, acá SÍ hay que barajar después (2026-08-26,
+			# A diferencia de LOOK, aquí SÍ hay que barajar después (2026-08-26,
 			# regla del usuario): "Muestra/Revela del tope" sin instrucción
 			# de orden deja saber a los dos jugadores qué cartas y en qué
 			# orden están arriba del mazo — barajar borra esa ventaja, cosa
@@ -168,7 +168,7 @@ func execute_parsed_action(action: Dictionary, card: Node, _event_data: Dictiona
 			push_warning("[TriggerSystem] Tipo de acción ETB no implementado: %s" % action.get("type", "?"))
 
 
-func _select_ally_target(prompt: String, source_card: Node = null) -> Node:
+func _select_ally_target(prompt: String, source_card: Node = null, chooser_id: int = 0) -> Node:
 	"""Pide al jugador elegir un Aliado en juego (propio o enemigo) con clic,
 	reutilizando el modo de selección que ya usa 'colocar Oro'
 	(CardInteractionModule.is_selecting_target). Devuelve null si no hay
@@ -184,8 +184,8 @@ func _select_ally_target(prompt: String, source_card: Node = null) -> Node:
 	var filter := func(c: Node) -> bool:
 		if c.get("card_type") != Constants.CardType.ALIADO:
 			return false
-		var parent = c.get_parent()
-		if parent not in [main.player_field, main.player_linea_ataque, main.opponent_field, main.opponent_linea_ataque]:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE]:
 			return false
 		if _is_immune_to_enemy_ally(c, source_card):
 			return false
@@ -206,7 +206,7 @@ func _select_ally_target(prompt: String, source_card: Node = null) -> Node:
 		# condition Callable del modificador PROTECTION registrado en
 		# ContinuousEffectManager). 'Mientras atacan' es un estado POR
 		# CARTA que no tiene sentido meter en ese Callable (no recibe el
-		# objetivo), así que se chequea acá, en el único punto real donde
+		# objetivo), así que se chequea aquí, en el único punto real donde
 		# se elige un objetivo para una habilidad de OTRA carta. 'Fuera del
 		# juego' = la fuente de ESTE efecto está en Mano/Destierro/
 		# Cementerio/Castillo (mismo criterio ya usado para Signo Amarillo,
@@ -218,10 +218,10 @@ func _select_ally_target(prompt: String, source_card: Node = null) -> Node:
 					and ContinuousEffectManager.has_protection(c, "OFF_BOARD_WHILE_ATTACKING"):
 				return false
 		return true
-	return await main._card_interaction.await_target(prompt, filter)
+	return await main._card_interaction.await_target(prompt, filter, true, chooser_id)
 
 
-func _select_annul_target_cost_filter(prompt: String, max_cost: int) -> Node:
+func _select_annul_target_cost_filter(prompt: String, max_cost: int, chooser_id: int = 0) -> Node:
 	"""Como _select_ally_target() pero para 'una carta' genérica en juego
 	(no solo Aliados) con tope de coste — 2026-08-30, p.ej. Paladín
 	Bestiarium: 'Anular una carta de coste 1 o menos'. Incluye Aliados,
@@ -234,18 +234,16 @@ func _select_annul_target_cost_filter(prompt: String, max_cost: int) -> Node:
 	var filter := func(c: Node) -> bool:
 		if c.get("card_type") not in [Constants.CardType.ALIADO, Constants.CardType.ARMA, Constants.CardType.TOTEM]:
 			return false
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		if parent not in valid_zones:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 			return false
 		# get_modified_cost(), no card_cost crudo (2026-09-04) — ver nota en
 		# _select_convert_target() más arriba.
 		return ContinuousEffectManager.get_modified_cost(c) <= max_cost
-	return await main._card_interaction.await_target(prompt, filter)
+	return await main._card_interaction.await_target(prompt, filter, true, chooser_id)
 
 
-func _select_destroy_target_cost_filter(prompt: String, max_cost: int) -> Node:
+func _select_destroy_target_cost_filter(prompt: String, max_cost: int, chooser_id: int = 0) -> Node:
 	"""Como _select_banish_target_cost_filter() pero para Destruir (va al
 	Cementerio) — 2026-09-04, p.ej. gran kraken: 'Destruir una carta de
 	coste 3 o menos'."""
@@ -255,16 +253,14 @@ func _select_destroy_target_cost_filter(prompt: String, max_cost: int) -> Node:
 	var filter := func(c: Node) -> bool:
 		if c.get("card_type") not in [Constants.CardType.ALIADO, Constants.CardType.ARMA, Constants.CardType.TOTEM]:
 			return false
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		if parent not in valid_zones:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 			return false
 		return ContinuousEffectManager.get_modified_cost(c) <= max_cost
-	return await main._card_interaction.await_target(prompt, filter)
+	return await main._card_interaction.await_target(prompt, filter, true, chooser_id)
 
 
-func _select_banish_target_cost_filter(prompt: String, max_cost: int) -> Node:
+func _select_banish_target_cost_filter(prompt: String, max_cost: int, chooser_id: int = 0) -> Node:
 	"""Como _select_annul_target_cost_filter() pero para Desterrar (en vez de
 	Anular/destruir) — 2026-09-04, p.ej. akuma el terrible: 'Destierra una
 	carta de coste 2 o menos'. Mismo alcance (Aliados/Armas/Tótems en
@@ -275,16 +271,14 @@ func _select_banish_target_cost_filter(prompt: String, max_cost: int) -> Node:
 	var filter := func(c: Node) -> bool:
 		if c.get("card_type") not in [Constants.CardType.ALIADO, Constants.CardType.ARMA, Constants.CardType.TOTEM]:
 			return false
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		if parent not in valid_zones:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 			return false
 		return ContinuousEffectManager.get_modified_cost(c) <= max_cost
-	return await main._card_interaction.await_target(prompt, filter)
+	return await main._card_interaction.await_target(prompt, filter, true, chooser_id)
 
 
-func _select_ally_or_totem_target(prompt: String) -> Node:
+func _select_ally_or_totem_target(prompt: String, chooser_id: int = 0) -> Node:
 	"""Como _select_ally_target() pero incluye Tótems además de Aliados —
 	2026-08-30, p.ej. Aho: 'Destierra un Aliado o Tótem'. Cualquiera de los
 	dos jugadores, en cualquiera de sus tres zonas de campo."""
@@ -294,13 +288,11 @@ func _select_ally_or_totem_target(prompt: String) -> Node:
 	var filter := func(c: Node) -> bool:
 		if c.get("card_type") not in [Constants.CardType.ALIADO, Constants.CardType.TOTEM]:
 			return false
-		var parent = c.get_parent()
-		var valid_zones = [main.player_field, main.player_linea_ataque, main.player_linea_apoyo,
-			main.opponent_field, main.opponent_linea_ataque, main.opponent_linea_apoyo]
-		if parent not in valid_zones:
+		# 2026-09-12: current_zone en vez de get_parent() (ver §10.5)
+		if c.get("current_zone") not in [Constants.Zone.LINEA_DEFENSA, Constants.Zone.LINEA_ATAQUE, Constants.Zone.LINEA_APOYO]:
 			return false
 		return true
-	return await main._card_interaction.await_target(prompt, filter)
+	return await main._card_interaction.await_target(prompt, filter, true, chooser_id)
 
 
 func _is_immune_to_enemy_ally(target: Node, source_card: Node) -> bool:
@@ -332,7 +324,7 @@ func _is_immune_to_enemy_ally(target: Node, source_card: Node) -> bool:
 	return false
 
 
-func _execute_targeted_buff(action: Dictionary, card: Node, _controller_id: int, amount: int) -> void:
+func _execute_targeted_buff(action: Dictionary, card: Node, controller_id: int, amount: int) -> void:
 	"""Modifica la Fuerza de UN Aliado elegido por el jugador (DAR 7.2).
 	Los Aliados tienen un único indicador de Fuerza (que también es su vida/
 	resistencia) — no hay par ataque/defensa. El modificador se registra en
@@ -341,7 +333,7 @@ func _execute_targeted_buff(action: Dictionary, card: Node, _controller_id: int,
 	var is_debuff: bool = action.get("type", "") == "DEBUFF"
 	var value: int = -amount if is_debuff else amount
 	var sign := "-" if is_debuff else "+"
-	var chosen_target := await _select_ally_target("Elige un Aliado: %s%d de Fuerza" % [sign, amount], card)
+	var chosen_target := await _select_ally_target("Elige un Aliado: %s%d de Fuerza" % [sign, amount], card, controller_id)
 
 	if not chosen_target or not is_instance_valid(chosen_target):
 		return
@@ -374,7 +366,8 @@ func _execute_targeted_buff(action: Dictionary, card: Node, _controller_id: int,
 func _execute_targeted_destroy(card: Node) -> void:
 	"""Destruye UN Aliado en juego elegido por el jugador — va al Cementerio
 	(a diferencia de ANNUL/BANISH, que van a Destierro)."""
-	var chosen_target := await _select_ally_target("Elige un Aliado para destruir", card)
+	var destroy_chooser: int = int(card.get("controller_id")) if card.get("controller_id") != null else 0
+	var chosen_target := await _select_ally_target("Elige un Aliado para destruir", card, destroy_chooser)
 	if not chosen_target or not is_instance_valid(chosen_target):
 		return
 	await ActionModule.destroy([chosen_target], card, true, true)
@@ -383,7 +376,8 @@ func _execute_targeted_destroy(card: Node) -> void:
 func _execute_targeted_banish(card: Node) -> void:
 	"""Destierra UN Aliado en juego elegido por el jugador — va a Destierro,
 	no se puede recuperar por medios normales (DAR Sección 8)."""
-	var chosen_target := await _select_ally_target("Elige un Aliado para desterrar", card)
+	var banish_chooser: int = int(card.get("controller_id")) if card.get("controller_id") != null else 0
+	var chosen_target := await _select_ally_target("Elige un Aliado para desterrar", card, banish_chooser)
 	if not chosen_target or not is_instance_valid(chosen_target):
 		return
 	await ActionModule.banish([chosen_target], card, true)
@@ -438,25 +432,35 @@ func _resolve_banish_from_both_cemeteries(max_amount: int, card: Node = null, co
 	await _misc._resolve_banish_from_both_cemeteries(max_amount, card, controller_id)
 
 
-func _select_hand_cards_for_discard(hand_cards: Array, amount: int) -> Array:
-	"""Pide al jugador humano elegir qué cartas descartar de su propia mano,
-	reutilizando el overlay SelectionManager en modo DISCARD (mismo patrón
-	de espera de señal que ActionModule._select_search_results())."""
-	var card_data_list: Array = []
-	for c in hand_cards:
-		card_data_list.append(c.card_data)
-
-	var result: Dictionary = await SelectionManager.await_multi_pick(
-		card_data_list, "Descarta %d carta(s)" % amount, amount, amount, false)
-
-	# Traducir datos elegidos de vuelta a los nodos Card reales
-	var chosen_nodes: Array = []
-	for data in result.picked:
-		for c in hand_cards:
-			if c.card_data == data:
-				chosen_nodes.append(c)
-				break
-	return chosen_nodes
+func _select_hand_cards_for_discard(hand_cards: Array, amount: int, chooser_id: int = 0) -> Array:
+	"""Pide al jugador humano elegir qué cartas descartar de su propia mano —
+	click directo sobre las cartas reales (2026-09-13, a pedido del usuario,
+	ver arquitectura.md §10.16), en vez del modal de lista viejo. Costo TODO
+	o NADA de 'amount' cartas exactas (mismo criterio que Belta, §10.19):
+	si el jugador elige menos (ESC), se devuelve Array vacío — ningún
+	llamador de los 6 que reusan esta función debe tratar un resultado
+	parcial como válido."""
+	# 2026-09-14, bug real reportado por el usuario: _main aquí ES TriggerSystem
+	# (ver TriggerSystem._ready(): '_targeted_executor.setup(self)'), no el
+	# Main real — _main._card_interaction tiraba 'Invalid access to property
+	# or key' porque esa propiedad no existe en TriggerSystem.gd (mismo
+	# patrón de bug documentado en arquitectura.md §2). El resto de esta
+	# clase ya resuelve esto bien con 'var main := _main.get_node_or_null(
+	# "/root/Main")' antes de usar main._card_interaction (ver _select_
+	# banish_target_cost_filter() más arriba) — esta función se saltó ese
+	# paso.
+	var main := _main.get_node_or_null("/root/Main")
+	if not main or not main._card_interaction:
+		return []
+	# cancellable=false (2026-09-13): este descarte es MANDATORIO (sin
+	# "puedes" en las llamadoras) — ESC no debe dejar al jugador esquivarlo,
+	# a diferencia del resto de conversiones de esta sesión que sí son
+	# costos opcionales.
+	var chosen: Array = await main._card_interaction.await_multi_target(
+		"Descarta %d carta(s)" % amount, hand_cards, amount, Callable(), Callable(), false, null, chooser_id)
+	if chosen.size() < amount:
+		return []
+	return chosen
 
 
 func _target_text_denies(target: Node, phrases: Array) -> bool:
@@ -464,7 +468,7 @@ func _target_text_denies(target: Node, phrases: Array) -> bool:
 	explícitamente contra un efecto ('esta carta no puede ser anulada',
 	'no puede perder su habilidad', etc.). 'Inmune a X' no es una keyword
 	fija en Mitos y Leyendas — es texto libre de cada carta ('no puede ser
-	afectada por talismanes/habilidades'), así que también se detecta acá
+	afectada por talismanes/habilidades'), así que también se detecta aquí
 	por texto en vez de por keyword."""
 	if not is_instance_valid(target):
 		return false
@@ -486,7 +490,8 @@ func _execute_targeted_silence(card: Node) -> void:
 	(KeywordManager.is_silenced(), consultado en _check_trigger_conditions()).
 	Respeta protecciones explícitas del objetivo ('no puede perder su
 	habilidad') e Inmune a Habilidades."""
-	var chosen_target := await _select_ally_target("Elige un Aliado que pierda su habilidad", card)
+	var silence_chooser: int = int(card.get("controller_id")) if card.get("controller_id") != null else 0
+	var chosen_target := await _select_ally_target("Elige un Aliado que pierda su habilidad", card, silence_chooser)
 	if not chosen_target or not is_instance_valid(chosen_target):
 		return
 
@@ -528,7 +533,7 @@ func _execute_targeted_convert(card: Node, action: Dictionary) -> void:
 	await KeywordManager.silence_card(chosen_target, card, "permanent")
 
 
-func _select_convert_target(max_cost: int, source_card: Node = null) -> Node:
+func _select_convert_target(max_cost: int, source_card: Node = null, chooser_id: int = 0) -> Node:
 	"""Objetivo válido para Convertir: un Oro, o cualquier carta (Aliado,
 	Tótem, Arma) de coste ≤ max_cost, EN JUEGO (propio o enemigo) — usa
 	current_zone en vez de coincidir contenedor padre para que un Arma ya
@@ -584,7 +589,7 @@ func _select_convert_target(max_cost: int, source_card: Node = null) -> Node:
 
 	var prompt: String = "Elige un Oro para Convertir" if max_cost < 0 \
 		else "Elige un Oro o una carta de coste %d o menos para Convertir" % max_cost
-	return await main._card_interaction.await_target(prompt, filter)
+	return await main._card_interaction.await_target(prompt, filter, true, chooser_id)
 
 
 func _count_allies_in_play(player_id: int) -> int:
@@ -611,7 +616,7 @@ func _choose_search_zone_owner(controller_id: int, zone: int, action_verb: Strin
 	else:
 		var zone_name: String = "Cementerio"
 		picked_own = await SelectionManager.await_two_choice(
-			main, "¿En qué %s %s?" % [zone_name, action_verb], "Tu %s" % zone_name, "%s del oponente" % zone_name)
+			main, "¿En qué %s %s?" % [zone_name, action_verb], "Tu %s" % zone_name, "%s del oponente" % zone_name, controller_id)
 	return controller_id if picked_own else 1 - controller_id
 
 
@@ -619,7 +624,7 @@ func _execute_targeted_return_to_deck(card: Node, controller_id: int) -> void:
 	"""'Barajar' una carta EN JUEGO (DAR): vuelve al Castillo del elegido y
 	el Castillo queda barajado de inmediato — no es 'pon en el fondo' seco,
 	es 'vuelve a tu mazo y se baraja', tal como se describió."""
-	var chosen_target := await _select_ally_target("Elige un Aliado para devolver al Castillo", card)
+	var chosen_target := await _select_ally_target("Elige un Aliado para devolver al Castillo", card, controller_id)
 	if not chosen_target or not is_instance_valid(chosen_target):
 		return
 
@@ -631,10 +636,6 @@ func _execute_targeted_return_to_deck(card: Node, controller_id: int) -> void:
 		return
 
 	CardManager.shuffle_deck(target_owner)
-
-
-func _select_cards_by_cost_budget(hand_cards: Array, max_sum: int, title: String) -> Array:
-	return await _weapon_search._select_cards_by_cost_budget(hand_cards, max_sum, title)
 
 
 func _return_equipped_weapon_to_hand(weapon: Node, main: Node) -> void:
@@ -649,7 +650,8 @@ func _execute_targeted_annul(card: Node) -> void:
 	acordado): no intercepta nada en la pila, actúa sobre algo que YA está
 	en juego. Respeta protección explícita del objetivo ('esta carta no
 	puede ser anulada') e Inmune a Habilidades."""
-	var chosen_target := await _select_ally_target("Elige un Aliado para anular", card)
+	var annul_chooser: int = int(card.get("controller_id")) if card.get("controller_id") != null else 0
+	var chosen_target := await _select_ally_target("Elige un Aliado para anular", card, annul_chooser)
 	if not chosen_target or not is_instance_valid(chosen_target):
 		return
 

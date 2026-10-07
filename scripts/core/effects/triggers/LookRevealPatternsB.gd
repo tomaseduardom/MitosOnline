@@ -4,7 +4,7 @@ extends RefCounted
 ## archivo es una de las 2 mitades de una de las 7 mitades de
 ## LookAndPlayResolver.gd). Cubre de try_execute_look_two_hand_convert_gold_pattern
 ## a try_execute_reveal_until_weapon_or_totem_and_ally_pattern (alfabético) —
-## 10 patrones acá contra 6 en la mitad A, porque A concentra los 3
+## 10 patrones aquí contra 6 en la mitad A, porque A concentra los 3
 ## try_execute_look_play_* (los más largos del grupo, con su filtro
 ## compartido) — ver la nota de balance en LookRevealPatternsA.gd. Llamada
 ## solo desde LookRevealPatterns.gd (facade) — ver ese archivo para la lista
@@ -54,6 +54,9 @@ func try_execute_look_two_hand_convert_gold_pattern(ability_text: String, card: 
 			var opp_node: Node = main._create_card(card_data, true)
 			if main._opponent_fan:
 				main._opponent_fan.add_card(opp_node)
+				# 2026-09-14, mismo bug real que ZoneManager.draw_card()
+				# (ver ese comentario) — faltaba aquí también.
+				main._connect_card_signals(opp_node)
 	if shown_count > 0 and main._zone_manager:
 		main._zone_manager._update_castillo_counts()
 
@@ -77,7 +80,10 @@ func try_execute_name_reveal_until_match_then_gold_to_pagado_pattern(ability_tex
 	if not ("nombra un aliado o tótem" in lower and "pon un oro de tu mano en tu oro pagado" in lower):
 		return false
 	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
+		# 2026-10-05: usa TriggerSystem._card_name_search.open_and_wait()
+		# (CardNameSearchDialog), excluido desde el plan original — se deja
+		# sin desbloquear.
+		return true  # el Remoto no puede usar esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager:
@@ -107,22 +113,17 @@ func try_execute_name_reveal_until_match_then_gold_to_pagado_pattern(ability_tex
 		if main.get("_zone_manager"):
 			main._zone_manager._update_castillo_counts()
 
-	if main.player_hand:
-		var hand_cards: Array = main.player_hand.cards.duplicate()
-		var eligible: Array = hand_cards.filter(func(c): return c.get("card_type") == Constants.CardType.ORO)
-		if not eligible.is_empty():
-			var picked_gold_data: Dictionary = await SelectionManager.await_single_pick(
-				eligible.map(func(c): return c.card_data), "Pon un Oro de tu mano en tu Oro Pagado", false)
-			if not picked_gold_data.is_empty():
-				var gold_node: Node = null
-				for c in eligible:
-					if c.card_data == picked_gold_data:
-						gold_node = c
-						break
-				if gold_node:
-					var gold_data: Dictionary = gold_node.card_data.duplicate()
-					main.player_hand.remove_card(gold_node, true)
-					await main._gold_manager.put_gold_directly_in_pagado(controller_id, gold_data)
+	if main.player_hand and main._card_interaction:
+		# 2026-09-13, a pedido del usuario: click directo en la mano en vez
+		# del modal viejo.
+		var oro_filter := func(c: Node) -> bool:
+			return c.get("current_zone") == Constants.Zone.MANO and c.get("card_type") == Constants.CardType.ORO
+		var gold_node: Node = await main._card_interaction.await_target(
+			"Pon un Oro de tu mano en tu Oro Pagado", oro_filter)
+		if gold_node and is_instance_valid(gold_node):
+			var gold_data: Dictionary = gold_node.card_data.duplicate()
+			main.player_hand.remove_card(gold_node, true)
+			await main._gold_manager.put_gold_directly_in_pagado(controller_id, gold_data)
 	return true
 
 
@@ -138,37 +139,33 @@ func try_execute_peek_hand_banish_search_castillo_cemetery_draw_pattern(ability_
 	var lower := ability_text.to_lower()
 	if not ("mira la mano de tu oponente y destierra una carta de coste 2 o menos de ahí" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
-	if not main or not main._opponent_fan:
+	if not main:
+		return true
+	var opponent_id: int = 1 - controller_id
+	var opponent_hand_container = main.player_hand if opponent_id == 0 else main._opponent_fan
+	if not opponent_hand_container:
 		return true
 	var banished_count := 0
 
-	var opponent_hand: Array = main._opponent_fan.get_cards()
+	var opponent_hand: Array = opponent_hand_container.get_cards()
 	var candidates: Array = []
 	for c in opponent_hand:
 		if is_instance_valid(c):
 			candidates.append(c)
-	if not candidates.is_empty():
-		var candidate_data: Array = candidates.map(func(c): return c.card_data)
-		var cost_filter := func(d: Dictionary) -> bool:
-			return int(d.get("coste", 99)) <= 2
-		var picked: Dictionary = await SelectionManager.await_single_pick(
-			candidate_data, "Mira la mano rival: elige una carta de coste 2 o menos para desterrar", true, 0, cost_filter)
-		if not picked.is_empty():
-			var chosen: Node = null
-			for c in candidates:
-				if c.card_data == picked:
-					chosen = c
-					break
-			if chosen:
-				var opponent_id: int = 1 - controller_id
-				var chosen_data: Dictionary = chosen.card_data.duplicate()
-				main._opponent_fan.remove_card(chosen, true)
-				CardManager.add_to_exile(opponent_id, chosen_data)
-				banished_count += 1
+	# 2026-09-14, a pedido del usuario: click directo sobre la mano rival
+	# (Nodos ya visibles) en vez del modal de lista viejo.
+	if not candidates.is_empty() and main._card_interaction:
+		var cost_filter := func(c: Node) -> bool:
+			return c in candidates and int(c.card_data.get("coste", 99)) <= 2
+		var chosen: Node = await main._card_interaction.await_target(
+			"Mira la mano rival: elige una carta de coste 2 o menos para desterrar", cost_filter, true, controller_id)
+		if chosen and is_instance_valid(chosen):
+			var chosen_data: Dictionary = chosen.card_data.duplicate()
+			opponent_hand_container.remove_card(chosen, true)
+			CardManager.add_to_exile(opponent_id, chosen_data)
+			banished_count += 1
 
 	var zone_owner1: int = await _main._targeted_executor._choose_search_zone_owner(controller_id, Constants.Zone.CASTILLO)
 	var result1: Dictionary = await ActionModule.search(zone_owner1, Constants.Zone.CASTILLO, {}, 1, true, false, false, card, Constants.Zone.DESTIERRO)
@@ -192,8 +189,6 @@ func try_execute_reveal_gold_to_pagado_weapon_or_totem_to_hand_pattern(ability_t
 	var lower := ability_text.to_lower()
 	if not ("hasta mostrar un oro y un arma o tótem" in lower or "hasta mostrar un oro y un arma o totem" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _main.get_node_or_null("/root/Main")
 	if not main or not main._gold_manager:
@@ -218,15 +213,20 @@ func try_execute_reveal_gold_to_pagado_weapon_or_totem_to_hand_pattern(ability_t
 	if not found_oro.is_empty():
 		_remove_data_from_array(revealed, found_oro)
 		await main._gold_manager.put_gold_directly_in_reserva(controller_id, found_oro)
-	if not found_other.is_empty():
+	var hand_container_tenshiz = main.player_hand if controller_id == 0 else main._opponent_fan
+	if not found_other.is_empty() and hand_container_tenshiz:
 		_remove_data_from_array(revealed, found_other)
 		var card_node = main._create_card(found_other, false)
-		main.player_hand.add_card(card_node)
+		hand_container_tenshiz.add_card(card_node)
 		main._connect_card_signals(card_node)
 
 	for c in revealed:
 		deck.append(c)
 	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (Activar Tenshi Z)"
+	})
 	if main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 	return true
@@ -242,8 +242,6 @@ func try_execute_reveal_gold_weapon_totem_split_pattern(ability_text: String, co
 	var lower := ability_text.to_lower()
 	if not ("hasta mostrar un oro, un arma y un tótem" in lower or "hasta mostrar un oro, un arma y un totem" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "akari", controller_id):
 		return true
 
@@ -271,11 +269,17 @@ func try_execute_reveal_gold_weapon_totem_split_pattern(ability_text: String, co
 	var main := _main.get_node_or_null("/root/Main")
 	if main and not found.is_empty():
 		var to_hand: Dictionary = found[0]
-		if found.size() > 1:
-			to_hand = await SelectionManager.await_single_pick(found, "Elige cuál de estas cartas va a tu mano (el resto va al Cementerio)", false)
-		if not to_hand.is_empty() and main.has_method("_create_card"):
+		if found.size() > 1 and main._zone_viewer:
+			# 2026-09-14, a pedido del usuario: click directo (open_reveal_picker)
+			# en vez del modal de lista viejo.
+			var picked: Array = await main._zone_viewer.open_reveal_picker(
+				"Elige cuál de estas cartas va a tu mano (el resto va al Cementerio)", found, controller_id, Callable(), 1, false)
+			if not picked.is_empty():
+				to_hand = picked[0]
+		var hand_container_akari = main.player_hand if controller_id == 0 else main._opponent_fan
+		if not to_hand.is_empty() and main.has_method("_create_card") and hand_container_akari:
 			var card_node = main._create_card(to_hand, false)
-			main.player_hand.add_card(card_node)
+			hand_container_akari.add_card(card_node)
 			main._connect_card_signals(card_node)
 			_remove_data_from_array(revealed, to_hand)
 			_remove_data_from_array(found, to_hand)
@@ -286,6 +290,10 @@ func try_execute_reveal_gold_weapon_totem_split_pattern(ability_text: String, co
 	for c in revealed:
 		deck.append(c)
 	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (akari)"
+	})
 	if main and main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 	return true
@@ -304,8 +312,6 @@ func try_execute_reveal_until_ally_and_gold_pattern(ability_text: String, contro
 	var lower := ability_text.to_lower()
 	if not ("hasta mostrar un aliado y un oro" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "Cabeza de Mimir", controller_id):
 		return true
 
@@ -322,18 +328,23 @@ func try_execute_reveal_until_ally_and_gold_pattern(ability_text: String, contro
 			found_oro = top
 
 	var main := _main.get_node_or_null("/root/Main")
-	if main and main.has_method("_create_card"):
+	var hand_container_mimir = (main.player_hand if controller_id == 0 else main._opponent_fan) if main else null
+	if main and hand_container_mimir and main.has_method("_create_card"):
 		for picked_data in [found_ally, found_oro]:
 			if picked_data.is_empty():
 				continue
 			var card_node = main._create_card(picked_data, false)
-			main.player_hand.add_card(card_node)
+			hand_container_mimir.add_card(card_node)
 			main._connect_card_signals(card_node)
 			_remove_data_from_array(revealed, picked_data)
 
 	for c in revealed:
 		deck.append(c)
 	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (Cabeza de Mimir)"
+	})
 	if main and main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 	return true
@@ -347,8 +358,6 @@ func try_execute_reveal_until_ally_and_weapon_pattern(ability_text: String, cont
 	var lower := ability_text.to_lower()
 	if not ("hasta mostrar un aliado y un arma" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "metalmorfo", controller_id):
 		return true
 
@@ -366,18 +375,73 @@ func try_execute_reveal_until_ally_and_weapon_pattern(ability_text: String, cont
 			found_weapon = top
 
 	var main := _main.get_node_or_null("/root/Main")
-	if main and main.has_method("_create_card"):
+	var hand_container_metalmorfo = (main.player_hand if controller_id == 0 else main._opponent_fan) if main else null
+	if main and hand_container_metalmorfo and main.has_method("_create_card"):
 		for picked_data in [found_ally, found_weapon]:
 			if picked_data.is_empty():
 				continue
 			var card_node = main._create_card(picked_data, false)
-			main.player_hand.add_card(card_node)
+			hand_container_metalmorfo.add_card(card_node)
 			main._connect_card_signals(card_node)
 			_remove_data_from_array(revealed, picked_data)
 
 	for c in revealed:
 		deck.append(c)
 	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (metalmorfo)"
+	})
+	if main and main.get("_zone_manager"):
+		main._zone_manager._update_castillo_counts()
+	return true
+
+
+func try_execute_reveal_until_ally_and_talisman_pattern(ability_text: String, controller_id: int, card: Node = null) -> bool:
+	"""'Muestra cartas del tope de tu Castillo hasta mostrar un Aliado y un
+	Talismán y ponlos en tu mano' (Diadema Celestial, 2026-09-15 — bug real
+	reportado por el usuario: "no disparó la diadema", sin patrón propio
+	hasta ahora). Mismo molde que try_execute_reveal_until_ally_and_weapon_
+	pattern (metalmorfo), solo Talismán en vez de Arma. Las otras dos
+	cláusulas de esta carta (Aliados bloqueadores ganan Fuerza/rival pierde
+	Imbloqueable; Destierro al Botarse por daño) NO cubiertas aquí."""
+	var lower := ability_text.to_lower()
+	if not ("hasta mostrar un aliado y un talis" in lower):
+		return false
+	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "Diadema Celestial", controller_id):
+		return true
+
+	var deck: Array = CardManager.get_deck(controller_id)
+	var revealed: Array = []
+	var found_ally: Dictionary = {}
+	var found_talisman: Dictionary = {}
+	while not deck.is_empty() and (found_ally.is_empty() or found_talisman.is_empty()):
+		var top: Dictionary = deck.pop_front()
+		revealed.append(top)
+		var top_type: int = top.get("tipo", -1)
+		if found_ally.is_empty() and top_type == Constants.CardType.ALIADO:
+			found_ally = top
+		elif found_talisman.is_empty() and top_type == Constants.CardType.TALISMAN:
+			found_talisman = top
+
+	var main := _main.get_node_or_null("/root/Main")
+	var hand_container_diadema = (main.player_hand if controller_id == 0 else main._opponent_fan) if main else null
+	if main and hand_container_diadema and main.has_method("_create_card"):
+		for picked_data in [found_ally, found_talisman]:
+			if picked_data.is_empty():
+				continue
+			var card_node = main._create_card(picked_data, false)
+			hand_container_diadema.add_card(card_node)
+			main._connect_card_signals(card_node)
+			_remove_data_from_array(revealed, picked_data)
+
+	for c in revealed:
+		deck.append(c)
+	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (Diadema Celestial)"
+	})
 	if main and main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 	return true
@@ -394,7 +458,7 @@ func try_execute_reveal_until_distinct_cost_allies_pattern(ability_text: String,
 	"""Detecta 'Muestra cartas del tope de tu Castillo hasta mostrar dos
 	Aliados de distinto coste y ponlos en tu mano' (2026-08-29, Alicia en
 	Wonderland) — a diferencia de toda la familia 'muestra/mira N...' de
-	arriba, acá la cantidad a revelar NO es fija: se revela de a una carta
+	arriba, aquí la cantidad a revelar NO es fija: se revela de a una carta
 	del tope hasta encontrar dos Aliados cuyo coste entre sí sea distinto (o
 	hasta vaciar el Castillo). El resto de lo revelado en el camino (no
 	Aliados, o un Aliado del mismo coste que el primero ya encontrado) se
@@ -437,10 +501,11 @@ func try_execute_reveal_until_distinct_cost_allies_pattern(ability_text: String,
 		to_hand = [first_ally, second_ally]
 
 	var main2 = _main.get_node_or_null("/root/Main")
-	if main2 and main2.has_method("_create_card"):
+	var hand_container_alicia = (main2.player_hand if controller_id == 0 else main2._opponent_fan) if main2 else null
+	if main2 and hand_container_alicia and main2.has_method("_create_card"):
 		for picked_data in to_hand:
 			var card_node = main2._create_card(picked_data)
-			main2.player_hand.add_card(card_node)
+			hand_container_alicia.add_card(card_node)
 			main2._connect_card_signals(card_node)
 
 	for picked_data in to_hand:
@@ -448,6 +513,10 @@ func try_execute_reveal_until_distinct_cost_allies_pattern(ability_text: String,
 	for c in revealed:
 		deck.append(c)
 	cm.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (Alicia en Wonderland)"
+	})
 
 	if main2 and main2.get("_zone_manager"):
 		main2._zone_manager._update_castillo_counts()
@@ -466,8 +535,6 @@ func try_execute_reveal_until_three_cost1_allies_play_one_pattern(ability_text: 
 	var lower := ability_text.to_lower()
 	if not ("hasta mostrar tres aliados de coste 1" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "gran kraken", controller_id):
 		return true
 
@@ -481,16 +548,23 @@ func try_execute_reveal_until_three_cost1_allies_play_one_pattern(ability_text: 
 			found.append(top)
 
 	var main := _main.get_node_or_null("/root/Main")
-	if not found.is_empty() and main and main._gold_manager:
-		var picked: Dictionary = await SelectionManager.await_single_pick(
-			found, "Juega uno de estos Aliados de coste 1 sin pagar su coste", false)
-		if not picked.is_empty():
+	if not found.is_empty() and main and main._gold_manager and main._zone_viewer:
+		# 2026-09-14, a pedido del usuario: click directo (open_reveal_picker)
+		# en vez del modal de lista viejo.
+		var picked_list: Array = await main._zone_viewer.open_reveal_picker(
+			"Juega uno de estos Aliados de coste 1 sin pagar su coste", found, controller_id, Callable(), 1, false)
+		if not picked_list.is_empty():
+			var picked: Dictionary = picked_list[0]
 			_remove_data_from_array(revealed, picked)
-			await main._gold_manager.play_card_for_free(picked)
+			await main._gold_manager.play_card_for_free(picked, controller_id)
 
 	for c in revealed:
 		deck.append(c)
 	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (gran kraken)"
+	})
 	if main and main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 	return true
@@ -508,8 +582,6 @@ func try_execute_reveal_until_weapon_or_totem_and_ally_pattern(ability_text: Str
 	var lower := ability_text.to_lower()
 	if not ("hasta mostrar un arma o tótem y un aliado" in lower or "hasta mostrar un arma o totem y un aliado" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "atenea en wonderland", controller_id):
 		return true
 
@@ -527,18 +599,23 @@ func try_execute_reveal_until_weapon_or_totem_and_ally_pattern(ability_text: Str
 			found_ally = top
 
 	var main := _main.get_node_or_null("/root/Main")
-	if main and main.has_method("_create_card"):
+	var hand_container_atenea = (main.player_hand if controller_id == 0 else main._opponent_fan) if main else null
+	if main and hand_container_atenea and main.has_method("_create_card"):
 		for picked_data in [found_weapon_totem, found_ally]:
 			if picked_data.is_empty():
 				continue
 			var card_node = main._create_card(picked_data, false)
-			main.player_hand.add_card(card_node)
+			hand_container_atenea.add_card(card_node)
 			main._connect_card_signals(card_node)
 			_remove_data_from_array(revealed, picked_data)
 
 	for c in revealed:
 		deck.append(c)
 	CardManager.shuffle_deck(controller_id)
+	AnimationQueue.add_command(AnimationQueue.CommandType.CUSTOM, {
+		"callable": Callable(AnimationQueue, "animate_shuffle").bind(controller_id),
+		"description": "Barajar mazo (atenea en wonderland)"
+	})
 	if main and main.get("_zone_manager"):
 		main._zone_manager._update_castillo_counts()
 	return true

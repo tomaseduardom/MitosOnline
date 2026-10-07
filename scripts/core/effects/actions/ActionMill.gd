@@ -51,6 +51,7 @@ func mill(player_id: int, amount: int, to_exile: bool = false, source: String = 
 		var ec_result: Dictionary = await EffectController.mill_cards(player_id, amount, destination)
 		result.success = ec_result.get("success", false)
 		result.actual = ec_result.get("actual", 0)
+		result.cards = ec_result.get("milled_cards", [])
 		if result.actual < result.requested and result.actual > 0:
 			result.partial = true
 		return result

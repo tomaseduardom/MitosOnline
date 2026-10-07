@@ -10,6 +10,8 @@ extends RefCounted
 ## open_selection(), constantes de assets).
 ## Extraído de SelectionManager.gd (Fase 4 de reestructuración, "módulos gordos").
 
+const CardScene = preload("res://scenes/cards/Card.tscn")
+
 var _main: CanvasLayer
 
 
@@ -65,17 +67,265 @@ func await_single_pick(candidates: Array, title: String, can_cancel: bool = true
 	return state.picked
 
 
-func await_two_choice(main: Node, title: String, option_a: String, option_b: String) -> bool:
+func await_two_choice(main: Node, title: String, option_a: String, option_b: String, chooser_id: int = 0) -> bool:
 	"""Popup de 2 botones estilizado con estética Fantasy TCG.
 	Returns: true si se eligió option_a, false si option_b."""
-	var picked_idx: int = await await_choice(main, title, [option_a, option_b])
+	var picked_idx: int = await await_choice(main, title, [option_a, option_b], chooser_id)
 	return picked_idx == 0
 
 
-func await_choice(main: Node, title: String, options: Array) -> int:
+func await_card_pair_choice(
+	main: Node,
+	title: String,
+	card_data_a: Dictionary,
+	card_data_b: Dictionary,
+	label_a: String = "Tope",
+	label_b: String = "Fondo",
+	face_down_b: bool = true,
+	face_down_a: bool = false
+) -> bool:
+	"""Modal de Selección Visual entre 2 Cartas (p.ej. La Ouija: tope vs fondo de Castillo).
+	Presenta las dos cartas niveladas en pantalla con estética de Altar Catedralicio limpia y directa."""
+	var canvas := CanvasLayer.new()
+	canvas.layer = 75
+	main.add_child(canvas)
+
+	var bg := ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.82)
+	bg.size = main.get_viewport().get_visible_rect().size
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
+	canvas.add_child(bg)
+
+	var panel_w: float = 520.0
+	var panel_h: float = 340.0
+
+	var panel := Panel.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.offset_left = -panel_w / 2.0
+	panel.offset_top = -panel_h / 2.0
+	panel.offset_right = panel_w / 2.0
+	panel.offset_bottom = panel_h / 2.0
+
+	var p_style := StyleBoxFlat.new()
+	p_style.bg_color = Color(0.04, 0.04, 0.06, 0.98)
+	p_style.border_color = Color(0.85, 0.72, 0.35, 0.85)
+	p_style.set_border_width_all(2)
+	p_style.set_corner_radius_all(14)
+	p_style.shadow_color = Color(0, 0, 0, 0.85)
+	p_style.shadow_size = 28
+	panel.add_theme_stylebox_override("panel", p_style)
+	canvas.add_child(panel)
+
+	# Fondo Altar Catedralicio con Viñeta Suave
+	var bg_rect := TextureRect.new()
+	bg_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg_rect.texture = _main.TEX_ALTAR_BG
+	bg_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var smat := ShaderMaterial.new()
+	smat.shader = _main.SHADER_VIGNETTE
+	smat.set_shader_parameter("panel_size", Vector2(panel_w, panel_h))
+	smat.set_shader_parameter("corner_radius", 14.0)
+	smat.set_shader_parameter("vignette_amount", 0.72)
+	smat.set_shader_parameter("tint_color", Color(0.02, 0.02, 0.03, 0.35))
+	smat.set_shader_parameter("edge_shadow_color", Color(0.01, 0.01, 0.02, 0.95))
+	bg_rect.material = smat
+	panel.add_child(bg_rect)
+
+	var main_vbox := VBoxContainer.new()
+	main_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	main_vbox.offset_left = 24
+	main_vbox.offset_top = 18
+	main_vbox.offset_right = -24
+	main_vbox.offset_bottom = -18
+	main_vbox.add_theme_constant_override("separation", 14)
+	panel.add_child(main_vbox)
+
+	# Título en Cinzel-Bold noble y limpio (sin párrafos redundantes)
+	var title_lbl := Label.new()
+	title_lbl.text = title.to_upper()
+	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_lbl.add_theme_font_override("font", _main.FONT_CINZEL_BOLD)
+	title_lbl.add_theme_font_size_override("font_size", 19)
+	title_lbl.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55, 1.0))
+	title_lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	title_lbl.add_theme_constant_override("shadow_offset_x", 1)
+	title_lbl.add_theme_constant_override("shadow_offset_y", 2)
+	main_vbox.add_child(title_lbl)
+
+	# Contenedor horizontal para las dos cartas
+	var cards_hbox := HBoxContainer.new()
+	cards_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	cards_hbox.add_theme_constant_override("separation", 48)
+	cards_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	main_vbox.add_child(cards_hbox)
+
+	var state := {"done": false, "picked_top": true}
+
+	# Helper para construir slot de carta nivelado
+	var build_slot := func(data: Dictionary, raw_label: String, is_face_down: bool, pick_val: bool) -> Button:
+		var slot_vbox := VBoxContainer.new()
+		slot_vbox.alignment = BoxContainer.ALIGNMENT_BEGIN
+		slot_vbox.custom_minimum_size = Vector2(150, 246)
+		slot_vbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		slot_vbox.add_theme_constant_override("separation", 8)
+		cards_hbox.add_child(slot_vbox)
+
+		# Normalizar etiqueta a insignia concisa
+		var clean_lbl: String = raw_label.strip_edges().to_upper()
+		if "TOPE" in clean_lbl:
+			clean_lbl = "TOPE"
+		elif "FONDO" in clean_lbl:
+			clean_lbl = "FONDO"
+
+		# Insignia gótica de altura fija uniforme
+		var badge_panel := PanelContainer.new()
+		badge_panel.custom_minimum_size = Vector2(110, 24)
+		badge_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		var b_style := StyleBoxFlat.new()
+		b_style.bg_color = Color(0.08, 0.08, 0.10, 0.85)
+		b_style.border_color = Color(0.78, 0.65, 0.35, 0.70)
+		b_style.set_border_width_all(1)
+		b_style.set_corner_radius_all(5)
+		badge_panel.add_theme_stylebox_override("panel", b_style)
+
+		var badge := Label.new()
+		badge.text = clean_lbl
+		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		badge.add_theme_font_override("font", _main.FONT_CINZEL_BOLD)
+		badge.add_theme_font_size_override("font_size", 11)
+		badge.add_theme_color_override("font_color", Color(0.95, 0.88, 0.65, 1.0))
+		badge.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+		badge.add_theme_constant_override("shadow_offset_x", 1)
+		badge.add_theme_constant_override("shadow_offset_y", 1)
+		badge_panel.add_child(badge)
+		slot_vbox.add_child(badge_panel)
+
+		# Caja contenedora de la carta (150x210 fijo)
+		var card_box := Control.new()
+		card_box.custom_minimum_size = Vector2(150, 210)
+		card_box.size = Vector2(150, 210)
+		card_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		card_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		slot_vbox.add_child(card_box)
+
+		var card_inst: Node = CardScene.instantiate()
+		card_inst.load_from_data(data)
+		card_inst.esta_oculta = is_face_down
+		card_inst.set_zone(Constants.Zone.CEMENTERIO)
+		card_inst.position = Vector2.ZERO
+		card_inst.pivot_offset = Vector2(75, 105)
+		card_inst.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card_box.add_child(card_inst)
+
+		var btn := Button.new()
+		btn.custom_minimum_size = Vector2(150, 210)
+		btn.size = Vector2(150, 210)
+		btn.set_anchors_preset(Control.PRESET_FULL_RECT)
+		btn.offset_left = 0
+		btn.offset_top = 0
+		btn.offset_right = 0
+		btn.offset_bottom = 0
+		btn.focus_mode = Control.FOCUS_ALL
+		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+
+		var s_norm := StyleBoxFlat.new()
+		s_norm.bg_color = Color(0, 0, 0, 0)
+		s_norm.set_border_width_all(0)
+		btn.add_theme_stylebox_override("normal", s_norm)
+
+		var s_hov := StyleBoxFlat.new()
+		s_hov.bg_color = Color(0.95, 0.85, 0.50, 0.06)
+		s_hov.set_border_width_all(2)
+		s_hov.border_color = Color(0.95, 0.85, 0.50, 0.90)
+		s_hov.set_corner_radius_all(8)
+		s_hov.shadow_color = Color(0.95, 0.85, 0.40, 0.25)
+		s_hov.shadow_size = 6
+		btn.add_theme_stylebox_override("hover", s_hov)
+
+		var s_focus := StyleBoxFlat.new()
+		s_focus.bg_color = Color(0.95, 0.85, 0.50, 0.04)
+		s_focus.set_border_width_all(2)
+		s_focus.border_color = Color(0.95, 0.85, 0.50, 0.60)
+		s_focus.set_corner_radius_all(8)
+		btn.add_theme_stylebox_override("focus", s_focus)
+
+		var s_press := StyleBoxFlat.new()
+		s_press.bg_color = Color(1.0, 1.0, 1.0, 0.12)
+		s_press.set_border_width_all(2)
+		s_press.border_color = Color(1.0, 1.0, 1.0, 0.95)
+		s_press.set_corner_radius_all(8)
+		btn.add_theme_stylebox_override("pressed", s_press)
+
+		# Hover sutil de elevación y escala
+		var on_hover_enter := func():
+			var tw = card_inst.create_tween()
+			tw.set_parallel(true)
+			tw.tween_property(card_inst, "scale", Vector2(1.03, 1.03), 0.12).set_ease(Tween.EASE_OUT)
+			tw.tween_property(badge_panel, "modulate", Color(1.15, 1.15, 1.0, 1.0), 0.12)
+		var on_hover_exit := func():
+			var tw = card_inst.create_tween()
+			tw.set_parallel(true)
+			tw.tween_property(card_inst, "scale", Vector2(1.0, 1.0), 0.12).set_ease(Tween.EASE_OUT)
+			tw.tween_property(badge_panel, "modulate", Color(1.0, 1.0, 1.0, 1.0), 0.12)
+
+		btn.mouse_entered.connect(on_hover_enter)
+		btn.mouse_exited.connect(on_hover_exit)
+		btn.focus_entered.connect(on_hover_enter)
+		btn.focus_exited.connect(on_hover_exit)
+
+		btn.pressed.connect(func():
+			if not state.done:
+				state.picked_top = pick_val
+				state.done = true
+		)
+
+		if not is_face_down:
+			btn.gui_input.connect(func(ev: InputEvent):
+				if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_RIGHT:
+					if main and main.get("_card_inspector"):
+						main._card_inspector.on_card_right_clicked(card_inst)
+			)
+
+		card_box.add_child(btn)
+		return btn
+
+	var btn_top: Button = build_slot.call(card_data_a, label_a, face_down_a, true)
+	var btn_bottom: Button = build_slot.call(card_data_b, label_b, face_down_b, false)
+
+	btn_top.focus_next = btn_bottom.get_path()
+	btn_top.focus_previous = btn_bottom.get_path()
+	btn_bottom.focus_next = btn_top.get_path()
+	btn_bottom.focus_previous = btn_top.get_path()
+
+	btn_top.grab_focus()
+
+	while not state.done:
+		await main.get_tree().process_frame
+
+	canvas.queue_free()
+	return state.picked_top
+
+
+func await_choice(main: Node, title: String, options: Array, chooser_id: int = 0) -> int:
 	"""Modal de Elección estilizado Fantasy TCG con fondo de altar catedralicio,
 	shader de viñeta suave y botones dorados de alta legibilidad (sin emojis).
-	Returns: el índice (0-based) de la opción elegida."""
+	Returns: el índice (0-based) de la opción elegida.
+
+	'chooser_id' (2026-09-30, Fase 3 del plan de paridad remota — mismo
+	criterio que SelectionManager._delegate_selection_to_remote()): si quien
+	elige es el jugador 1 y hay un Remoto real conectado, se le pregunta a
+	él por red en vez de abrir este popup local (que de otro modo lo
+	mostraría en la pantalla del Anfitrión, quien terminaría eligiendo por
+	una decisión que no es suya)."""
+	if chooser_id == 1 and NetworkClient.room_code != "" and NetworkClient.is_host:
+		NetworkClient.send_message({"op": "prompt", "kind": "choose_option", "title": title, "options": options})
+		var intent: Dictionary = await NetworkClient.await_intent(["choose_option_choice"])
+		return clampi(int(intent.get("index", 0)), 0, maxi(options.size() - 1, 0))
+
 	var canvas := CanvasLayer.new()
 	canvas.layer = 70
 	main.add_child(canvas)
@@ -170,7 +420,7 @@ func await_choice(main: Node, title: String, options: Array) -> int:
 	for i in range(num_opts):
 		var btn := Button.new()
 		btn.text = str(options[i])
-		btn.focus_mode = Control.FOCUS_NONE
+		btn.focus_mode = Control.FOCUS_ALL
 		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		btn.add_theme_font_override("font", _main.FONT_CINZEL_BOLD)
 		btn.add_theme_font_size_override("font_size", 14)
@@ -191,7 +441,7 @@ func await_choice(main: Node, title: String, options: Array) -> int:
 		btn.add_theme_stylebox_override("normal", btn_normal)
 		btn.add_theme_color_override("font_color", Color(0.92, 0.88, 0.80, 1.0))
 
-		# Estilo hover (brillo dorado y fondo iluminado)
+		# Estilo hover y focus (brillo dorado y fondo iluminado para teclado y mouse)
 		var btn_hover := StyleBoxFlat.new()
 		btn_hover.bg_color = Color(0.16, 0.18, 0.24, 0.95)
 		btn_hover.set_border_width_all(2)
@@ -202,7 +452,9 @@ func await_choice(main: Node, title: String, options: Array) -> int:
 		btn_hover.content_margin_top = 8
 		btn_hover.content_margin_bottom = 8
 		btn.add_theme_stylebox_override("hover", btn_hover)
+		btn.add_theme_stylebox_override("focus", btn_hover)
 		btn.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 0.95, 1.0))
+		btn.add_theme_color_override("font_focus_color", Color(1.0, 1.0, 0.95, 1.0))
 
 		var btn_pressed := btn_hover.duplicate()
 		btn_pressed.bg_color = Color(0.22, 0.24, 0.32, 1.0)
@@ -214,6 +466,20 @@ func await_choice(main: Node, title: String, options: Array) -> int:
 			state.done = true
 		)
 		opts_box.add_child(btn)
+
+	# Enfocar por defecto el primer botón para accesibilidad inmediata con Enter
+	if opts_box.get_child_count() > 0:
+		var first_btn = opts_box.get_child(0) as Control
+		if first_btn:
+			first_btn.call_deferred("grab_focus")
+
+	bg.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventKey and ev.pressed and not ev.is_echo():
+			if ev.keycode == KEY_ENTER or ev.keycode == KEY_KP_ENTER:
+				if not state.done:
+					state.picked_index = 0
+					state.done = true
+	)
 
 	# Animación de entrada suave
 	panel.scale = Vector2(0.94, 0.94)
@@ -375,7 +641,7 @@ func await_multi_pick(candidates: Array, title: String, max_selections: int, min
 	extraído (2026-08-30) del mismo bloque repetido en
 	_resolve_search_cemetery_to_hand()/_select_hand_cards_for_discard()
 	(TargetedEffectExecutor.gd) y _resolve_reveal_cost_reduction()
-	(GoldManager.gd). A diferencia de await_single_pick(), acá 'canceló
+	(GoldManager.gd). A diferencia de await_single_pick(), aquí 'canceló
 	del todo' y 'confirmó sin elegir nada' son resultados DISTINTOS a
 	propósito (algunos llamadores necesitan diferenciarlos: declinar el
 	'puedes' entero vs. aceptarlo pero no encontrar nada que valga la

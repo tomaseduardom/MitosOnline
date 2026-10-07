@@ -25,7 +25,7 @@ func try_execute_free_play_weapon_or_totem_cost1_hand_cemetery_pattern(ability_t
 	Escuadrón Mecha / reprint promo custom_mig_12). Pool combinado mano +
 	Cementerio (mismo patrón de try_execute_golpe_solar_pattern más
 	arriba), filtrado a Arma/Tótem de coste EXACTO 1. A diferencia de
-	Golpe Solar (que paga con descuento), acá es gratis de verdad — reusa
+	Golpe Solar (que paga con descuento), aquí es gratis de verdad — reusa
 	GoldManager.play_card_for_free(), que ya rutea Arma (con selección de
 	portador) y Tótem (a campo) sin pasar por PaymentManager. El llamador
 	(esta función) saca la carta de su zona de origen ANTES de llamar,
@@ -34,54 +34,106 @@ func try_execute_free_play_weapon_or_totem_cost1_hand_cemetery_pattern(ability_t
 	var mentions_arma_totem_cost1 := "arma o tótem de coste 1" in lower or "arma o totem de coste 1" in lower
 	if not mentions_arma_totem_cost1 or not ("sin pagar su coste" in lower):
 		return false
-	if controller_id != 0:
-		return true  # el bot no usa esta habilidad todavía
 
 	var main := _executor._main.get_node_or_null("/root/Main")
-	if not main or not main._gold_manager or not main.player_hand:
+	if not main or not main._gold_manager:
+		return true
+	var hand_container_shiji = main.player_hand if controller_id == 0 else main._opponent_fan
+	if not hand_container_shiji:
 		return true
 
 	var hand_candidates: Array = []
-	for c in main.player_hand.cards:
+	for c in hand_container_shiji.cards:
 		if is_instance_valid(c) and c.get("card_type") in [Constants.CardType.ARMA, Constants.CardType.TOTEM] \
 				and c.get("card_cost") != null and int(c.card_cost) == 1:
 			hand_candidates.append(c)
-	var cemetery_candidates: Array = []
+	var cemetery_data: Array = []
 	for d in CardManager.get_cemetery(controller_id):
 		if d.get("tipo") in [Constants.CardType.ARMA, Constants.CardType.TOTEM] and int(d.get("coste", -1)) == 1:
-			cemetery_candidates.append(d)
+			cemetery_data.append(d)
 
-	if hand_candidates.is_empty() and cemetery_candidates.is_empty():
+	if hand_candidates.is_empty() and cemetery_data.is_empty():
 		main._update_debug("No tienes ningún Arma o Tótem de coste 1 en tu mano o Cementerio")
 		return true
-
-	var data_list: Array = []
-	for c in hand_candidates:
-		data_list.append(c.card_data)
-	for d in cemetery_candidates:
-		data_list.append(d)
-
-	var picked: Dictionary = await SelectionManager.await_single_pick(
-		data_list, "Juega un Arma o Tótem de coste 1 sin pagar su coste", true)
-	if picked.is_empty():
+	if not main._card_interaction:
 		return true
+
+	# 2026-09-14, a pedido del usuario: click directo — mano (Nodos ya
+	# visibles) + un popup liviano con el Cementerio propio (mismo patrón
+	# que Golpe Solar, ver DSR_DiscardChoicePatterns.gd), en vez del modal
+	# de lista viejo combinando ambas zonas.
+	var cemetery_popup: CanvasLayer = null
+	var cemetery_nodes: Array = []
+	if not cemetery_data.is_empty():
+		var CardScene = load("res://scenes/cards/Card.tscn")
+		cemetery_popup = CanvasLayer.new()
+		cemetery_popup.layer = 40
+		main.add_child(cemetery_popup)
+		var panel := PanelContainer.new()
+		panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+		panel.position = Vector2(20, -240)
+		var pstyle := StyleBoxFlat.new()
+		pstyle.bg_color = Color(0.04, 0.03, 0.06, 0.92)
+		pstyle.border_color = Color(0.85, 0.72, 0.28, 0.85)
+		pstyle.set_border_width_all(2)
+		pstyle.set_corner_radius_all(12)
+		panel.add_theme_stylebox_override("panel", pstyle)
+		cemetery_popup.add_child(panel)
+		var vbox := VBoxContainer.new()
+		panel.add_child(vbox)
+		var lbl := Label.new()
+		lbl.text = "Tu Cementerio"
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vbox.add_child(lbl)
+		var scroll := ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(0, 190)
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		vbox.add_child(scroll)
+		var hbox := HBoxContainer.new()
+		hbox.add_theme_constant_override("separation", 8)
+		scroll.add_child(hbox)
+		for d in cemetery_data:
+			var wrapper := Control.new()
+			wrapper.custom_minimum_size = Vector2(80.0, 112.0)
+			var c_node = CardScene.instantiate()
+			c_node.load_from_data(d)
+			c_node.set_zone(Constants.Zone.CEMENTERIO)
+			c_node.owner_id = controller_id
+			c_node.controller_id = controller_id
+			c_node.can_interact = true
+			c_node.drag_enabled = false
+			c_node.custom_minimum_size = Vector2(150.0, 210.0)
+			c_node.size = Vector2(150.0, 210.0)
+			c_node.scale = Vector2(0.533, 0.533)
+			c_node.base_scale = Vector2(0.533, 0.533)
+			main._connect_card_signals(c_node)
+			wrapper.add_child(c_node)
+			hbox.add_child(wrapper)
+			cemetery_nodes.append(c_node)
+
+	var candidates: Array = hand_candidates + cemetery_nodes
+	var filter := func(c: Node) -> bool: return c in candidates
+	var picked_node: Node = await main._card_interaction.await_target(
+		"Juega un Arma o Tótem de coste 1 sin pagar su coste", filter, true, controller_id)
+	if is_instance_valid(cemetery_popup):
+		cemetery_popup.queue_free()
+
+	if not picked_node or not is_instance_valid(picked_node):
+		return true
+	var picked: Dictionary = picked_node.card_data
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "Shiji", controller_id):
 		return true
 
-	var from_hand_node: Node = null
-	for c in hand_candidates:
-		if c.card_data == picked:
-			from_hand_node = c
-			break
+	var from_hand_node: Node = picked_node if picked_node in hand_candidates else null
 	if from_hand_node:
-		main.player_hand.remove_card(from_hand_node, true)
+		hand_container_shiji.remove_card(from_hand_node, true)
 		from_hand_node.queue_free()
 	else:
 		var cidx: int = CardManager.get_cemetery(controller_id).find(picked)
 		if cidx >= 0:
 			CardManager.remove_from_cemetery(controller_id, cidx)
 
-	await main._gold_manager.play_card_for_free(picked)
+	await main._gold_manager.play_card_for_free(picked, controller_id)
 	return true
 
 
@@ -94,7 +146,7 @@ func try_execute_draw_gold_search_pattern(ability_text: String, controller_id: i
 	coste X o más y sube hasta M carta(s) de tu Cementerio a tu mano' (Legión
 	Paladín — 2026-08-29: texto reconfirmado en vivo contra la API, que
 	resultó ser INESTABLE entre fetches para esta carta específica; esta es
-	la versión que la API devolvió recién ahora, la misma que ya se había
+	la versión que la API acaba de devolver, la misma que ya se había
 	usado en una implementación anterior de este mismo desarrollo. Ver
 	[[feedback_api_is_source_of_truth]] — se sincronizó también el cache
 	local (user://card_cache/cards.json, id 20857) a este texto). Tres
@@ -128,19 +180,23 @@ func try_execute_draw_gold_search_pattern(ability_text: String, controller_id: i
 	# Ventana única para las 3 partes juntas (ninguna pasa por un choke point
 	# ya protegido por Prevención) — sin objetivos que declarar antes (robar/
 	# generar Oro son automáticos, y a quién sube del Cementerio se elige
-	# recién adentro de _resolve_search_cemetery_to_hand()).
+	# solo dentro de _resolve_search_cemetery_to_hand()).
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "Legión Paladín", controller_id):
 		return true
 
 	if draw_amount > 0:
 		await ActionModule.draw(controller_id, draw_amount, "etb_trigger", true)
 
+	# 2026-10-06 (ver arquitectura.md §33): generar_oro_virtual_restringido()
+	# y _resolve_search_cemetery_to_hand() ya son por jugador — el guard
+	# 'controller_id == 0' de 2026-09-11 (bug real: el Oro restringido del
+	# rival aparecía del lado del Anfitrión) ya no hace falta.
 	if min_cost > 0 and main._gold_manager:
 		var predicate := func(card_type: int, _card_race: String, card_cost: int) -> bool:
 			return card_type in [Constants.CardType.ALIADO, Constants.CardType.ARMA] and card_cost >= min_cost
-		main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Aliados o Armas de coste %d o más" % min_cost)
+		main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Aliados o Armas de coste %d o más" % min_cost, controller_id)
 
-	if search_amount > 0 and controller_id == 0:
+	if search_amount > 0:
 		await _executor._resolve_search_cemetery_to_hand(controller_id, search_amount)
 
 	return true
@@ -172,16 +228,20 @@ func try_execute_draw_reveal_talisman_gold_pattern(ability_text: String, control
 
 	await ActionModule.draw(controller_id, 1, "etb_trigger", true)
 
-	if controller_id == 0 and main.player_hand:
+	# 2026-10-06 (ver arquitectura.md §33): generar_oro_virtual_restringido()
+	# ya es por jugador — el guard 'controller_id == 0' de arriba ya no hace
+	# falta; la mano a contar es la del jugador real que activó la carta.
+	var hand_container_levisterio = main.player_hand if controller_id == 0 else main._opponent_fan
+	if hand_container_levisterio:
 		var talisman_count: int = 0
-		for c in main.player_hand.cards:
+		for c in hand_container_levisterio.cards:
 			if is_instance_valid(c) and c.card_type == Constants.CardType.TALISMAN:
 				talisman_count += 1
 		main._update_debug("Levisterio: mano mostrada (%d Talismán%s)" % [talisman_count, "" if talisman_count == 1 else "es"])
 		if talisman_count <= 1 and main._gold_manager:
 			var predicate := func(card_type: int, _card_race: String, _card_cost: int) -> bool:
 				return card_type == Constants.CardType.ARMA
-			main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Armas")
+			main._gold_manager.generar_oro_virtual_restringido(1, predicate, "Armas", controller_id)
 			await ActionModule.draw(controller_id, 1, "etb_trigger", true)
 
 	return true
@@ -211,7 +271,7 @@ func try_execute_deck_top_or_bottom_to_hand_pattern(ability_text: String, contro
 	# mostrando la primera carta de tu Castillo') arranca DESDE EL PRIMER
 	# SEGUNDO que entra en juego (2026-08-31, corrección a pedido del
 	# usuario: antes esto solo se aplicaba a la habilidad de una vez por
-	# turno) — refrescar ACÁ, antes de ofrecer la elección tope/fondo, para
+	# turno) — refrescar AQUÍ, antes de ofrecer la elección tope/fondo, para
 	# que el jugador ya sepa cuál es la del tope al decidir (la de fondo
 	# sigue a ciegas). La carta ya es hija de player_gold con zona
 	# RESERVA_ORO en este punto (_trigger_enter_play() se llama después de
@@ -222,10 +282,15 @@ func try_execute_deck_top_or_bottom_to_hand_pattern(ability_text: String, contro
 
 	var choose_top: bool = true
 	if main.player_deck.size() > 1:
-		choose_top = await SelectionManager.await_two_choice(
+		var top_card: Dictionary = main.player_deck.front()
+		var bottom_card: Dictionary = main.player_deck.back()
+		choose_top = await SelectionManager.await_card_pair_choice(
 			main, "La Ouija",
-			"Poner la primera carta de tu Castillo (tope) en tu mano",
-			"Poner la última carta de tu Castillo (fondo) en tu mano")
+			top_card, bottom_card,
+			"Tope",
+			"Fondo",
+			true, false
+		)
 
 	if await TriggerSystem.open_response_window(card, str(card.card_name) if card else "La Ouija", controller_id):
 		return true
